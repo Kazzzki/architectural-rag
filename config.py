@@ -36,7 +36,7 @@ TOP_K_RESULTS = 8  # 検索で返すチャンク数
 EMBEDDING_MODEL = "models/text-embedding-004"  # Gemini Embedding
 
 # LLM設定（Gemini 3.0 Flash）
-GEMINI_MODEL = "gemini-3.0-flash"
+GEMINI_MODEL = "gemini-flash-latest"
 MAX_TOKENS = 8192  # Gemini 3.0 Flashの最大出力トークン
 TEMPERATURE = 0.2  # 技術的正確性を重視
 
