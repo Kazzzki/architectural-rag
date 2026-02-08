@@ -5,8 +5,7 @@ import sys
 # (重複しても問題ないがキレイにする)
 
 import shutil
-
-import shutil
+import time
 from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
@@ -158,43 +157,7 @@ async def rebuild_index(force: bool = False):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/upload")
-async def upload_file(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    category: str = "uploads"
-):
-    """ファイルをアップロード"""
-    # 拡張子チェック
-    ext = Path(file.filename).suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"サポートされていないファイル形式です: {ext}"
-        )
-    
-    # 保存ディレクトリ
-    save_dir = Path(KNOWLEDGE_BASE_DIR) / category
-    save_dir.mkdir(parents=True, exist_ok=True)
-    
-    # ファイル保存
-    file_path = save_dir / file.filename
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-        
-    # PDFなら自動分類パイプラインをバックグラウンドで実行
-    if ext == '.pdf':
-        from pipeline_manager import process_file_pipeline
-        # 出力パスはパイプライン内で自動決定されるため、ファイルパスのみ渡す
-        # md_filename は process_file_pipeline の内部デフォルトに任せる
-        background_tasks.add_task(process_file_pipeline, str(file_path))
-    
-    return FileInfo(
-        filename=file.filename,
-        category=category,
-        size_kb=round(file_path.stat().st_size / 1024, 2),
-        uploaded_at=datetime.now().isoformat(),
-    )
+# Old upload_file implementation removed to avoid duplicate endpoint
 
 
 @app.post("/api/upload/multiple")
@@ -576,6 +539,49 @@ async def sync_to_drive():
     except ImportError:
         raise HTTPException(status_code=500, detail="drive_sync module not found")
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """
+    Web画面からアップロードされたファイルを data/input/ に保存する
+    """
+    ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
+    filename = file.filename
+    ext = os.path.splitext(filename)[1].lower()
+    
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+    
+    # 入力フォルダ確保
+    input_dir = Path("data/input")
+    input_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 同名ファイル回避
+    base_name = Path(filename).stem
+    file_path = input_dir / filename
+    timestamp = int(time.time())
+    
+    if file_path.exists():
+        file_path = input_dir / f"{base_name}_{timestamp}{ext}"
+    
+    try:
+        print(f"Receiving upload: {filename}")
+        content = await file.read()
+        with open(file_path, "wb") as buffer:
+            buffer.write(content)
+        print(f"Saved to: {file_path}")
+        
+        return {
+            "filename": file_path.name, 
+            "status": "uploaded", 
+            "path": str(file_path),
+            "message": "File uploaded successfully. Automatic classification will start shortly."
+        }
+    except Exception as e:
+        print(f"Upload error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

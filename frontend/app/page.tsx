@@ -20,7 +20,9 @@ import {
     MessageSquare
 } from 'lucide-react';
 import Library from './components/Library';
+import FileUpload from './components/FileUpload';
 
+// Types
 interface Message {
     role: 'user' | 'assistant';
     content: string;
@@ -32,10 +34,8 @@ interface SourceFile {
     category: string;
     relevance_count: number;
     source_pdf?: string;
-    pages?: number[]; // 追加: ページ番号リスト
+    pages?: number[];
 }
-
-
 
 interface Stats {
     file_count: number;
@@ -63,6 +63,7 @@ const CATEGORIES = [
 ];
 
 export default function Home() {
+    // State definitions
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -133,9 +134,6 @@ export default function Home() {
                 if (data.auth_url) {
                     window.location.href = data.auth_url;
                 }
-            } else {
-                console.error('Auth request failed');
-                alert('認証URLの取得に失敗しました');
             }
         } catch (error) {
             console.error('Drive auth error:', error);
@@ -228,6 +226,8 @@ export default function Home() {
         setInput(question);
     };
 
+    // Replaced with FileUpload component, but keeping this for legacy multiple file upload via button if needed
+    // Currently hidden in UI
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = e.target.files;
         if (!files || files.length === 0) return;
@@ -251,20 +251,6 @@ export default function Home() {
                 const data = await res.json();
                 setUploadResult(`${data.uploaded.length}ファイルをアップロードしました`);
                 fetchStats();
-
-                // チャット履歴に案内メッセージを追加
-                const filenames = data.uploaded.map((f: any) => f.filename).join(', ');
-                const isPdf = filenames.toLowerCase().includes('.pdf');
-
-                const message = `${data.uploaded.length}個のファイル（${filenames}）を受け付けました。\n\n` +
-                    (isPdf
-                        ? "これよりバックグラウンドでテキスト抽出（OCR）を開始します。この処理には時間がかかる場合があります。\n\n【次のステップ】\n1. 「Library」タブでステータスを確認\n2. ステータスが完了になったら、左の「🔄 再構築」ボタンをクリック\n3. これで最新の知識としてチャットで利用可能になります。"
-                        : "【次のステップ】\n左の「🔄 再構築」ボタンをクリックしてください。\nこれでチャットの知識ベースに追加されます。");
-
-                setMessages(prev => [...prev, {
-                    role: 'assistant',
-                    content: message,
-                }]);
             } else {
                 setUploadResult('アップロードに失敗しました');
             }
@@ -296,7 +282,7 @@ export default function Home() {
         <div className="min-h-screen flex flex-col">
             {/* Header */}
             <header className="border-b border-[var(--border)] bg-[var(--card)]/50 backdrop-blur-sm sticky top-0 z-10">
-                <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+                <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center">
                             <Building2 className="w-6 h-6 text-white" />
@@ -323,9 +309,13 @@ export default function Home() {
             </header>
 
             {/* Main Content */}
-            <main className="flex-1 max-w-6xl mx-auto w-full flex flex-col md:flex-row gap-4 p-4">
+            <div className="flex-1 max-w-6xl mx-auto w-full flex flex-col md:flex-row gap-4 p-4">
                 {/* Sidebar */}
                 <aside className="md:w-64 space-y-4">
+
+                    {/* File Upload Component (New) */}
+                    <FileUpload />
+
                     {/* Category Filter */}
                     <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
                         <label className="block text-sm font-medium mb-2">検索対象</label>
@@ -401,9 +391,9 @@ export default function Home() {
                         )}
                     </div>
 
-                    {/* Upload */}
-                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
-                        <label className="block text-sm font-medium mb-2">ファイルアップロード</label>
+                    {/* Classic Upload (Legacy Button, kept for fallback) */}
+                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] hidden">
+                        <label className="block text-sm font-medium mb-2">旧ファイルアップロード</label>
                         <input
                             ref={fileInputRef}
                             type="file"
@@ -632,7 +622,7 @@ export default function Home() {
                         </div>
                     )}
                 </div>
-            </main>
+            </div>
         </div>
     );
 }

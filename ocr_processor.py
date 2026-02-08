@@ -6,8 +6,10 @@ import pypdf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Dict, Any
+from tenacity import RetryError
 
 from config import GEMINI_MODEL, GEMINI_API_KEY
+from ocr_utils import retry_gemini_call
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -53,11 +55,42 @@ def _split_pdf(filepath: str, chunk_size: int = 2) -> List[Dict[str, Any]]:
         
     return chunks
 
+@retry_gemini_call(max_attempts=5)
+def _call_gemini_with_retry(model_name: str, file_path: str, mime_type: str, prompt: str) -> str:
+    """Gemini APIを呼び出す（リトライ付き）"""
+    model = genai.GenerativeModel(model_name)
+    
+    # Upload
+    uploaded_file = genai.upload_file(file_path, mime_type=mime_type)
+    
+    # Wait for processing
+    wait_count = 0
+    while uploaded_file.state.name == "PROCESSING":
+        time.sleep(1)
+        uploaded_file = genai.get_file(uploaded_file.name)
+        wait_count += 1
+        if wait_count > 60:
+            raise Exception("File processing timeout")
+    
+    if uploaded_file.state.name == "FAILED":
+        raise Exception("Google AI File processing failed")
+
+    # Generate
+    # Gemini 3.0 Flash向けの生成設定（忠実性重視）
+    generation_config = genai.types.GenerationConfig(
+        temperature=0.0,
+        max_output_tokens=8192  # トークン制限緩和
+    )
+    response = model.generate_content(
+        [prompt, uploaded_file],
+        generation_config=generation_config
+    )
+    
+    return response.text
+
 
 def _process_chunk(chunk: Dict[str, Any], model_name: str) -> Dict[str, Any]:
     """1つのチャンク（PDF断片）をOCR処理"""
-    max_retries = 3
-    last_error = None
     
     prompt = """
     You are a professional digital archivist. Your goal is to digitize this document with 100% fidelity.
@@ -74,58 +107,33 @@ def _process_chunk(chunk: Dict[str, Any], model_name: str) -> Dict[str, Any]:
     5. Output ONLY the markdown content. No introductory text like "Here is the text".
     """
     
-    for attempt in range(max_retries):
-        try:
-            model = genai.GenerativeModel(model_name)
-            
-            # Upload
-            uploaded_file = genai.upload_file(chunk['path'], mime_type=chunk['mime_type'])
-            
-            # Wait for processing
-            wait_count = 0
-            while uploaded_file.state.name == "PROCESSING":
-                time.sleep(1)
-                uploaded_file = genai.get_file(uploaded_file.name)
-                wait_count += 1
-                if wait_count > 60:
-                    raise Exception("File processing timeout")
-            
-            if uploaded_file.state.name == "FAILED":
-                raise Exception("Google AI File processing failed")
-
-            # Generate
-            # Gemini 3.0 Flash向けの生成設定（忠実性重視）
-            generation_config = genai.types.GenerationConfig(
-                temperature=0.0
-            )
-            response = model.generate_content(
-                [prompt, uploaded_file],
-                generation_config=generation_config
-            )
-            
-            # Cleanup temp file
-            if chunk.get('is_temp'):
-                try:
-                    os.remove(chunk['path'])
-                except:
-                    pass
-                    
-            return {
-                "text": response.text,
-                "index": chunk['index'],
-                "success": True
-            }
-            
-        except Exception as e:
-            print(f"Error in chunk {chunk['label']} (Attempt {attempt+1}): {e}")
-            last_error = e
-            time.sleep(5 * (attempt + 1)) # リトライ待ち時間を延長
-            
-    return {
-        "text": f"\n> ⚠️ **[OCR Error]** Failed to retrieve content for **{chunk['label']}**.\n> Error: {str(last_error)}\n",
-        "index": chunk['index'],
-        "success": False
-    }
+    try:
+        text = _call_gemini_with_retry(model_name, chunk['path'], chunk['mime_type'], prompt)
+        
+        # Cleanup temp file
+        if chunk.get('is_temp'):
+            try:
+                os.remove(chunk['path'])
+            except:
+                pass
+                
+        return {
+            "text": text,
+            "index": chunk['index'],
+            "success": True
+        }
+        
+    except Exception as e:
+        print(f"OCR Failed for chunk {chunk['label']}: {e}")
+        # テンポラリファイルはエラー時も消すべきか？残してデバッグするか？
+        # APIエラーでリトライオーバーした場合は、ファイル自体に問題がある可能性もあるので、いったん残すか、削除するか方針次第。
+        # ここでは元コードに合わせて削除しない（デバッグ用）
+        
+        return {
+            "text": f"\n> ⚠️ **[OCR Error]** Failed to retrieve content for **{chunk['label']}** after multiple retries.\n> Error: {str(e)}\n",
+            "index": chunk['index'],
+            "success": False
+        }
 
 
 def finalize_processing(filepath: str, output_path: str, markdown_text: str, status_mgr=None):

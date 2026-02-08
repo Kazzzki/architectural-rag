@@ -1,72 +1,61 @@
-import os
-import traceback
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+import logging
+import shutil
+from content_router import ContentRouter
+from ocr_processor import process_pdf_background
+# from drawing_processor import process_drawing_pipeline # 将来的に実装
 
-from content_router import route_content
-from drawing_processor import process_drawing_pdf
-import ocr_processor  # 既存のOCRモジュール
-from status_manager import OCRStatusManager
+logger = logging.getLogger(__name__)
 
-def process_file_pipeline(filepath: str, output_path: str = None):
-    """
-    ファイルの自動分類パイプライン
-    1. 図面/文書の判定 (Router)
-    2. 専用プロセッサによるMarkdown化
-    3. 自動分類と整理 (Finalizer)
-    """
-    print(f"Pipeline Start: {filepath}")
-    status_mgr = OCRStatusManager()
-    
-    # 出力パスが未指定ならとりあえず同じ場所に .md を作る（後で移動される）
-    if output_path is None:
-        output_path = str(Path(filepath).with_suffix('.md'))
-
-    try:
-        # 1. 判定
-        doc_type = route_content(filepath)
-        print(f"Document Type: {doc_type} -> {filepath}")
+class PipelineManager:
+    def __init__(self):
+        self.router = ContentRouter()
+        self.base_dir = Path("data")
+        self.base_dir.mkdir(exist_ok=True)
         
-        # 2. 分岐処理
-        if doc_type == "DRAWING":
-            # 図面処理ルート
-            # ステータス初期化 (図面処理はページ数ベースで進捗出せればベストだが、一旦簡易的に開始)
-            status_mgr.start_processing(filepath, total_pages=1) # 仮
-
-            try:
-                markdown_text = process_drawing_pdf(filepath)
+    def process_file(self, file_path: Path):
+        """
+        ファイルを分類し、適切なパイプラインを実行する。
+        """
+        logger.info(f"Processing file: {file_path}")
+        
+        try:
+            # 1. 自動分類
+            file_type = self.router.classify(file_path)
+            logger.info(f"File classified as: {file_type}")
+            
+            # 2. フォルダ移動
+            target_dir = self.base_dir / ("02_図面" if file_type == "Drawing" else "01_カタログ")
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            new_path = target_dir / file_path.name
+            shutil.move(str(file_path), str(new_path))
+            logger.info(f"Moved file to: {new_path}")
+            
+            # 3. パイプライン実行
+            if file_type == "Document":
+                # ドキュメントパイプライン (OCR)
+                # 出力パスを作成 (.pdf -> .md)
+                output_path = new_path.with_suffix(".md")
+                logger.info(f"Starting OCR pipeline for {new_path} -> {output_path}")
+                process_pdf_background(str(new_path), str(output_path))
                 
-                # 図面プロセッサはMarkdown文字列を返すので、一旦保存
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(markdown_text)
+            elif file_type == "Drawing":
+                # 図面パイプライン (未実装のためログ出力のみ)
+                logger.info(f"Drawing pipeline pending for {new_path}")
+                # process_drawing_pipeline(str(new_path))
                 
-                # 3. 仕上げ (分類・移動・インデックス)
-                # Drawingも文書と同じ分類器を通すか、あるいは強制的に 'Drawings' フォルダにするか？
-                # ユーザー指示: "解析結果に基づき、ローカルの processed/ フォルダ内で自動仕分け"
-                # 既存の classifier にメタデータを渡して処理させるのが統一的。
-                # ただし、図面専用のカテゴリロジックが必要なら classifier.py 修正が必要だが、
-                # 一旦は既存のルールベースで "図面" キーワード等で分類されることを期待する。
-                # あるいは Drawing の場合は classifier にヒントを与える。
-                
-                # finalize_processing は内部で分類を行う
-                ocr_processor.finalize_processing(filepath, output_path, markdown_text, status_mgr)
-                
-            except Exception as e:
-                print(f"Drawing processing failed: {e}")
-                traceback.print_exc()
-                status_mgr.fail_processing(filepath, str(e))
+        except Exception as e:
+            logger.error(f"Pipeline processing failed for {file_path}: {e}", exc_info=True)
+            # エラー時は error フォルダへ移動
+            error_dir = self.base_dir / "error"
+            error_dir.mkdir(exist_ok=True)
+            if file_path.exists():
+                 shutil.move(str(file_path), str(error_dir / file_path.name))
 
-        else:
-            # 文書ルート (既存OCR)
-            # OCRプロセッサ内で finalize_processing も呼ばれる
-            ocr_processor.process_pdf_background(filepath, output_path)
-
-    except Exception as e:
-        print(f"Pipeline Error: {e}")
-        traceback.print_exc()
-        status_mgr.fail_processing(filepath, str(e))
-
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1:
-        process_file_pipeline(sys.argv[1])
+def process_file_pipeline(file_path: str):
+    """
+    PipelineManagerを使ってファイルを処理するためのラッパー関数
+    """
+    manager = PipelineManager()
+    manager.process_file(Path(file_path))
