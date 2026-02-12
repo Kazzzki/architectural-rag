@@ -166,12 +166,34 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(full_md_text)
         
-        # フォルダ移動
-        domains = classification_result.get('content_domain', [])
-        if domains:
-            category_path = domains[0].strip().replace('..', '')
+        # フォルダ移動 (Phase 1-2: 元のフォルダを考慮)
+        from config import ENABLE_AUTO_CATEGORIZE, AUTO_CATEGORIZE_UPLOADS_ONLY, KNOWLEDGE_BASE_DIR
+        
+        # 元のカテゴリを取得（KNOWLEDGE_BASE_DIRからの相対パス）
+        try:
+            # resolve()を使って絶対パスで比較
+            original_category = Path(filepath).parent.resolve().relative_to(Path(KNOWLEDGE_BASE_DIR).resolve())
+            is_uploads = str(original_category) == 'uploads' or str(original_category) == '.'
+        except ValueError:
+            # KNOWLEDGE_BASE_DIR外の場合は uploads 扱い
+            original_category = "uploads"
+            is_uploads = True
+
+        category_path = str(original_category)
+
+        if not is_uploads:
+            # uploadsフォルダ以外にあるファイルは移動しない（ユーザーが意図して配置した場所を尊重）
+            category_path = str(original_category)
+        elif not ENABLE_AUTO_CATEGORIZE:
+            # 自動分類機能が無効の場合は移動しない
+            category_path = "uploads"
         else:
-            category_path = 'uploads' 
+            # uploadsにあり、自動分類有効 -> primary_categoryを使用
+            primary_cat = classification_result.get('primary_category')
+            if primary_cat and primary_cat != "uploads":
+                category_path = primary_cat
+            else:
+                category_path = "uploads"
         
         target_dir = Path(KNOWLEDGE_BASE_DIR) / category_path
         target_dir.mkdir(parents=True, exist_ok=True)

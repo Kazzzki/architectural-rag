@@ -33,7 +33,12 @@ const FileUpload = () => {
 
             const data = await res.json();
             setStatus('success');
-            setMessage(`アップロード完了: ${data.filename}\n自動分類とOCR処理を開始します...`);
+            setStatus('success');
+            setMessage(`アップロード完了: ${data.filename}`);
+            // 3秒後に詳細メッセージを表示
+            setTimeout(() => {
+                setMessage(`ファイルは自動解析キューに追加されました。\n分類とOCR処理がバックグラウンドで進行中です。\nしばらくしてからリロードしてください。`);
+            }, 1000);
         } catch (error: any) {
             console.error('Upload Error:', error);
             setStatus('error');
@@ -82,7 +87,7 @@ const FileUpload = () => {
 
             {message && (
                 <div className={`mt-4 p-4 rounded-lg ${status === 'success' ? 'bg-green-100 text-green-700' :
-                        status === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
+                    status === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
                     }`}>
                     {message}
                 </div>

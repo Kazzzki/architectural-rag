@@ -33,7 +33,11 @@ def get_collection():
 def search(
     query: str,
     n_results: int = TOP_K_RESULTS,
-    filter_category: Optional[str] = None
+    filter_category: Optional[str] = None,
+    filter_file_type: Optional[str] = None,
+    filter_date_range: Optional[str] = None,
+    filter_tags: Optional[List[str]] = None,
+    tag_match_mode: str = "any",
 ) -> Dict[str, Any]:
     """ハイブリッド検索（ベクトル検索 + キーワードリランク）を実行"""
     collection = get_collection()
@@ -44,9 +48,59 @@ def search(
     
     query_embedding = get_query_embedding(query)
     
-    where_filter = None
+    # フィルタ条件の構築
+    where_conditions = []
+    
     if filter_category:
-        where_filter = {"category": filter_category}
+        where_conditions.append({"category": filter_category})
+        
+    if filter_file_type:
+        # ドットを除去して拡張子のみにする (.pdf -> pdf)
+        ext = filter_file_type.lstrip('.').lower()
+        where_conditions.append({"file_type": ext})
+        
+    if filter_date_range:
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        start_date = None
+        
+        if filter_date_range == '7d':
+             start_date = now - timedelta(days=7)
+        elif filter_date_range == '1m':
+             start_date = now - timedelta(days=30)
+        elif filter_date_range == '3m':
+             start_date = now - timedelta(days=90)
+             
+        if start_date:
+            # modified_at は ISOフォーマット文字列
+            # ChromaDBの比較演算子: $gte (greater than or equal)
+            where_conditions.append({"modified_at": {"$gte": start_date.isoformat()}})
+            
+    if filter_calendar_date_range: # (Renamed variable in my head, but user used filter_date_range)
+         pass # (Keep existing date logic)
+         
+    # ... keeping existing date logic variable name ...
+    
+    if filter_tags:
+        tag_conditions = [{"tags_str": {"$contains": tag}} for tag in filter_tags]
+        if tag_match_mode == "all":
+            # AND検索
+            if len(tag_conditions) == 1:
+                where_conditions.append(tag_conditions[0])
+            else:
+                where_conditions.append({"$and": tag_conditions})
+        else:
+            # OR検索 (Default: any)
+            if len(tag_conditions) == 1:
+                where_conditions.append(tag_conditions[0])
+            else:
+                where_conditions.append({"$or": tag_conditions})
+
+    where_filter = None
+    if len(where_conditions) == 1:
+        where_filter = where_conditions[0]
+    elif len(where_conditions) > 1:
+        where_filter = {"$and": where_conditions}
     
     # 1. ベクトル検索（候補を多めに取得）
     candidate_k = n_results * 3
@@ -171,7 +225,9 @@ def get_source_files(search_results: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "filename": meta.get("filename", "不明"),
                 "rel_path": rel_path,
                 "category": category_path,
+                "category": category_path,
                 "source_pdf": meta.get("source_pdf"),
+                "tags": meta.get("tags_str", "").split(",") if meta.get("tags_str") else [],
             }
     
     source_files = []

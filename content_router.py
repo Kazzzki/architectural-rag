@@ -3,14 +3,15 @@ from pathlib import Path
 import json
 import os
 from ocr_utils import retry_gemini_call
+from config import GEMINI_API_KEY
 
 class ContentRouter:
-    def __init__(self, model_name="gemini-1.5-flash"):
+    def __init__(self, model_name="gemini-flash-latest"):
         self.model_name = model_name
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if not self.api_key:
+        if GEMINI_API_KEY:
+            genai.configure(api_key=GEMINI_API_KEY)
+        else:
              raise ValueError("GEMINI_API_KEY is not set")
-        genai.configure(api_key=self.api_key)
 
     @retry_gemini_call()
     def classify(self, file_path: Path) -> str:

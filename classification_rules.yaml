@@ -1,301 +1,97 @@
-# リサーチ成果物自動分類ルールブック
+# 許可されたカテゴリの定義（既存フォルダ構造）
+allowed_categories:
+  - "01_カタログ"
+  - "02_図面"
+  - "03_技術基準"
+  - "04_リサーチ成果物"
+  - "3_法規チェック/3-1_建築基準法（単体規定）"
+  - "3_法規チェック/3-2_建築基準法（集団規定）"
+  - "3_法規チェック/3-3_消防法"
+  - "3_法規チェック/3-4_その他法令"
+  - "4_設計マネジメント/4-1_設計プロセス管理"
+  - "4_設計マネジメント/4-2_設計品質の第三者検証"
+  - "5_コストマネジメント/5-1_概算コスト"
+  - "uploads"
 
-classification_axes:
-  - content_domain       # 調査内容の領域
-  - information_type     # 情報の種類
-  - project_phase        # 適用フェーズ
-  - building_context     # 建物文脈(用途・構造)
-  - geographical_scope   # 地域範囲
-  - reliability          # 信頼性レベル
-  - recency              # 鮮度要求
+# 利用可能なタグ（検索・フィルター用）
+available_tags:
+  法規:
+    - "建築基準法"
+    - "単体規定"
+    - "集団規定"
+    - "消防法"
+    - "避難規定"
+    - "耐火構造"
+    - "都市計画法"
+    - "バリアフリー法"
+  
+  設計:
+    - "構造設計"
+    - "設備設計"
+    - "意匠設計"
+    - "鉄骨造"
+    - "RC造"
+    - "木造"
+    - "耐震設計"
+    - "空調設備"
+    - "電気設備"
+    - "給排水設備"
+  
+  マネジメント:
+    - "設計プロセス"
+    - "品質管理"
+    - "工程管理"
+    - "コスト管理"
+    - "リスク管理"
+    - "第三者検証"
+  
+  その他:
+    - "カタログ"
+    - "図面"
+    - "チェックリスト"
+    - "報告書"
 
-# --- 分類軸1: Content Domain ---
-content_domain:
-  legal:
-    building_code:
-      keywords: [建築基準法, 建基法, 建築基準法施行令, "令第", 建築基準法施行規則]
-      url_patterns: [e-gov.go.jp/law, elaws.e-gov.go.jp, mlit.go.jp]
-      citations_regex: ["建築基準法第\\d+条", "令第\\d+条"]
-      weight_title: 3
-      weight_body: 1
-    fire_code:
-      keywords: [消防法, 防火対象物, 消防施行令, 消防設備]
-      url_patterns: [fdma.go.jp, 総務省消防庁]
-      citations_regex: ["消防法第\\d+条"]
-      weight_title: 3
-      weight_body: 1
-    administrative_procedure:
-      keywords: [確認申請, 構造計算適合性判定, 検査済証, 建築確認, 完了検査, 中間検査]
-      url_patterns: [確認検査機関, 建築指導課]
-      weight_title: 3
-      weight_body: 1
-    local_ordinance:
-      keywords: [条例, 要綱, まちづくり条例, 福祉のまちづくり, 環境配慮, 景観条例]
-      url_patterns: [.city., .pref., .lg.jp/reiki]
-      location_keywords: [市, 県, 区]
-      weight_title: 3
-      weight_body: 1
-    case_law:
-      keywords: [判例, 裁判, 建築審査会, 裁決, 違法性, 判決, 最高裁, 高裁]
-      url_patterns: [courts.go.jp]
-      citations_regex: ["平成\\d+年", "令和\\d+年"]
-      weight_title: 3
-      weight_body: 1
-
-  technical:
-    structural_standard:
-      keywords: [JASS, 鉄骨工事, 溶接, 建築学会, 構造設計指針, 耐震設計, 鋼構造]
-      url_patterns: [aij.or.jp, jssc.or.jp]
-      citations_regex: ["JASS\\s*\\d+", "AIJ\\s*\\d+"]
-      weight_title: 3
-      weight_body: 1
-    public_building_spec:
-      keywords: [公共建築工事標準仕様書, 営繕, 官庁営繕, 特記仕様書, 標準仕様]
-      url_patterns: [mlit.go.jp/gobuild, 官庁営繕]
-      citations_keywords: [公共建築工事標準仕様書]
-      weight_title: 3
-      weight_body: 1
-    jis_standard:
-      keywords: [JIS, 日本産業規格, 日本工業規格, 規格]
-      url_patterns: [jisc.go.jp]
-      citations_regex: ["JIS\\s*[A-Z]\\s*\\d+"]
-      weight_title: 3
-      weight_body: 1
-    industry_guideline:
-      keywords: [ガイドライン, 指針, 技術基準, 設計基準, マニュアル, 手引き]
-      url_patterns: [協会, 学会, 連盟, センター]
-      weight_title: 3
-      weight_body: 1
-    calculation_method:
-      keywords: [計算, 算定, 検討, 計算式, 係数, 許容応力度, 設計荷重, 応力度]
-      weight_title: 2
-      weight_body: 1
-
-  organization:
-    project_delivery:
-      keywords: [DB, 設計施工一括, CM方式, ECI, IPD, アライアンス, デザインビルド, コンストラクションマネジメント]
-      weight_title: 3
-      weight_body: 1
-    contract:
-      keywords: [契約約款, FIDIC, 四会連合, 請負契約, 委託契約, 契約書, 特約条項]
-      url_patterns: [四会連合]
-      weight_title: 3
-      weight_body: 1
-    procurement:
-      keywords: [調達, 入札, 総合評価, プロポーザル, 公募, 見積, 指名競争]
-      weight_title: 3
-      weight_body: 1
-    team_structure:
-      keywords: [体制, 役割分担, RACI, 組織図, 責任範囲, PM体制]
-      weight_title: 2
-      weight_body: 1
-
-  process:
-    bim:
-      keywords: [BIM, Revit, IFC, CDE, "3Dモデル", BIM実行計画, ビルディングインフォメーションモデリング]
-      url_patterns: [buildingSMART, BIM]
-      weight_title: 3
-      weight_body: 1
-    lean_construction:
-      keywords: [リーンコンストラクション, LPS, タクトプランニング, ラストプランナー]
-      weight_title: 3
-      weight_body: 1
-    workflow:
-      keywords: [ワークフロー, 承認フロー, プロセス, 手順, 業務フロー]
-      weight_title: 2
-      weight_body: 1
-    digital_tool:
-      keywords: [DX, デジタル化, クラウド, AI, ドローン, IoT, デジタルツイン]
-      weight_title: 3
-      weight_body: 1
-
-  cost:
-    estimation:
-      keywords: [積算, 見積, 単価, 歩掛り, 数量, 概算, 詳細積算]
-      url_patterns: [建設物価, 物価資料]
-      weight_title: 3
-      weight_body: 1
-    ve_analysis:
-      keywords: [VE, バリューエンジニアリング, コストダウン, 代替案, 価値分析]
-      weight_title: 3
-      weight_body: 1
-    market_data:
-      keywords: [市況, 物価, 建設費指数, 労務単価, 建設市場]
-      url_patterns: [建設物価, 経済調査会]
-      weight_title: 3
-      weight_body: 1
-
-  quality:
-    inspection:
-      keywords: [検査, 試験, 品質管理, 品質基準, 品質検査, 非破壊検査]
-      weight_title: 2
-      weight_body: 1
-    safety:
-      keywords: [安全管理, 労働安全, 災害防止, 安全衛生, 墜落防止]
-      weight_title: 3
-      weight_body: 1
-    defect_analysis:
-      keywords: [不具合, 瑕疵, トラブル, 問題事例, クレーム, 欠陥]
-      weight_title: 3
-      weight_body: 1
-
-# --- 分類軸2: Information Type ---
-information_type:
-  primary_regulation:
-    description: 1次法令（法律・政令・省令）
-    keywords: [法, 施行令, 省令, 規則]
-    url_patterns: [e-gov.go.jp, elaws]
-    reliability_weight: 10
-  secondary_regulation:
-    description: 2次法令（告示・通達・技術的助言）
-    keywords: [告示第, 技術的助言, 国住指第, 通達]
-    url_patterns: [mlit.go.jp]
-    reliability_weight: 9
-  standard:
-    description: 技術基準・規格
-    keywords: [JASS, JIS, 基準, 仕様書, 指針]
-    url_patterns: [aij.or.jp, jisc.go.jp]
-    reliability_weight: 8
-  guideline:
-    description: ガイドライン・マニュアル
-    keywords: [ガイドライン, 手引き, マニュアル, 参考]
-    reliability_weight: 6
-  case_study:
-    description: 事例・判例
-    keywords: [事例, 判例, 実例, ケーススタディ]
-    url_patterns: [courts.go.jp]
-    reliability_weight: 7
-  academic:
-    description: 学術・論文
-    keywords: [論文, 研究, 学会, Journal, 査読]
-    url_patterns: [jstage.jst.go.jp]
-    reliability_weight: 7
-  industry_practice:
-    description: 業界慣行
-    keywords: [一般的に, 通常, 実務上, 慣例, 実務では]
-    reliability_weight: 5
-  qa:
-    description: Q&A
-    keywords: ["Q&A", FAQ, よくある質問, 質問, 回答]
-    reliability_weight: 4
-
-# --- 分類軸3: Project Phase ---
-project_phase:
-  planning: [企画, 事業計画, フィージビリティ, 基本構想, "F/S"]
-  basic_design: [基本設計, 基本計画, 配置計画, 構造形式, 概略設計]
-  detailed_design: [実施設計, 詳細設計, 施工図, 製作図, 詳細仕様]
-  procurement: [調達, 入札, 発注, 契約, 見積依頼]
-  construction: [施工, 建設, 工事, 現場, 施工管理]
-  inspection: [検査, 試験, 確認, 検証, 品質検査]
-  handover: [引渡し, 竣工, 完成, 検査済証, 竣工検査]
-  operation: [運用, 維持管理, 保守, メンテナンス, 修繕]
-
-# --- 分類軸4: Building Context ---
-building_context:
-  usage:
-    residential: [住宅, マンション, 集合住宅, 戸建, 共同住宅]
-    office: [事務所, オフィス, 庁舎, 執務室]
-    commercial: [店舗, 商業施設, ショッピングセンター, 物販]
-    educational: [学校, 大学, 教育施設, 研修所, 教室, 校舎]
-    accommodation: [宿泊, ホテル, 旅館, 寮, 宿泊施設]
-    assembly: [集会, 劇場, ホール, 講堂, 映画館, アリーナ]
-    industrial: [工場, 倉庫, 物流施設, 整備場, プラント]
-    healthcare: [病院, 診療所, 医療施設, クリニック]
-    parking: [駐車場, 立体駐車場, 機械式駐車場]
-    mixed_use: [複合, 複合施設, 複合用途]
-    generic: []
-  structure:
-    steel: [S造, 鉄骨, 鋼材, 溶接, 高力ボルト, 建方, ダイアフラム]
-    rc: [RC造, 鉄筋コンクリート, 配筋, 型枠, コンクリート打設]
-    src: [SRC造, 鉄骨鉄筋コンクリート]
-    wood: [木造, 集成材, CLT, 木構造]
-    generic: []
-
-# --- 分類軸5: Geographical Scope ---
-geographical_scope:
-  national:
-    keywords: [建築基準法, JIS, 全国, 国土交通省]
-    url_patterns: [e-gov.go.jp, mlit.go.jp]
-    default: true
-  regional:
-    keywords: [県, 市, 区, 条例, 要綱]
-    url_patterns: [.city., .pref., .lg.jp]
-  site_specific:
-    keywords: [当該敷地, 本プロジェクト, プロジェクト固有]
-
-# --- 分類軸6: Reliability ---
-reliability:
-  authoritative:
-    description: 公的機関
-    sources: [e-gov.go.jp, mlit.go.jp, 省庁HP, 自治体HP]
-    score: 10
-  professional:
-    description: 専門団体
-    sources: [aij.or.jp, jssc.or.jp, 業界団体]
-    score: 8
-  commercial:
-    description: 民間企業
-    sources: [建設会社, メーカー, メディア]
-    score: 6
-  community:
-    description: 個人・コミュニティ
-    sources: [ブログ, SNS, 掲示板]
-    score: 3
-
-# --- 分類軸7: Recency ---
-recency:
-  latest_required:
-    description: 1年以内の情報が必須
-    triggers: [改正, 施行, 令和, 新制度, 変更, 見直し]
-    years: 1
-  relatively_current:
-    description: 3年以内
-    triggers: [市況データ, 技術動向]
-    years: 3
-  established:
-    description: 鮮度不問
-    triggers: [基本原理, 技術基準, 計算方法]
-
-# --- Prompt Settings ---
+# システムプロンプトの拡張
 system_prompt: |
-  あなたはリサーチ成果物を分類する建設コンサルタントの専門家です。
-  mdファイルの内容を読み、指定された分類ルールに従ってタグ付けを行ってください。
-  必ずJSON形式で出力してください。
+  あなたは建築文書の分類専門家です。
+  
+  以下の3つの情報を抽出してください：
+  
+  1. **primary_category**: 
+     - この文書の最も適切なメインカテゴリ（1つのみ）
+     - 必ず allowed_categories から選択
+     - 該当なしの場合は "uploads"
+  
+  2. **tags**: 
+     - この文書に含まれる全てのトピック（複数可）
+     - available_tags から選択
+     - 最大10個まで
+  
+  3. **page_mapping**: 
+     - ページ範囲ごとの主要トピック
+     - フォーマット: "開始ページ-終了ページ": ["トピック1", "トピック2"]
+     - 例: "1-10": ["建築基準法", "単体規定"]
+  
+  許可されたカテゴリ:
+  {allowed_categories}
+  
+  利用可能なタグ:
+  {available_tags}
+  
+  出力形式（JSON）:
+  {{
+    "primary_category": "3_法規チェック/3-1_建築基準法（単体規定）",
+    "tags": ["建築基準法", "単体規定", "耐火構造"],
+    "page_mapping": {{
+      "1-10": ["建築基準法", "総則"],
+      "11-25": ["耐火構造", "防火区画"],
+      "26-40": ["避難規定"]
+    }}
+  }}
 
 user_prompt_template: |
-  【mdファイルの情報】
+  以下の文書情報を分析し、JSON形式で分類結果を出力してください。
+  
   タイトル: {title}
-  見出し: {headings}
-  本文(抜粋): {body_excerpt}
-  引用元URL: {urls}
-  検出された法令・基準: {detected_citations}
-
-  【タスク】
-  以下の分類軸でタグ付けしてください:
-  1. content_domain: 該当する全てを配列で返す
-  2. information_type: 該当する全てを配列で返す
-  3. project_phase: 該当する全てを配列で返す
-  4. building_type: 該当する用途 (不明ならgeneric)
-  5. structure_type: 該当する構造 (不明ならgeneric)
-  6. geographical_scope: national/regional/site_specific
-  7. reliability: authoritative/professional/commercial/community
-  8. recency: latest_required/relatively_current/established
-
-  【出力形式(JSON)】
-  {{
-    "content_domain": ["legal/building_code", ...],
-    "information_type": ["primary_regulation", ...],
-    "project_phase": ["basic_design", ...],
-    "building_type": "generic",
-    "structure_type": "steel",
-    "geographical_scope": "national",
-    "reliability": "authoritative",
-    "recency": "latest_required",
-    "confidence": {{
-      "overall": "high",
-      "content_domain": "high",
-      "information_type": "medium",
-      "project_phase": "medium"
-    }},
-    "reasoning": "..."
-  }}
+  本文抜粋:
+  {body_excerpt}

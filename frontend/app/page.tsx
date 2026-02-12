@@ -21,6 +21,13 @@ import {
 } from 'lucide-react';
 import Library from './components/Library';
 import FileUpload from './components/FileUpload';
+import StatsPanel from './components/StatsPanel';
+import dynamic from 'next/dynamic';
+
+const PDFViewer = dynamic(() => import('./components/PDFViewer'), {
+    ssr: false,
+    loading: () => <div className="p-4 text-center">Loading PDF Viewer...</div>
+});
 
 // Types
 interface Message {
@@ -67,7 +74,16 @@ export default function Home() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+
+    // Filters
     const [category, setCategory] = useState('');
+    const [fileType, setFileType] = useState('');
+    const [dateRange, setDateRange] = useState('');
+    const [availableTags, setAvailableTags] = useState<Record<string, string[]>>({});
+    const [selectedTags, setSelectedTags] = useState<string[]>([]);
+    const [tagMatchMode, setTagMatchMode] = useState<'any' | 'all'>('any');
+    const [isTagExpanded, setIsTagExpanded] = useState(false);
+
     const [stats, setStats] = useState<Stats | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadResult, setUploadResult] = useState<string | null>(null);
@@ -103,6 +119,18 @@ export default function Home() {
         }
     }, []);
 
+    const fetchTags = useCallback(async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/tags`);
+            if (res.ok) {
+                const data = await res.json();
+                setAvailableTags(data);
+            }
+        } catch (error) {
+            console.error('Tags fetch error:', error);
+        }
+    }, []);
+
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         if (params.get('auth') === 'success') {
@@ -111,8 +139,9 @@ export default function Home() {
         }
 
         fetchStats();
+        fetchTags();
         checkDriveStatus();
-    }, [fetchStats]);
+    }, [fetchStats, fetchTags]);
 
     const checkDriveStatus = async () => {
         try {
@@ -191,32 +220,61 @@ export default function Home() {
 
         const userMessage = input.trim();
         setInput('');
+
+        // Add user message
         setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+
+        // Add placeholder assistant message
+        setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: '',
+            sources: undefined
+        }]);
+
         setIsLoading(true);
 
         try {
-            const res = await fetch(`${API_BASE}/api/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    question: userMessage,
-                    category: category || null,
-                }),
-            });
+            const { chatStream } = await import('../lib/api');
+            let accumulatedAnswer = '';
 
-            if (!res.ok) throw new Error('API error');
-
-            const data = await res.json();
-            setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: data.answer,
-                sources: data.sources,
-            }]);
+            for await (const update of chatStream(
+                userMessage,
+                category,
+                fileType,
+                dateRange,
+                selectedTags.length > 0 ? selectedTags : undefined,
+                tagMatchMode
+            )) {
+                if (update.type === 'sources') {
+                    setMessages(prev => {
+                        const newMessages = [...prev];
+                        const lastMsg = newMessages[newMessages.length - 1];
+                        if (lastMsg.role === 'assistant') {
+                            lastMsg.sources = update.data;
+                        }
+                        return newMessages;
+                    });
+                } else if (update.type === 'answer') {
+                    accumulatedAnswer += update.data;
+                    setMessages(prev => {
+                        const newMessages = [...prev];
+                        const lastMsg = newMessages[newMessages.length - 1];
+                        if (lastMsg.role === 'assistant') {
+                            lastMsg.content = accumulatedAnswer;
+                        }
+                        return newMessages;
+                    });
+                }
+            }
         } catch (error) {
-            setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: 'エラーが発生しました。もう一度お試しください。',
-            }]);
+            setMessages(prev => {
+                const newMessages = [...prev];
+                const lastMsg = newMessages[newMessages.length - 1];
+                if (lastMsg.role === 'assistant') {
+                    lastMsg.content += '\n\n(エラーが発生しました。通信を確認してください)';
+                }
+                return newMessages;
+            });
         } finally {
             setIsLoading(false);
         }
@@ -313,6 +371,17 @@ export default function Home() {
                 {/* Sidebar */}
                 <aside className="md:w-64 space-y-4">
 
+                    {/* Stats Dashboard (Phase 4-1) */}
+                    <div className="md:hidden">
+                        {/* Mobile only here, or duplicate? The component design is 3 cols, fits sidebar width? 
+                            Sidebar is w-64 (256px). 3 cols might be tight. 
+                            Let's put it at the top of Sidebar but maybe stack vertically if needed or just use it. 
+                            Actually the design in StatsPanel is grid-cols-3. 
+                            Let's assume it fits or style adjusts. 
+                        */}
+                    </div>
+                    <StatsPanel stats={stats} onRefresh={fetchStats} isLoading={false} />
+
                     {/* File Upload Component (New) */}
                     <FileUpload />
 
@@ -332,6 +401,119 @@ export default function Home() {
                                 ))}
                             </select>
                             <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--muted)] pointer-events-none" />
+                        </div>
+                    </div>
+
+
+
+                    {/* Search Filters (Phase 4-2) */}
+                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] space-y-3">
+                        <label className="block text-sm font-medium">絞り込み</label>
+
+                        {/* File Type Filter */}
+                        <div className="relative">
+                            <select
+                                className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
+                                value={fileType}
+                                onChange={(e) => setFileType(e.target.value)}
+                            >
+                                <option value="">全てのファイル形式</option>
+                                <option value=".pdf">PDFドキュメント</option>
+                                <option value=".md">Markdown</option>
+                                <option value=".txt">テキスト</option>
+                            </select>
+                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
+                        </div>
+
+                        {/* Date Filter */}
+                        <div className="relative">
+                            <select
+                                className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
+                                value={dateRange}
+                                onChange={(e) => setDateRange(e.target.value)}
+                            >
+                                <option value="">全期間</option>
+                                <option value="7d">過去1週間</option>
+                                <option value="1m">過去1ヶ月</option>
+                                <option value="3m">過去3ヶ月</option>
+                            </select>
+                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
+                        </div>
+
+                        {/* Tag Filter (Phase 4-4) */}
+                        <div className="pt-2 border-t border-[var(--border)]">
+                            <button
+                                onClick={() => setIsTagExpanded(!isTagExpanded)}
+                                className="flex items-center justify-between w-full text-xs font-medium text-[var(--foreground)] mb-2"
+                            >
+                                <span>タグフィルター ({selectedTags.length})</span>
+                                <ChevronDown className={`w-3 h-3 transition-transform ${isTagExpanded ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {isTagExpanded && (
+                                <div className="space-y-3 animate-fade-in">
+                                    <div className="flex items-center gap-2 text-xs mb-2 bg-[var(--background)] p-1 rounded-lg border border-[var(--border)]">
+                                        <button
+                                            onClick={() => setTagMatchMode('any')}
+                                            className={`flex-1 py-1 rounded-md transition-colors ${tagMatchMode === 'any' ? 'bg-primary-100 text-primary-700' : 'text-[var(--muted)] hover:bg-[var(--card-hover)]'}`}
+                                        >
+                                            Any
+                                        </button>
+                                        <button
+                                            onClick={() => setTagMatchMode('all')}
+                                            className={`flex-1 py-1 rounded-md transition-colors ${tagMatchMode === 'all' ? 'bg-primary-100 text-primary-700' : 'text-[var(--muted)] hover:bg-[var(--card-hover)]'}`}
+                                        >
+                                            All
+                                        </button>
+                                    </div>
+
+                                    <div className="max-h-60 overflow-y-auto pr-1 space-y-4">
+                                        {Object.entries(availableTags).map(([group, tags]) => (
+                                            <div key={group}>
+                                                <h4 className="text-[10px] uppercase tracking-wider text-[var(--muted)] mb-1.5 font-bold">
+                                                    {group}
+                                                </h4>
+                                                <div className="space-y-1">
+                                                    {tags.map((tag) => (
+                                                        <label key={tag} className="flex items-center gap-2 cursor-pointer group hover:bg-[var(--background)] p-1 rounded-md transition-colors">
+                                                            <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedTags.includes(tag)
+                                                                    ? 'bg-primary-500 border-primary-500'
+                                                                    : 'border-[var(--border)] group-hover:border-primary-400'
+                                                                }`}>
+                                                                {selectedTags.includes(tag) && <Check className="w-3 h-3 text-white" />}
+                                                            </div>
+                                                            <input
+                                                                type="checkbox"
+                                                                className="hidden"
+                                                                checked={selectedTags.includes(tag)}
+                                                                onChange={() => {
+                                                                    setSelectedTags(prev =>
+                                                                        prev.includes(tag)
+                                                                            ? prev.filter(t => t !== tag)
+                                                                            : [...prev, tag]
+                                                                    );
+                                                                }}
+                                                            />
+                                                            <span className={`text-xs ${selectedTags.includes(tag) ? 'text-primary-600 font-medium' : 'text-[var(--foreground)]'}`}>
+                                                                {tag}
+                                                            </span>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {selectedTags.length > 0 && (
+                                        <button
+                                            onClick={() => setSelectedTags([])}
+                                            className="w-full text-xs text-[var(--muted)] hover:text-[var(--foreground)] py-1 text-center border-t border-[var(--border)] mt-2"
+                                        >
+                                            クリア
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -455,12 +637,12 @@ export default function Home() {
                             ))}
                         </div>
                     </div>
-                </aside>
+                </aside >
 
                 {/* Chat Area */}
-                <div className="flex-1 flex flex-col bg-[var(--card)] rounded-xl border border-[var(--border)] overflow-hidden relative">
+                < div className="flex-1 flex flex-col bg-[var(--card)] rounded-xl border border-[var(--border)] overflow-hidden relative" >
                     {/* Tabs */}
-                    <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--muted)]/5">
+                    < div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--muted)]/5" >
                         <button
                             onClick={() => setActiveTab('chat')}
                             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'chat' ? 'bg-white shadow-sm text-primary-600' : 'text-[var(--muted)] hover:bg-[var(--card-hover)]'}`}
@@ -475,95 +657,102 @@ export default function Home() {
                             <LibraryIcon className="w-4 h-4" />
                             Library
                         </button>
-                    </div>
+                    </div >
 
                     {/* Chat Container (Split View) */}
-                    <div className="flex-1 flex overflow-hidden" style={{ display: activeTab === 'chat' ? 'flex' : 'none' }}>
+                    < div className="flex-1 flex overflow-hidden" style={{ display: activeTab === 'chat' ? 'flex' : 'none' }
+                    }>
                         {/* Left Pane: Chat */}
-                        <div className={`flex flex-col border-r border-[var(--border)] transition-all duration-300 h-full ${isPdfOpen ? 'w-1/2' : 'w-full'}`}>
+                        < div className={`flex flex-col border-r border-[var(--border)] transition-all duration-300 h-full ${isPdfOpen ? 'w-1/2' : 'w-full'}`}>
                             {/* Messages */}
-                            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                                {messages.length === 0 && (
-                                    <div className="h-full flex flex-col items-center justify-center text-center text-[var(--muted)]">
-                                        <Building2 className="w-16 h-16 mb-4 opacity-50" />
-                                        <h2 className="text-lg font-medium mb-2">建築意匠ナレッジベース</h2>
-                                        <p className="text-sm max-w-md">
-                                            図面・カタログ・技術基準を横断検索し、
-                                            建築技術に関する質問に回答します。
-                                        </p>
-                                    </div>
-                                )}
+                            < div className="flex-1 overflow-y-auto p-4 space-y-4" >
+                                {
+                                    messages.length === 0 && (
+                                        <div className="h-full flex flex-col items-center justify-center text-center text-[var(--muted)]">
+                                            <Building2 className="w-16 h-16 mb-4 opacity-50" />
+                                            <h2 className="text-lg font-medium mb-2">建築意匠ナレッジベース</h2>
+                                            <p className="text-sm max-w-md">
+                                                図面・カタログ・技術基準を横断検索し、
+                                                建築技術に関する質問に回答します。
+                                            </p>
+                                        </div>
+                                    )
+                                }
 
-                                {messages.map((msg, i) => (
-                                    <div
-                                        key={i}
-                                        className={`animate-fade-in ${msg.role === 'user' ? 'flex justify-end' : ''
-                                            }`}
-                                    >
+                                {
+                                    messages.map((msg, i) => (
                                         <div
-                                            className={`max-w-[85%] rounded-xl p-4 ${msg.role === 'user'
-                                                ? 'bg-primary-600 text-white'
-                                                : 'bg-[var(--background)]'
+                                            key={i}
+                                            className={`animate-fade-in ${msg.role === 'user' ? 'flex justify-end' : ''
                                                 }`}
                                         >
-                                            {msg.role === 'user' ? (
-                                                <p>{msg.content}</p>
-                                            ) : (
-                                                <div className="markdown-content">
-                                                    <ReactMarkdown>{msg.content}</ReactMarkdown>
-                                                </div>
-                                            )}
-
-                                            {msg.sources && msg.sources.length > 0 && (
-                                                <div className="mt-4 pt-3 border-t border-[var(--border)]">
-                                                    <p className="text-xs text-[var(--muted)] mb-2 font-medium">参照ファイル:</p>
-                                                    <div className="flex flex-wrap gap-2">
-                                                        {msg.sources.map((src, j) => (
-                                                            <div
-                                                                key={j}
-                                                                className="flex items-center gap-2 bg-[var(--card)] border border-[var(--border)] px-2 py-1.5 rounded-md"
-                                                            >
-                                                                <span className="text-xs flex items-center gap-1">
-                                                                    <FileText className="w-3 h-3 text-primary-500" />
-                                                                    {src.filename}
-                                                                </span>
-                                                                {src.source_pdf && (
-                                                                    <a
-                                                                        href={`${API_BASE}/api/files/view/${src.source_pdf}`}
-                                                                        target="_blank"
-                                                                        rel="noopener noreferrer"
-                                                                        className="text-xs text-blue-500 hover:text-blue-600 hover:underline flex items-center gap-0.5 ml-1 border-l border-[var(--border)] pl-2"
-                                                                        title="PDFを開く"
-                                                                    >
-                                                                        <ExternalLink className="w-3 h-3" />
-                                                                        PDF
-                                                                    </a>
-                                                                )}
-                                                            </div>
-                                                        ))}
+                                            <div
+                                                className={`max-w-[85%] rounded-xl p-4 ${msg.role === 'user'
+                                                    ? 'bg-primary-600 text-white'
+                                                    : 'bg-[var(--background)]'
+                                                    }`}
+                                            >
+                                                {msg.role === 'user' ? (
+                                                    <p>{msg.content}</p>
+                                                ) : (
+                                                    <div className="markdown-content">
+                                                        <ReactMarkdown>{msg.content}</ReactMarkdown>
                                                     </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
+                                                )}
 
-                                {isLoading && (
-                                    <div className="animate-fade-in">
-                                        <div className="max-w-[85%] rounded-xl p-4 bg-[var(--background)]">
-                                            <div className="flex items-center gap-2 text-[var(--muted)]">
-                                                <Loader2 className="w-4 h-4 animate-spin" />
-                                                <span className="loading-dots">回答を生成中</span>
+                                                {msg.sources && msg.sources.length > 0 && (
+                                                    <div className="mt-4 pt-3 border-t border-[var(--border)]">
+                                                        <p className="text-xs text-[var(--muted)] mb-2 font-medium">参照ファイル:</p>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {msg.sources.map((src, j) => (
+                                                                <div
+                                                                    key={j}
+                                                                    className="flex items-center gap-2 bg-[var(--card)] border border-[var(--border)] px-2 py-1.5 rounded-md"
+                                                                >
+                                                                    <span className="text-xs flex items-center gap-1">
+                                                                        <FileText className="w-3 h-3 text-primary-500" />
+                                                                        {src.filename}
+                                                                    </span>
+                                                                    {src.source_pdf && (
+                                                                        <a
+                                                                            href={`${API_BASE}/api/files/view/${src.source_pdf}`}
+                                                                            target="_blank"
+                                                                            rel="noopener noreferrer"
+                                                                            className="text-xs text-blue-500 hover:text-blue-600 hover:underline flex items-center gap-0.5 ml-1 border-l border-[var(--border)] pl-2"
+                                                                            title="PDFを開く"
+                                                                        >
+                                                                            <ExternalLink className="w-3 h-3" />
+                                                                            PDF
+                                                                        </a>
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
-                                    </div>
-                                )}
+                                    ))
+                                }
+
+                                {
+                                    isLoading && (
+                                        <div className="animate-fade-in">
+                                            <div className="max-w-[85%] rounded-xl p-4 bg-[var(--background)]">
+                                                <div className="flex items-center gap-2 text-[var(--muted)]">
+                                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                                    <span className="loading-dots">回答を生成中</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )
+                                }
 
                                 <div ref={messagesEndRef} />
-                            </div>
+                            </div >
 
                             {/* Input */}
-                            <form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-4">
+                            < form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-4" >
                                 <div className="flex gap-2">
                                     <input
                                         type="text"
@@ -581,48 +770,33 @@ export default function Home() {
                                         <Send className="w-5 h-5" />
                                     </button>
                                 </div>
-                            </form>
-                        </div>
+                            </form >
+                        </div >
 
                         {/* Right Pane: PDF Viewer */}
-                        {isPdfOpen && (
-                            <div className="w-1/2 flex flex-col bg-gray-100 border-l border-[var(--border)] relative h-full">
-                                <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-[var(--border)]">
-                                    <span className="text-sm font-medium text-gray-700 truncate max-w-[300px]">
-                                        {pdfUrl?.split('/').pop()?.split('#')[0] || 'PDF Viewer'}
-                                    </span>
-                                    <button
-                                        onClick={() => setIsPdfOpen(false)}
-                                        className="p-1 hover:bg-gray-100 rounded-full text-gray-500"
-                                    >
-                                        <X className="w-4 h-4" />
-                                    </button>
+                        {
+                            isPdfOpen && (
+                                <div className="w-1/2 h-full border-l border-[var(--border)] relative transition-all duration-300">
+                                    <PDFViewer
+                                        url={pdfUrl}
+                                        initialPage={1} // TODO: Pass page from source info if available
+                                        onClose={() => setIsPdfOpen(false)}
+                                    />
                                 </div>
-                                <div className="flex-1 relative">
-                                    {pdfUrl ? (
-                                        <iframe
-                                            src={pdfUrl}
-                                            className="absolute inset-0 w-full h-full border-none"
-                                            title="PDF Viewer"
-                                        />
-                                    ) : (
-                                        <div className="flex items-center justify-center h-full text-gray-400">
-                                            <p>PDFを選択してください</p>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-                    </div>
+                            )
+                        }
+                    </div >
 
                     {/* Library Container */}
-                    {activeTab === 'library' && (
-                        <div className="flex-1 overflow-hidden p-4 h-full">
-                            <Library />
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
+                    {
+                        activeTab === 'library' && (
+                            <div className="flex-1 overflow-hidden p-4 h-full">
+                                <Library />
+                            </div>
+                        )
+                    }
+                </div >
+            </div >
+        </div >
     );
 }

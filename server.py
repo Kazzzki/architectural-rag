@@ -9,11 +9,29 @@ import time
 from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
+import logging
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
+import secrets
+# Logging setup (Phase 3)
+logging.basicConfig(
+    filename='app.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    encoding='utf-8'
+)
+# Console handler
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console.setFormatter(formatter)
+logging.getLogger('').addHandler(console)
+
+logger = logging.getLogger(__name__)
 
 from config import (
     CORS_ORIGINS,
@@ -31,16 +49,58 @@ import google.generativeai as genai
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+# Basic認証設定
+security = HTTPBasic(auto_error=False)
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+
+def verify_auth(credentials: HTTPBasicCredentials = Depends(security)):
+    """Basic認証を検証 (ngrok経由のリモートアクセス用)"""
+    if not APP_PASSWORD:
+        # パスワード未設定の場合は認証スキップ（ローカル開発用）
+        return True
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="認証が必要です",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    is_correct = secrets.compare_digest(credentials.password, APP_PASSWORD)
+    if not is_correct:
+        raise HTTPException(
+            status_code=401,
+            detail="パスワードが間違っています",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return True
+
 app = FastAPI(
     title="建築意匠ナレッジRAG API",
     description="建築PM/CM業務向けナレッジ検索・回答生成API",
     version="1.0.0",
 )
 
-# CORS設定
+# Global Exception Handler (Phase 3)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    import traceback
+    error_detail = {
+        "error": str(exc),
+        "type": type(exc).__name__,
+        "path": request.url.path
+    }
+    if os.environ.get("DEBUG", "false").lower() == "true":
+        error_detail["traceback"] = traceback.format_exc()
+    
+    logger.error(f"Global Error: {exc} at {request.url.path}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content=error_detail
+    )
+
+# CORS設定 (ngrok対応)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    allow_origins=["*"],  # ngrok経由のアクセスを許可
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,6 +111,10 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     question: str
     category: Optional[str] = None
+    file_type: Optional[str] = None
+    date_range: Optional[str] = None
+    tags: Optional[List[str]] = None
+    tag_match_mode: Optional[str] = "any"
 
 
 class ChatResponse(BaseModel):
@@ -98,8 +162,15 @@ async def chat(request: ChatRequest):
     
     try:
         # ベクトル検索
-        search_results = search(request.question, filter_category=request.category)
+        search_results = search(
+            request.question, 
+            filter_category=request.category,
+            filter_file_type=request.file_type,
+            filter_date_range=request.date_range
+        )
         
+        logger.info(f"Query: {request.question}, Results: {len(search_results['ids'][0]) if search_results['ids'] else 0}")
+
         # コンテキスト構築
         context = build_context(search_results)
         
@@ -109,6 +180,8 @@ async def chat(request: ChatRequest):
         # 回答生成
         answer = generate_answer(request.question, context, source_files)
         
+        logger.info(f"Answer generated ({len(answer)} chars)")
+        
         return ChatResponse(answer=answer, sources=source_files)
         
     except Exception as e:
@@ -117,22 +190,46 @@ async def chat(request: ChatRequest):
 
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
-    """ストリーミング形式で回答を生成"""
+    """ストリーミング形式で回答を生成 (Phase 2: SSE対応)"""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="質問を入力してください")
     
     try:
-        search_results = search(request.question, filter_category=request.category)
+        search_results = search(
+            request.question, 
+            filter_category=request.category,
+            filter_file_type=request.file_type,
+            filter_date_range=request.date_range
+        )
         context = build_context(search_results)
         source_files = get_source_files(search_results)
         
         async def generate():
+            import json
+            # 1. ソース情報を先に送信
+            yield f"data: {json.dumps({'type': 'sources', 'data': source_files}, ensure_ascii=False)}\n\n"
+            
+            # 2. 回答をストリーミング
             async for chunk in generate_answer_stream(request.question, context, source_files):
-                yield chunk
+                # chunkはテキスト文字列と仮定
+                yield f"data: {json.dumps({'type': 'answer', 'data': chunk}, ensure_ascii=False)}\n\n"
+            
+            # 3. 完了シグナル
+            yield "data: [DONE]\n\n"
         
-        return StreamingResponse(generate(), media_type="text/plain")
+        return StreamingResponse(
+            generate(), 
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
         
     except Exception as e:
+        print(f"Stream Error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -528,13 +625,23 @@ async def drive_list_folders(parent_id: str = "root"):
 
 @app.post("/api/sync-drive")
 async def sync_to_drive():
-    """ローカルの整理済みフォルダをGoogle Driveに同期（アップロード）"""
+    """ローカルの整理済みフォルダをGoogle Driveに同期（Local -> Drive Mirror Upload）"""
     try:
-        from drive_sync import sync_upload_to_drive
-        # 同期実行 (完了まで待機)
-        result = sync_upload_to_drive()
-        if result.get("status") == "error":
-             raise HTTPException(status_code=500, detail=result.get("message"))
+        # フォルダ名は '建築意匠ナレッジDB' 固定、または環境変数から取得
+        folder_name = "建築意匠ナレッジDB"
+        
+        # フォルダIDを取得 (存在しない場合は作成)
+        from drive_sync import find_folder_by_name, create_folder, get_drive_service
+        
+        service = get_drive_service()
+        folder_id = find_folder_by_name(folder_name)
+        if not folder_id:
+            folder_id = create_folder(service, folder_name)
+            
+        # 同期実行 (data/ 以下の全ファイルを対象)
+        from drive_sync import upload_mirror_to_drive
+        result = upload_mirror_to_drive("data", folder_id)
+        
         return result
     except ImportError:
         raise HTTPException(status_code=500, detail="drive_sync module not found")
@@ -542,24 +649,54 @@ async def sync_to_drive():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
     Web画面からアップロードされたファイルを data/input/ に保存する
+    セキュリティ:
+    - 許可された拡張子のみ受付
+    - ファイルサイズ上限 100MB
+    - ファイル名サニタイズ
     """
     ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
-    filename = file.filename
+    MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+    
+    filename = file.filename or "unknown"
+    
+    # まずファイル名のみを取り出す（パストラバーサル対策）
+    # os.path.basename で親ディレクトリ部分を除去
+    filename = os.path.basename(filename)
+    
     ext = os.path.splitext(filename)[1].lower()
     
+    # 拡張子チェック
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
     
-    # 入力フォルダ確保
-    input_dir = Path("data/input")
+    # ファイル名サニタイズ (werkzeugがなければシンプルな置換)
+    try:
+        from werkzeug.utils import secure_filename
+        safe_filename = secure_filename(filename)
+    except ImportError:
+        # werkzeugがない場合のフォールバック
+        import re
+        safe_filename = re.sub(r'[^\w\-_\. ]', '_', filename)
+    
+    # secure_filenameが空の場合（日本語ファイル名など）のフォールバック
+    if not safe_filename or safe_filename == ext:
+        safe_filename = f"file_{int(time.time())}{ext}"
+    
+    # 拡張子が消えている場合は付け直す
+    if not safe_filename.lower().endswith(ext):
+        safe_filename = safe_filename + ext
+    
+    # 入力フォルダ確保 (Phase 1-2: uploadsフォルダに変更)
+    from config import KNOWLEDGE_BASE_DIR
+    input_dir = Path(KNOWLEDGE_BASE_DIR) / "uploads"
     input_dir.mkdir(parents=True, exist_ok=True)
     
     # 同名ファイル回避
-    base_name = Path(filename).stem
-    file_path = input_dir / filename
+    base_name = Path(safe_filename).stem
+    file_path = input_dir / safe_filename
     timestamp = int(time.time())
     
     if file_path.exists():
@@ -568,20 +705,124 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         print(f"Receiving upload: {filename}")
         content = await file.read()
+        
+        # ファイルサイズチェック
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413, 
+                detail=f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB"
+            )
+        
+        # PDFの場合は file_id を生成して保存 (Phase 1-1)
+        file_id = None
+        if ext == ".pdf":
+            import hashlib
+            from config import PDF_STORAGE_DIR
+            
+            # SHA-256ハッシュ生成
+            file_hash = hashlib.sha256(content).hexdigest()
+            file_id = file_hash[:16]
+            
+            # 保存ディレクトリ作成
+            pdf_dir = Path(PDF_STORAGE_DIR)
+            pdf_dir.mkdir(parents=True, exist_ok=True)
+            
+            # ID名で保存
+            pdf_save_path = pdf_dir / f"{file_id}.pdf"
+            if not pdf_save_path.exists():
+                with open(pdf_save_path, "wb") as f_pdf:
+                    f_pdf.write(content)
+        
         with open(file_path, "wb") as buffer:
             buffer.write(content)
+        logger.info(f"File uploaded: {file_path}, Size: {len(content)} bytes, ID: {file_id}")
         print(f"Saved to: {file_path}")
         
+        # 自動処理開始 (PDFのみ)
+        if ext == ".pdf":
+            from pipeline_manager import process_file_pipeline
+            background_tasks.add_task(process_file_pipeline, str(file_path))
+
         return {
             "filename": file_path.name, 
             "status": "uploaded", 
             "path": str(file_path),
+            "file_id": file_id,
             "message": "File uploaded successfully. Automatic classification will start shortly."
         }
     except Exception as e:
         print(f"Upload error: {e}")
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ========== Phase 1-1: PDF Delivery API ==========
+
+@app.get("/api/pdf/{file_id}")
+async def get_pdf(file_id: str):
+    """PDFファイルをバイナリ配信"""
+    from config import PDF_STORAGE_DIR
+    
+    # 簡易バリデーション (英数字のみ許可)
+    if not file_id.isalnum():
+         raise HTTPException(status_code=400, detail="Invalid file_id")
+         
+    target_path = Path(PDF_STORAGE_DIR) / f"{file_id}.pdf"
+    
+    # パストラバーサル防止 & 存在確認
+    try:
+        if not target_path.resolve().is_relative_to(Path(PDF_STORAGE_DIR).resolve()):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except ValueError:
+        pass # is_relative_to fails if paths are on different drives or not related
+        
+    if not target_path.exists():
+        raise HTTPException(status_code=404, detail="PDF not found")
+        
+    return FileResponse(target_path, media_type="application/pdf")
+
+
+@app.get("/api/tags")
+async def get_tags():
+    """利用可能なタグ一覧を取得"""
+    try:
+        import yaml
+        base_dir = Path(".")
+        rules_path = base_dir / "classification_rules.yaml"
+        if not rules_path.exists():
+            return {}
+            
+        with open(rules_path, 'r', encoding='utf-8') as f:
+            rules = yaml.safe_load(f)
+            
+        return rules.get("available_tags", {})
+    except Exception as e:
+        logger.error(f"Failed to load tags: {e}")
+        return {}
+
+@app.get("/api/pdf/metadata/{file_id}")
+async def get_pdf_metadata(file_id: str):
+    """PDFメタデータ取得"""
+    import pypdf
+    from config import PDF_STORAGE_DIR
+    
+    if not file_id.isalnum():
+         raise HTTPException(status_code=400, detail="Invalid file_id")
+
+    target_path = Path(PDF_STORAGE_DIR) / f"{file_id}.pdf"
+    
+    if not target_path.exists():
+        raise HTTPException(status_code=404, detail="PDF not found")
+        
+    try:
+        reader = pypdf.PdfReader(target_path)
+        return {
+            "file_id": file_id,
+            "page_count": len(reader.pages),
+            "size_bytes": target_path.stat().st_size
+        }
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 

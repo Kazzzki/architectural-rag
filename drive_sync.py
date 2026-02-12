@@ -387,6 +387,62 @@ def get_auth_status() -> Dict[str, Any]:
         }
 
 
+def upload_mirror_to_drive(local_dir: str, drive_folder_id: str):
+    """
+    Local -> Drive のミラーリングアップロードを行う。
+    ローカルにあるファイルを正とし、Driveにないファイルをアップロードする。
+    """
+    creds = None
+    if os.path.exists(TOKEN_PATH):
+        with open(TOKEN_PATH, 'rb') as token:
+            creds = pickle.load(token)
+    
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+             creds.refresh(Request())
+        else:
+             print("Error: token.pickle not found or invalid.")
+             return {"success": False, "error": "Authentication failed"}
+
+    service = build('drive', 'v3', credentials=creds)
+    local_path = Path(local_dir)
+    
+    if not local_path.exists():
+        return {"success": False, "error": f"Local directory {local_dir} does not exist"}
+
+    # Drive上のファイル一覧を取得
+    results = service.files().list(
+        q=f"'{drive_folder_id}' in parents and trashed = false",
+        fields="nextPageToken, files(id, name)").execute()
+    drive_files = {f['name']: f['id'] for f in results.get('files', [])}
+    
+    uploaded_count = 0
+    errors = []
+
+    # ローカルファイルを走査
+    for file_path in local_path.rglob('*'):
+        if file_path.is_file() and file_path.name not in ['.DS_Store', 'Thumbs.db']:
+            if file_path.name not in drive_files:
+                try:
+                    file_metadata = {'name': file_path.name, 'parents': [drive_folder_id]}
+                    media = MediaFileUpload(str(file_path), resumable=True)
+                    service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                    uploaded_count += 1
+                    print(f"Uploaded: {file_path.name}")
+                except Exception as e:
+                    errors.append(f"{file_path.name}: {str(e)}")
+                    print(f"Failed to upload {file_path.name}: {e}")
+            else:
+                # Update logic could act here if needed
+                pass
+                
+    return {
+        "success": True,
+        "uploaded_count": uploaded_count,
+        "errors": errors,
+        "message": f"Uploaded {uploaded_count} files."
+    }
+
 if __name__ == "__main__":
     # テスト
     status = get_auth_status()

@@ -40,75 +40,44 @@ class DocumentClassifier:
         """
         テキストとメタデータ（ファイル名など）を元に分類を実行する
         """
-        # 1. ルールベース分類
-        rule_result = self._rule_based_classify(text, metadata)
+        # AI分類を実行
+        ai_result = self._ai_classify(text, metadata)
         
-        # 2. AI分類
-        ai_result = self._ai_classify(text, metadata, rule_result)
+        # 検証と修正
+        validated_result = self._validate_result(ai_result)
         
-        # 3. 結果の統合と信頼度判定
-        final_result = self._merge_results(rule_result, ai_result)
-        
-        return final_result
+        return validated_result
 
-    def _rule_based_classify(self, text: str, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """キーワードや正規表現によるルールベース分類"""
-        result = {}
-        
-        # Content Domain
-        domain_matches = []
-        if 'content_domain' in self.rules:
-            for domain_key, subdomains in self.rules['content_domain'].items():
-                for subdomain_key, rules in subdomains.items():
-                    score = 0
-                    # Title keywords (if available in metadata)
-                    if metadata and 'title' in metadata:
-                        for kw in rules.get('keywords', []):
-                            if kw in metadata['title']:
-                                score += rules.get('weight_title', 3)
-                    
-                    # Body keywords
-                    for kw in rules.get('keywords', []):
-                        if kw in text[:5000]: # Check first 5000 chars
-                            score += rules.get('weight_body', 1)
-                            
-                    # Citations regex
-                    for regex in rules.get('citations_regex', []):
-                        if re.search(regex, text):
-                            score += 3
-                            
-                    if score >= 4:
-                        domain_matches.append(f"{domain_key}/{subdomain_key}")
-        
-        result['content_domain'] = list(set(domain_matches))
-        
-        # TODO: Implement other axes if needed for rule-based
-        # For now, relying heavily on AI for complex axes, rule-based for domain triggers.
-        
-        return result
-
-    def _ai_classify(self, text: str, metadata: Optional[Dict[str, Any]], rule_result: Dict[str, Any]) -> Dict[str, Any]:
+    def _ai_classify(self, text: str, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Gemini APIによる分類"""
         try:
-            system_prompt = self.rules.get('system_prompt', '')
+            system_prompt_template = self.rules.get('system_prompt', '')
             user_prompt_template = self.rules.get('user_prompt_template', '')
+            
+            allowed_categories = self.rules.get('allowed_categories', [])
+            available_tags = self.rules.get('available_tags', {})
+            
+            # タグリストを平坦化してプロンプトに埋め込む
+            flat_tags = []
+            for category, tags in available_tags.items():
+                flat_tags.extend(tags)
+            
+            # システムプロンプトのフォーマット
+            system_prompt = system_prompt_template.format(
+                allowed_categories=json.dumps(allowed_categories, ensure_ascii=False, indent=2),
+                available_tags=json.dumps(flat_tags, ensure_ascii=False, indent=2)
+            )
             
             # コンテキスト作成
             title = metadata.get('title', '不明') if metadata else '不明'
-            headings = "" # Extract headings if possible (not implemented yet)
             body_excerpt = text[:2000]
-            urls = "" # Extract URLs if possible
-            detected_citations = ", ".join(rule_result.get('content_domain', []))
             
             prompt = user_prompt_template.format(
                 title=title,
-                headings=headings,
-                body_excerpt=body_excerpt,
-                urls=urls,
-                detected_citations=detected_citations
+                body_excerpt=body_excerpt
             )
             
-            # JSONモードを強制するための設定（Gemini 1.5 Pro/Flash は response_mime_type 対応）
+            # JSONモードを強制するための設定
             generation_config = {"response_mime_type": "application/json"}
             
             response = self.model.generate_content(
@@ -120,40 +89,64 @@ class DocumentClassifier:
             
         except Exception as e:
             logger.error(f"AI分類エラー: {e}")
-            return {}
+            return {"primary_category": "uploads", "tags": [], "page_mapping": {}}
 
-    def _merge_results(self, rule_result: Dict[str, Any], ai_result: Dict[str, Any]) -> Dict[str, Any]:
-        """ルールベースとAIの結果を統合"""
-        # 基本的にAIの結果を採用し、ルールベースで検知した確度の高いものを補完する方針
-        final = ai_result.copy()
+    def _validate_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """分類結果をルールに基づいて検証・修正"""
+        validated = result.copy()
         
-        # ルールベースで検出されたドメインが含まれていなければ追加
-        current_domains = set(final.get('content_domain', []))
-        rule_domains = set(rule_result.get('content_domain', []))
+        # カテゴリ検証
+        validated['primary_category'] = self._validate_category(result.get('primary_category'))
         
-        # 信頼度判定ロジック実装（簡易版）
-        confidence = final.get('confidence', {})
+        # タグ検証
+        validated['tags'] = self._validate_tags(result.get('tags', []))
         
-        # ルールベースとAIが一致していれば信頼度High
-        overlapping = current_domains.intersection(rule_domains)
-        if overlapping:
-            confidence['content_domain'] = 'high'
-            final['content_domain'] = list(current_domains.union(rule_domains))
-        elif rule_domains:
-            # ルールベースのみにあるものは追加しておく
-            final['content_domain'] = list(current_domains.union(rule_domains))
-            if confidence.get('content_domain') == 'high':
-                pass # AIが自信満々ならそのまま
+        # page_mappingはそのまま（形式チェックは省略）
+        if 'page_mapping' not in validated:
+            validated['page_mapping'] = {}
+            
+        return validated
+
+    def _validate_category(self, category: str) -> str:
+        """カテゴリが許可リストにあるか確認"""
+        allowed = self.rules.get('allowed_categories', [])
+        
+        if category in allowed:
+            return category
+            
+        # 部分一致検索（簡易）
+        for allowed_cat in allowed:
+            if category and category in allowed_cat:
+                logger.info(f"カテゴリ修正: {category} -> {allowed_cat}")
+                return allowed_cat
+                
+        logger.warning(f"不正なカテゴリ: {category} -> uploads に変更")
+        return "uploads"
+
+    def _validate_tags(self, tags: List[str]) -> List[str]:
+        """タグが許可リストにあるか確認"""
+        available_tags = self.rules.get('available_tags', {})
+        flat_allowed_tags = set()
+        for group_tags in available_tags.values():
+            flat_allowed_tags.update(group_tags)
+            
+        valid_tags = []
+        for tag in tags:
+            if tag in flat_allowed_tags:
+                valid_tags.append(tag)
             else:
-                confidence['content_domain'] = 'medium' # 意見割れ
-        
-        final['confidence'] = confidence
-        return final
+                logger.warning(f"不正なタグを除外: {tag}")
+                
+        return valid_tags[:10] # 最大10個
 
     def generate_frontmatter(self, classification_result: Dict[str, Any]) -> str:
         """分類結果からYAML Frontmatterを生成"""
-        # 不要なフィールドを除去したり、整形したりする
-        data = classification_result.copy()
+        # 必要なフィールドのみ抽出
+        data = {
+            "primary_category": classification_result.get("primary_category", "uploads"),
+            "tags": classification_result.get("tags", []),
+            "page_mapping": classification_result.get("page_mapping", {})
+        }
         
         # YAMLとしてダンプ
         yaml_str = yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)

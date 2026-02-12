@@ -165,6 +165,22 @@ def _extract_text_file(filepath: str) -> List[Dict[str, Any]]:
         text = f.read()
     return [{"text": text, "page_number": None}] if text.strip() else []
 
+def parse_frontmatter(filepath: str) -> Dict[str, Any]:
+    """MarkdownファイルのFrontmatterを解析"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        if content.startswith("---"):
+            import yaml
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                fm = yaml.safe_load(parts[1])
+                return fm if isinstance(fm, dict) else {}
+    except Exception as e:
+        print(f"Frontmatter parsing error ({filepath}): {e}")
+    return {}
+
 
 def _extract_docx(filepath: str) -> List[Dict[str, Any]]:
     """DOCXファイルからテキストを抽出"""
@@ -325,16 +341,28 @@ def build_index(force_rebuild: bool = False) -> Dict[str, int]:
                 stats["skipped"] += 1
                 continue
             
+            # Frontmatterからメタデータを取得 (.mdの場合)
+            frontmatter = {}
+            if file_info["file_type"] == "md":
+                frontmatter = parse_frontmatter(file_info["full_path"])
+
             for page in pages:
                 metadata = {
                     "filename": file_info["filename"],
                     "rel_path": rel_path,
-                    "category": file_info["category"],
+                    "category": frontmatter.get("primary_category") or file_info["category"], # Frontmatter優先
                     "subcategory": file_info["subcategory"],
                     "sub_subcategory": file_info["sub_subcategory"],
                     "page_number": page.get("page_number"),
-                    "source_pdf": file_info.get("source_pdf"),  # 参照元PDFがあれば追加
+                    "source_pdf": file_info.get("source_pdf"),
+                    "file_type": file_info.get("file_type", ""),
+                    "modified_at": file_info.get("modified_at", ""),
+                    "tags_str": ",".join(frontmatter.get("tags", [])) # ChromaDB用 (リストが非推奨の場合の保険)
                 }
+                
+                # リストも保存 (ChromaDBがサポートしていれば)
+                # ただしメタデータフィルタリングでリスト型は一部制限があるため、文字列化しておくのが無難
+                # 検索時に文字列として取得してPython側でパースする
                 
                 chunks = chunk_text(page["text"], metadata)
                 
@@ -432,15 +460,23 @@ def index_file(filepath: str) -> Dict[str, Any]:
         if not pages:
             return {"error": "No text extracted"}
         
+        # Frontmatterからメタデータを取得 (.mdの場合)
+        frontmatter = {}
+        if file_info["file_type"] == "md":
+            frontmatter = parse_frontmatter(str(path))
+
         for page in pages:
             metadata = {
                 "filename": file_info["filename"],
                 "rel_path": str(rel_path),
-                "category": file_info["category"],
+                "category": frontmatter.get("primary_category") or file_info["category"],
                 "subcategory": file_info["subcategory"],
                 "sub_subcategory": file_info["sub_subcategory"],
                 "page_number": page.get("page_number"),
                 "source_pdf": file_info.get("source_pdf"),
+                "file_type": file_info.get("file_type", ""),
+                "modified_at": file_info.get("modified_at", ""),
+                "tags_str": ",".join(frontmatter.get("tags", []))
             }
             
             chunks = chunk_text(page["text"], metadata)

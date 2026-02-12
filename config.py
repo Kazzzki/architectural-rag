@@ -13,6 +13,13 @@ BASE_DIR = Path(os.environ.get("RAG_BASE_DIR", "./data"))
 # ナレッジDBディレクトリ
 KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
 
+# PDFストレージディレクトリ (Phase 1-1)
+PDF_STORAGE_DIR = BASE_DIR / "pdfs"
+
+# OCR自動分類設定 (Phase 1-2)
+AUTO_CATEGORIZE_UPLOADS_ONLY = os.environ.get("AUTO_CATEGORIZE_UPLOADS_ONLY", "true").lower() == "true"
+ENABLE_AUTO_CATEGORIZE = os.environ.get("ENABLE_AUTO_CATEGORIZE", "true").lower() == "true"
+
 # ChromaDB永続化パス
 CHROMA_DB_DIR = str(BASE_DIR / "chroma_db")
 
