@@ -5,13 +5,14 @@ import time
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
+from config import VISION_ANALYSIS_MODEL, GEMINI_API_KEY
 
 # Configure Gemini API
-if "GOOGLE_API_KEY" not in os.environ:
-    pass
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 def get_gemini_model():
-    return genai.GenerativeModel('gemini-2.0-flash-exp')
+    return genai.GenerativeModel(VISION_ANALYSIS_MODEL)
 
 def process_page_drawing(page_num, img_data):
     """

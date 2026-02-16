@@ -12,6 +12,27 @@ export type StreamUpdate =
     | { type: 'done' };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_PASSWORD = process.env.NEXT_PUBLIC_API_PASSWORD || '';
+
+/** Basic認証ヘッダーを生成 */
+export function getAuthHeaders(): Record<string, string> {
+    if (!API_PASSWORD) return {};
+    const encoded = typeof btoa !== 'undefined'
+        ? btoa(`user:${API_PASSWORD}`)
+        : Buffer.from(`user:${API_PASSWORD}`).toString('base64');
+    return { Authorization: `Basic ${encoded}` };
+}
+
+/** 認証付きfetch（API_PASSWORDが設定されていればBasic Authヘッダーを自動付与） */
+export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+    const headers = {
+        ...getAuthHeaders(),
+        ...(options.headers || {}),
+    };
+    return fetch(url, { ...options, headers });
+}
+
+export { API_BASE };
 
 export async function* chatStream(
     question: string,
@@ -23,7 +44,7 @@ export async function* chatStream(
 ): AsyncGenerator<StreamUpdate> {
     const response = await fetch(`${API_BASE}/api/chat/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
             question,
             category: category || null,

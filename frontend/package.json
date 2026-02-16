@@ -15,7 +15,8 @@
         "react-dom": "^18.2.0",
         "react-dropzone": "^14.4.0",
         "react-markdown": "^9.0.1",
-        "react-pdf": "^10.3.0"
+        "react-pdf": "^10.3.0",
+        "reactflow": "^11.11.4"
     },
     "devDependencies": {
         "@types/node": "^20.11.0",

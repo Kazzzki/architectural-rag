@@ -248,9 +248,21 @@ def get_db_stats() -> Dict[str, Any]:
         collection = get_collection()
         count = collection.count()
         
-        file_index = _load_file_index()
-        file_count = len(file_index.get("files", {}))
-        last_updated = file_index.get("last_updated", "未インデックス")
+        # DBからファイル数と最終更新時刻を取得
+        from database import get_session, Document as DbDocument
+        session = get_session()
+        try:
+            file_count = session.query(DbDocument).filter(
+                DbDocument.file_hash.isnot(None)
+            ).count()
+            
+            from sqlalchemy import func
+            latest = session.query(
+                func.max(DbDocument.last_indexed_at)
+            ).scalar()
+            last_updated = latest.isoformat() if latest else "未インデックス"
+        finally:
+            session.close()
         
         return {
             "chunk_count": count,
@@ -267,8 +279,19 @@ def get_db_stats() -> Dict[str, Any]:
 
 
 def _load_file_index() -> Dict[str, Any]:
-    """file_index.jsonを読み込み"""
-    if not os.path.exists(FILE_INDEX_PATH):
-        return {"files": {}}
-    with open(FILE_INDEX_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    """DBからファイルインデックスを読み込み（後方互換の辞書形式）"""
+    from database import get_session, Document as DbDocument
+    session = get_session()
+    try:
+        docs = session.query(DbDocument).filter(
+            DbDocument.file_hash.isnot(None)
+        ).all()
+        files = {}
+        for doc in docs:
+            files[doc.file_path] = {
+                "hash": doc.file_hash,
+                "chunk_count": doc.chunk_count or 0,
+            }
+        return {"files": files}
+    finally:
+        session.close()

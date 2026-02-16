@@ -17,8 +17,10 @@ import {
     ExternalLink,
     UploadCloud,
     Library as LibraryIcon,
-    MessageSquare
+    MessageSquare,
+    Map
 } from 'lucide-react';
+import Link from 'next/link';
 import Library from './components/Library';
 import FileUpload from './components/FileUpload';
 import StatsPanel from './components/StatsPanel';
@@ -353,16 +355,27 @@ export default function Home() {
                         </div>
                     </div>
 
-                    {/* Stats */}
-                    {stats && (
-                        <div className="hidden md:flex items-center gap-4 text-sm text-[var(--muted)]">
-                            <span className="flex items-center gap-1">
-                                <FileText className="w-4 h-4" />
-                                {stats.file_count}ファイル
-                            </span>
-                            <span>{stats.chunk_count}チャンク</span>
-                        </div>
-                    )}
+                    <div className="flex items-center gap-3">
+                        {/* Mindmap Link */}
+                        <Link
+                            href="/mindmap"
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 border border-violet-500/30 text-violet-300 hover:from-violet-500/30 hover:to-fuchsia-500/30 hover:border-violet-500/50 transition-all text-sm font-medium"
+                        >
+                            <Map className="w-4 h-4" />
+                            プロセスマップ
+                        </Link>
+
+                        {/* Stats */}
+                        {stats && (
+                            <div className="hidden md:flex items-center gap-4 text-sm text-[var(--muted)]">
+                                <span className="flex items-center gap-1">
+                                    <FileText className="w-4 h-4" />
+                                    {stats.file_count}ファイル
+                                </span>
+                                <span>{stats.chunk_count}チャンク</span>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </header>
 
@@ -477,8 +490,8 @@ export default function Home() {
                                                     {tags.map((tag) => (
                                                         <label key={tag} className="flex items-center gap-2 cursor-pointer group hover:bg-[var(--background)] p-1 rounded-md transition-colors">
                                                             <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedTags.includes(tag)
-                                                                    ? 'bg-primary-500 border-primary-500'
-                                                                    : 'border-[var(--border)] group-hover:border-primary-400'
+                                                                ? 'bg-primary-500 border-primary-500'
+                                                                : 'border-[var(--border)] group-hover:border-primary-400'
                                                                 }`}>
                                                                 {selectedTags.includes(tag) && <Check className="w-3 h-3 text-white" />}
                                                             </div>
@@ -714,16 +727,17 @@ export default function Home() {
                                                                         {src.filename}
                                                                     </span>
                                                                     {src.source_pdf && (
-                                                                        <a
-                                                                            href={`${API_BASE}/api/files/view/${src.source_pdf}`}
-                                                                            target="_blank"
-                                                                            rel="noopener noreferrer"
-                                                                            className="text-xs text-blue-500 hover:text-blue-600 hover:underline flex items-center gap-0.5 ml-1 border-l border-[var(--border)] pl-2"
-                                                                            title="PDFを開く"
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                setPdfUrl(`${API_BASE}/api/files/view/${src.source_pdf}`);
+                                                                                setIsPdfOpen(true);
+                                                                            }}
+                                                                            className="text-xs text-blue-500 hover:text-blue-600 hover:underline flex items-center gap-0.5 ml-1 border-l border-[var(--border)] pl-2 cursor-pointer bg-transparent border-0"
+                                                                            title="PDFを表示"
                                                                         >
                                                                             <ExternalLink className="w-3 h-3" />
                                                                             PDF
-                                                                        </a>
+                                                                        </button>
                                                                     )}
                                                                 </div>
                                                             ))}

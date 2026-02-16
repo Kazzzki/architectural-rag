@@ -2,6 +2,7 @@
 
 import os
 import json
+import logging
 import hashlib
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,8 @@ from docx import Document
 import google.generativeai as genai
 import chromadb
 from chromadb import EmbeddingFunction
+
+logger = logging.getLogger(__name__)
 
 from config import (
     KNOWLEDGE_BASE_DIR,
@@ -283,29 +286,99 @@ def generate_doc_id(filepath: str, chunk_index: int) -> str:
 
 
 def load_file_index() -> Dict[str, Any]:
-    """file_index.jsonを読み込み"""
-    if os.path.exists(FILE_INDEX_PATH):
-        with open(FILE_INDEX_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"files": {}, "last_updated": None}
+    """DBからファイルインデックスを読み込み（後方互換の辞書形式で返す）"""
+    from database import get_session, Document as DbDocument
+    session = get_session()
+    try:
+        docs = session.query(DbDocument).filter(
+            DbDocument.file_hash.isnot(None)
+        ).all()
+        files = {}
+        for doc in docs:
+            files[doc.file_path] = {
+                "hash": doc.file_hash,
+                "chunk_count": doc.chunk_count or 0,
+                "indexed_at": doc.last_indexed_at.isoformat() if doc.last_indexed_at else None,
+                "modified_at": doc.updated_at.isoformat() if doc.updated_at else None,
+            }
+        last_updated = None
+        if docs:
+            latest = max(d.last_indexed_at for d in docs if d.last_indexed_at)
+            last_updated = latest.isoformat() if latest else None
+        return {"files": files, "last_updated": last_updated}
+    finally:
+        session.close()
 
 
 def save_file_index(index: Dict[str, Any]):
-    """file_index.jsonを保存"""
-    index["last_updated"] = datetime.now().isoformat()
-    os.makedirs(os.path.dirname(FILE_INDEX_PATH), exist_ok=True)
-    with open(FILE_INDEX_PATH, 'w', encoding='utf-8') as f:
-        json.dump(index, f, ensure_ascii=False, indent=2)
+    """後方互換のため残す（DBでは不要だが呼び出し側が残っている場合）"""
+    # DBへの書き込みは各操作で直接行うため、ここでは何もしない
+    pass
+
+
+def _upsert_doc_index(rel_path: str, file_info: Dict[str, Any], chunk_count: int):
+    """ファイルインデックス情報をDBに保存"""
+    from database import get_session, Document as DbDocument
+    session = get_session()
+    try:
+        doc = session.query(DbDocument).filter(
+            DbDocument.file_path == rel_path
+        ).first()
+        if not doc:
+            doc = DbDocument(
+                filename=Path(rel_path).name,
+                file_path=rel_path,
+                file_type=Path(rel_path).suffix.lower().lstrip('.'),
+            )
+            session.add(doc)
+
+        doc.file_hash = file_info.get("modified_at", "")  # modified_at をハッシュ代わりに使用
+        doc.chunk_count = chunk_count
+        doc.last_indexed_at = datetime.now()
+        doc.file_size = int(file_info.get("file_size_kb", 0) * 1024)
+        doc.category = file_info.get("category", "")
+        doc.subcategory = file_info.get("subcategory", "")
+        doc.updated_at = datetime.now()
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"DB upsert error for {rel_path}: {e}")
+    finally:
+        session.close()
+
+
+def _delete_doc_index(rel_path: str):
+    """ファイルインデックス情報をDBから削除"""
+    from database import get_session, Document as DbDocument
+    session = get_session()
+    try:
+        doc = session.query(DbDocument).filter(
+            DbDocument.file_path == rel_path
+        ).first()
+        if doc:
+            session.delete(doc)
+            session.commit()
+            return True
+        return False
+    except Exception as e:
+        session.rollback()
+        logger.error(f"DB delete error for {rel_path}: {e}")
+        return False
+    finally:
+        session.close()
 
 
 def build_index(force_rebuild: bool = False) -> Dict[str, int]:
     """ファイルをスキャンしてChromaDBにインデックスを構築"""
+    from database import init_db
+    init_db()  # DB初期化
+    
     print("ファイルをスキャン中...")
     files = scan_files()
     print(f"発見したファイル数: {len(files)}")
     
-    file_index = load_file_index()
-    indexed_files = file_index.get("files", {})
+    # DBから既存インデックス情報を取得
+    indexed_files = load_file_index().get("files", {})
     
     # ChromaDB接続
     os.makedirs(CHROMA_DB_DIR, exist_ok=True)
@@ -341,28 +414,24 @@ def build_index(force_rebuild: bool = False) -> Dict[str, int]:
                 stats["skipped"] += 1
                 continue
             
-            # Frontmatterからメタデータを取得 (.mdの場合)
             frontmatter = {}
             if file_info["file_type"] == "md":
                 frontmatter = parse_frontmatter(file_info["full_path"])
 
+            chunk_total = 0
             for page in pages:
                 metadata = {
                     "filename": file_info["filename"],
                     "rel_path": rel_path,
-                    "category": frontmatter.get("primary_category") or file_info["category"], # Frontmatter優先
+                    "category": frontmatter.get("primary_category") or file_info["category"],
                     "subcategory": file_info["subcategory"],
                     "sub_subcategory": file_info["sub_subcategory"],
                     "page_number": page.get("page_number"),
                     "source_pdf": file_info.get("source_pdf"),
                     "file_type": file_info.get("file_type", ""),
                     "modified_at": file_info.get("modified_at", ""),
-                    "tags_str": ",".join(frontmatter.get("tags", [])) # ChromaDB用 (リストが非推奨の場合の保険)
+                    "tags_str": ",".join(frontmatter.get("tags", []))
                 }
-                
-                # リストも保存 (ChromaDBがサポートしていれば)
-                # ただしメタデータフィルタリングでリスト型は一部制限があるため、文字列化しておくのが無難
-                # 検索時に文字列として取得してPython側でパースする
                 
                 chunks = chunk_text(page["text"], metadata)
                 
@@ -374,17 +443,15 @@ def build_index(force_rebuild: bool = False) -> Dict[str, int]:
                         metadatas=[chunk["metadata"]],
                     )
                     stats["chunks"] += 1
+                    chunk_total += 1
             
-            file_info["last_indexed_at"] = datetime.now().isoformat()
-            indexed_files[rel_path] = file_info
+            # DBにインデックス情報を保存
+            _upsert_doc_index(rel_path, file_info, chunk_total)
             stats["indexed"] += 1
             
         except Exception as e:
             print(f"エラー ({rel_path}): {e}")
             stats["errors"] += 1
-    
-    file_index["files"] = indexed_files
-    save_file_index(file_index)
     
     print(f"インデックス完了: {stats['indexed']}ファイル, {stats['chunks']}チャンク")
     return stats
@@ -492,11 +559,8 @@ def index_file(filepath: str) -> Dict[str, Any]:
                 )
                 stats["chunks"] += 1
                 
-        # file_index.jsonの更新
-        file_index = load_file_index()
-        file_info["last_indexed_at"] = datetime.now().isoformat()
-        file_index["files"][str(rel_path)] = file_info
-        save_file_index(file_index)
+        # DBにインデックス情報を保存
+        _upsert_doc_index(str(rel_path), file_info, stats["chunks"])
         
         stats["indexed"] = True
         print(f"単一ファイルインデックス完了: {stats['chunks']}チャンク")
@@ -526,19 +590,16 @@ def delete_from_index(rel_path: str) -> bool:
         print(f"ChromaDB削除エラー: {e}")
         # DBエラーでもファイルインデックスからは削除したいので続行
         
-    # file_index.jsonから削除
+    # DBからインデックス情報を削除
     try:
-        file_index = load_file_index()
-        if rel_path in file_index["files"]:
-            del file_index["files"][rel_path]
-            save_file_index(file_index)
+        result = _delete_doc_index(rel_path)
+        if result:
             print(f"インデックス削除完了: {rel_path}")
-            return True
         else:
-             print(f"インデックスに見つかりません: {rel_path}")
-             return False
+            print(f"インデックスに見つかりません: {rel_path}")
+        return result
     except Exception as e:
-        print(f"file_index削除エラー: {e}")
+        print(f"DBインデックス削除エラー: {e}")
         return False
 
 

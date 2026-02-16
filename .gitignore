@@ -19,3 +19,16 @@ index_storage/
 credentials.json
 token.json
 アーカイブ*/
+
+# Frontend env files
+.env.local
+.env.*.local
+
+# Data directory
+data/
+
+# Agent working directory
+.agent/
+
+# Runtime info
+current_url.txt

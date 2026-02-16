@@ -49,35 +49,78 @@ import google.generativeai as genai
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Basic認証設定
-security = HTTPBasic(auto_error=False)
+# Basic認証設定（ミドルウェアで全API保護）
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
-def verify_auth(credentials: HTTPBasicCredentials = Depends(security)):
-    """Basic認証を検証 (ngrok経由のリモートアクセス用)"""
-    if not APP_PASSWORD:
-        # パスワード未設定の場合は認証スキップ（ローカル開発用）
-        return True
-    if credentials is None:
-        raise HTTPException(
-            status_code=401,
-            detail="認証が必要です",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    is_correct = secrets.compare_digest(credentials.password, APP_PASSWORD)
-    if not is_correct:
-        raise HTTPException(
-            status_code=401,
-            detail="パスワードが間違っています",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return True
+if APP_PASSWORD:
+    import base64
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import Response
+
+    class BasicAuthMiddleware(BaseHTTPMiddleware):
+        """APP_PASSWORD設定時に全APIリクエストをBasic認証で保護"""
+        # 認証不要のパス
+        EXEMPT_PATHS = {"/api/health", "/docs", "/openapi.json"}
+
+        async def dispatch(self, request, call_next):
+            path = request.url.path
+
+            # 認証不要パスはスキップ
+            if path in self.EXEMPT_PATHS:
+                return await call_next(request)
+
+            # OPTIONSメソッド（CORSプリフライト）はスキップ
+            if request.method == "OPTIONS":
+                return await call_next(request)
+
+            # 静的ファイル・非APIパスはスキップ
+            if not path.startswith("/api/"):
+                return await call_next(request)
+
+            # Authorization ヘッダーを検証
+            auth = request.headers.get("Authorization")
+            if auth and auth.startswith("Basic "):
+                try:
+                    decoded = base64.b64decode(auth[6:]).decode("utf-8")
+                    _, password = decoded.split(":", 1)
+                    if secrets.compare_digest(password, APP_PASSWORD):
+                        return await call_next(request)
+                except Exception:
+                    pass
+
+            return Response(
+                content="認証が必要です",
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="Antigravity RAG"'},
+            )
+
+    print("🔒 Basic認証が有効です (APP_PASSWORD設定済)")
+else:
+    print("⚠️  APP_PASSWORDが未設定のため、認証なしで動作します")
+
 
 app = FastAPI(
     title="建築意匠ナレッジRAG API",
     description="建築PM/CM業務向けナレッジ検索・回答生成API",
     version="1.0.0",
 )
+
+# 認証ミドルウェアを登録
+if APP_PASSWORD:
+    app.add_middleware(BasicAuthMiddleware)
+
+# データベース初期化
+from database import init_db, migrate_from_json
+init_db()
+# 初回起動時に既存JSONデータをDBへ移行
+try:
+    migrate_from_json()
+except Exception as e:
+    print(f"JSON migration skipped or error: {e}")
+
+# マインドマップルーターをマウント
+from mindmap.router import router as mindmap_router
+app.include_router(mindmap_router)
 
 # Global Exception Handler (Phase 3)
 @app.exception_handler(Exception)
@@ -100,7 +143,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # CORS設定 (ngrok対応)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ngrok経由のアクセスを許可
+    allow_origins=CORS_ORIGINS,  # config.pyで定義されたオリジン
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -651,7 +694,7 @@ async def sync_to_drive():
 @app.post("/api/upload")
 async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
-    Web画面からアップロードされたファイルを data/input/ に保存する
+    Web画面からアップロードされたファイルを保存し、file_storeに登録する。
     セキュリティ:
     - 許可された拡張子のみ受付
     - ファイルサイズ上限 100MB
@@ -661,82 +704,70 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
     
     filename = file.filename or "unknown"
-    
-    # まずファイル名のみを取り出す（パストラバーサル対策）
-    # os.path.basename で親ディレクトリ部分を除去
     filename = os.path.basename(filename)
-    
     ext = os.path.splitext(filename)[1].lower()
     
-    # 拡張子チェック
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
     
-    # ファイル名サニタイズ (werkzeugがなければシンプルな置換)
+    # ファイル名サニタイズ
     try:
         from werkzeug.utils import secure_filename
         safe_filename = secure_filename(filename)
     except ImportError:
-        # werkzeugがない場合のフォールバック
         import re
         safe_filename = re.sub(r'[^\w\-_\. ]', '_', filename)
     
-    # secure_filenameが空の場合（日本語ファイル名など）のフォールバック
     if not safe_filename or safe_filename == ext:
         safe_filename = f"file_{int(time.time())}{ext}"
-    
-    # 拡張子が消えている場合は付け直す
     if not safe_filename.lower().endswith(ext):
         safe_filename = safe_filename + ext
     
-    # 入力フォルダ確保 (Phase 1-2: uploadsフォルダに変更)
+    # 入力フォルダ確保
     from config import KNOWLEDGE_BASE_DIR
     input_dir = Path(KNOWLEDGE_BASE_DIR) / "uploads"
     input_dir.mkdir(parents=True, exist_ok=True)
     
-    # 同名ファイル回避
     base_name = Path(safe_filename).stem
     file_path = input_dir / safe_filename
     timestamp = int(time.time())
-    
     if file_path.exists():
         file_path = input_dir / f"{base_name}_{timestamp}{ext}"
     
     try:
-        print(f"Receiving upload: {filename}")
         content = await file.read()
         
-        # ファイルサイズチェック
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=413, 
                 detail=f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB"
             )
         
-        # PDFの場合は file_id を生成して保存 (Phase 1-1)
-        file_id = None
+        # file_storeに登録 (論理ID = SHA-256先頭16文字)
+        import file_store
+        content_type = "application/pdf" if ext == ".pdf" else f"image/{ext[1:]}"
+        reg = file_store.register_file(
+            original_name=filename,
+            current_path=str(file_path),
+            content=content,
+            content_type=content_type
+        )
+        file_id = reg["id"]
+        
+        # PDFはID名でも保存（プレビュー用の安定パス）
         if ext == ".pdf":
-            import hashlib
             from config import PDF_STORAGE_DIR
-            
-            # SHA-256ハッシュ生成
-            file_hash = hashlib.sha256(content).hexdigest()
-            file_id = file_hash[:16]
-            
-            # 保存ディレクトリ作成
             pdf_dir = Path(PDF_STORAGE_DIR)
             pdf_dir.mkdir(parents=True, exist_ok=True)
-            
-            # ID名で保存
             pdf_save_path = pdf_dir / f"{file_id}.pdf"
             if not pdf_save_path.exists():
                 with open(pdf_save_path, "wb") as f_pdf:
                     f_pdf.write(content)
         
+        # 元のパスにも保存（OCR/分類パイプライン用）
         with open(file_path, "wb") as buffer:
             buffer.write(content)
         logger.info(f"File uploaded: {file_path}, Size: {len(content)} bytes, ID: {file_id}")
-        print(f"Saved to: {file_path}")
         
         # 自動処理開始 (PDFのみ)
         if ext == ".pdf":
@@ -748,39 +779,58 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
             "status": "uploaded", 
             "path": str(file_path),
             "file_id": file_id,
+            "original_name": filename,
             "message": "File uploaded successfully. Automatic classification will start shortly."
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Upload error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ========== Phase 1-1: PDF Delivery API ==========
+# ========== PDF Delivery & File Info API ==========
 
 @app.get("/api/pdf/{file_id}")
 async def get_pdf(file_id: str):
-    """PDFファイルをバイナリ配信"""
-    from config import PDF_STORAGE_DIR
-    
-    # 簡易バリデーション (英数字のみ許可)
+    """PDFファイルをバイナリ配信（file_storeから解決、フォールバックあり）"""
     if not file_id.isalnum():
-         raise HTTPException(status_code=400, detail="Invalid file_id")
-         
-    target_path = Path(PDF_STORAGE_DIR) / f"{file_id}.pdf"
+        raise HTTPException(status_code=400, detail="Invalid file_id")
     
-    # パストラバーサル防止 & 存在確認
+    # 1. file_storeから取得を試みる
     try:
-        if not target_path.resolve().is_relative_to(Path(PDF_STORAGE_DIR).resolve()):
-            raise HTTPException(status_code=403, detail="Access denied")
-    except ValueError:
-        pass # is_relative_to fails if paths are on different drives or not related
-        
-    if not target_path.exists():
-        raise HTTPException(status_code=404, detail="PDF not found")
-        
-    return FileResponse(target_path, media_type="application/pdf")
+        import file_store
+        file_info = file_store.get_file(file_id)
+        if file_info:
+            fp = Path(file_info["current_path"])
+            if fp.exists():
+                return FileResponse(fp, media_type="application/pdf",
+                                   filename=file_info.get("original_name", fp.name))
+    except Exception:
+        pass
+    
+    # 2. PDF_STORAGE_DIR内のID名ファイルにフォールバック
+    from config import PDF_STORAGE_DIR
+    target_path = Path(PDF_STORAGE_DIR) / f"{file_id}.pdf"
+    if target_path.exists():
+        return FileResponse(target_path, media_type="application/pdf")
+    
+    raise HTTPException(status_code=404, detail="PDF not found")
+
+
+@app.get("/api/files/{file_id}/info")
+async def get_file_info(file_id: str):
+    """ファイル情報を取得（ステータス、パス、同期状態等）"""
+    try:
+        import file_store
+        info = file_store.get_file(file_id)
+        if not info:
+            raise HTTPException(status_code=404, detail="File not found")
+        return info
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/tags")
@@ -824,6 +874,87 @@ async def get_pdf_metadata(file_id: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ========== 設定関連エンドポイント ==========
+
+class GeminiKeyRequest(BaseModel):
+    api_key: str
+
+@app.get("/api/settings/gemini-key")
+async def get_gemini_key():
+    """設定済みのGemini APIキーを取得（セキュリティのため一部隠蔽）"""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return {"api_key": "", "configured": False}
+    
+    # 前後数文字だけ表示
+    if len(api_key) > 8:
+        masked = f"{api_key[:4]}...{api_key[-4:]}"
+    else:
+        masked = "****"
+        
+    return {"api_key": masked, "configured": True}
+
+@app.post("/api/settings/gemini-key")
+async def set_gemini_key(request: GeminiKeyRequest):
+    """Gemini APIキーを設定・保存"""
+    new_key = request.api_key.strip()
+    if not new_key:
+        raise HTTPException(status_code=400, detail="APIキーが空です")
+    
+    # .envファイルを更新
+    env_path = Path(".env")
+    lines = []
+    if env_path.exists():
+        with open(env_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            
+    key_exists = False
+    new_lines = []
+    for line in lines:
+        if line.strip().startswith("GEMINI_API_KEY="):
+            new_lines.append(f"GEMINI_API_KEY={new_key}\n")
+            key_exists = True
+        else:
+            new_lines.append(line)
+            
+    if not key_exists:
+        if new_lines and not new_lines[-1].endswith('\n'):
+            new_lines[-1] += '\n'
+        new_lines.append(f"GEMINI_API_KEY={new_key}\n")
+        
+    with open(env_path, 'w', encoding='utf-8') as f:
+        f.writelines(new_lines)
+        
+    # 環境変数とconfigを更新
+    os.environ["GEMINI_API_KEY"] = new_key
+    import config
+    config.GEMINI_API_KEY = new_key
+    
+    # genaiを再設定
+    import google.generativeai as genai
+    genai.configure(api_key=new_key)
+    
+    return {"message": "APIキーを保存しました"}
+
+@app.post("/api/settings/test-gemini")
+async def test_gemini_key():
+    """現在のAPIキーでGemini接続テスト"""
+    import google.generativeai as genai
+    import config
+    
+    if not config.GEMINI_API_KEY:
+        raise HTTPException(status_code=400, detail="APIキーが設定されていません")
+        
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel("gemini-1.5-flash") # 軽量モデルでテスト
+        response = model.generate_content("Hello, this is a connection test.")
+        return {"success": True, "message": "接続テスト成功", "response": response.text[:50]}
+    except Exception as e:
+        return {"success": False, "message": f"接続テスト失敗: {str(e)}"}
 
 
 if __name__ == "__main__":

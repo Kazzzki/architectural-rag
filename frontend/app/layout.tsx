@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import AuthProvider from './components/AuthProvider';
 
 export const metadata: Metadata = {
     title: '建築意匠ナレッジベース',
@@ -13,7 +14,9 @@ export default function RootLayout({
 }) {
     return (
         <html lang="ja">
-            <body>{children}</body>
+            <body>
+                <AuthProvider>{children}</AuthProvider>
+            </body>
         </html>
     );
 }
