@@ -202,3 +202,9 @@ class KnowledgeNode(BaseModel):
     node_id: str
     entries: List[KnowledgeEntry] = []
 
+
+class ProjectImportRequest(BaseModel):
+    name: str
+    nodes: List[ProcessNode]
+    edges: List[Edge]
+    template_id: str = "blank"

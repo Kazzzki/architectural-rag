@@ -57,6 +57,9 @@ interface Props {
     onNodeDragStop?: (nodeId: string, x: number, y: number) => void;
     onAddNodeAt?: (label: string, x: number, y: number, sourceNodeId?: string) => void;
     onConnectNodes?: (sourceId: string, targetId: string) => void;
+    onEdgeUpdate?: (oldEdge: EdgeData, newConnection: Connection) => void;
+    onEdgesDelete?: (edgeIds: string[]) => void;
+    onNodesDelete?: (nodeIds: string[]) => void;
     collapsedNodeIds?: Set<string>;
     descendantCounts?: Map<string, number>;
     onNodeLabelChange?: (nodeId: string, newLabel: string) => void;
@@ -83,6 +86,9 @@ function MindmapCanvasInner({
     onNodeDragStop,
     onAddNodeAt,
     onConnectNodes,
+    onEdgeUpdate,
+    onEdgesDelete,
+    onNodesDelete,
     collapsedNodeIds = EMPTY_SET,
     descendantCounts = EMPTY_MAP,
     onNodeLabelChange,
@@ -118,6 +124,8 @@ function MindmapCanvasInner({
         processEdges.forEach(e => parentIds.add(e.source));
         return parentIds;
     }, [processEdges]);
+
+    const isDraggingRef = useRef(false);
 
     // Convert to React Flow nodes
     const rfNodes: Node[] = useMemo(() => {
@@ -217,7 +225,22 @@ function MindmapCanvasInner({
     // Sync when input changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
-        setNodes(rfNodes);
+        setNodes((nds) => {
+            return rfNodes.map((newN) => {
+                // If dragging, preserve current position to prevent snap-back
+                if (isDraggingRef.current) {
+                    const currentN = nds.find((n) => n.id === newN.id);
+                    if (currentN) {
+                        return {
+                            ...newN,
+                            position: currentN.position,
+                            positionAbsolute: currentN.positionAbsolute,
+                        };
+                    }
+                }
+                return newN;
+            });
+        });
     }, [rfNodes]);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -232,13 +255,18 @@ function MindmapCanvasInner({
         [onNodeSelect]
     );
 
+    const onDragStart: NodeDragHandler = useCallback(() => {
+        isDraggingRef.current = true;
+    }, []);
+
     const onDragStop: NodeDragHandler = useCallback(
         (_, node) => {
-            if (isEditMode && onNodeDragStop) {
+            isDraggingRef.current = false;
+            if (onNodeDragStop) {
                 onNodeDragStop(node.id, node.position.x, node.position.y);
             }
         },
-        [isEditMode, onNodeDragStop]
+        [onNodeDragStop]
     );
 
     // Multi-select handler — use a ref to debounce and avoid re-render loops
@@ -369,10 +397,24 @@ function MindmapCanvasInner({
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={onNodeClick}
+                onNodeDragStart={onDragStart}
                 onNodeDragStop={onDragStop}
                 onConnect={onConnect}
                 onConnectStart={onConnectStart}
                 onConnectEnd={onConnectEnd}
+                onEdgeUpdate={onEdgeUpdate ? (oldEdge, newConnection) => {
+                    // Convert RF edge back to EdgeData or just pass ID?
+                    // ReactFlow passes RFEdge. We need to find corresponding EdgeData or just pass ID.
+                    // Actually simpliest is to pass the data needed for parent to handle.
+                    const edgeData = processEdges.find(e => e.id === oldEdge.id);
+                    if (edgeData) onEdgeUpdate(edgeData, newConnection);
+                } : undefined}
+                onEdgesDelete={onEdgesDelete ? (edges) => {
+                    onEdgesDelete(edges.map(e => e.id));
+                } : undefined}
+                onNodesDelete={onNodesDelete ? (nodes) => {
+                    onNodesDelete(nodes.map(n => n.id));
+                } : undefined}
                 onContextMenu={onPaneContextMenuHandler}
                 onNodeContextMenu={onNodeContextMenuHandler}
                 onPaneClick={() => setInlineInput(null)}
@@ -384,9 +426,10 @@ function MindmapCanvasInner({
                 maxZoom={2}
                 nodesDraggable={true}
                 nodesConnectable={isEditMode}
-                selectionOnDrag
+                selectionOnDrag={false}
                 selectionMode={SelectionMode.Partial}
-                panOnDrag={[1, 2]}
+                panOnDrag={true}
+                panOnScroll={true}
                 multiSelectionKeyCode="Shift"
                 proOptions={{ hideAttribution: true }}
             >

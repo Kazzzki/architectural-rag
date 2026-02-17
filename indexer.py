@@ -382,7 +382,10 @@ def build_index(force_rebuild: bool = False) -> Dict[str, int]:
     
     # ChromaDB接続
     os.makedirs(CHROMA_DB_DIR, exist_ok=True)
-    client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
+    client = chromadb.PersistentClient(
+        path=CHROMA_DB_DIR,
+        settings=chromadb.config.Settings(anonymized_telemetry=False)
+    )
     
     embedding_function = GeminiEmbeddingFunction()
     collection = client.get_or_create_collection(

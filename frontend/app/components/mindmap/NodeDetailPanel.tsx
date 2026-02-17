@@ -33,6 +33,9 @@ interface Props {
     onNavigate: (nodeId: string) => void;
     isEditMode?: boolean;
     onStatusChange?: (nodeId: string, newStatus: string) => void;
+    phases?: string[];
+    categories?: string[];
+    onUpdate?: (nodeId: string, updates: Partial<ProcessNode>) => void;
 }
 
 const STATUS_OPTIONS = ['未着手', '検討中', '決定済み'];
@@ -53,6 +56,9 @@ export default function NodeDetailPanel({
     onNavigate,
     isEditMode = false,
     onStatusChange,
+    phases = [],
+    categories = [],
+    onUpdate,
 }: Props) {
     const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG['未着手'];
 
@@ -71,18 +77,41 @@ export default function NodeDetailPanel({
                 </button>
 
                 <div className="flex items-center gap-2 mb-2">
-                    <span
-                        className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
-                        style={{ backgroundColor: `${categoryColor}25`, color: categoryColor }}
-                    >
-                        {node.phase}
-                    </span>
-                    <span
-                        className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
-                        style={{ backgroundColor: `${categoryColor}15`, color: categoryColor }}
-                    >
-                        {node.category}
-                    </span>
+                    {isEditMode && onUpdate ? (
+                        <>
+                            <select
+                                value={node.phase}
+                                onChange={(e) => onUpdate(node.id, { phase: e.target.value })}
+                                className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border border-[var(--border)] bg-white/50"
+                                style={{ color: categoryColor }}
+                            >
+                                {phases.map(p => <option key={p} value={p}>{p}</option>)}
+                            </select>
+                            <select
+                                value={node.category}
+                                onChange={(e) => onUpdate(node.id, { category: e.target.value })}
+                                className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border border-[var(--border)] bg-white/50"
+                                style={{ color: categoryColor }}
+                            >
+                                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                        </>
+                    ) : (
+                        <>
+                            <span
+                                className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
+                                style={{ backgroundColor: `${categoryColor}25`, color: categoryColor }}
+                            >
+                                {node.phase}
+                            </span>
+                            <span
+                                className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
+                                style={{ backgroundColor: `${categoryColor}15`, color: categoryColor }}
+                            >
+                                {node.category}
+                            </span>
+                        </>
+                    )}
                 </div>
 
                 <h2 className="text-lg font-bold pr-6">{node.label}</h2>

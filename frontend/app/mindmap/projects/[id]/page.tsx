@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ReactFlowProvider } from 'reactflow';
+import { ReactFlowProvider, Connection } from 'reactflow';
 import MindmapCanvas from '../../../components/mindmap/MindmapCanvas';
 import NodeDetailPanel from '../../../components/mindmap/NodeDetailPanel';
 import GoalSearchBar from '../../../components/mindmap/GoalSearchBar';
@@ -182,10 +182,25 @@ export default function ProjectMapPage() {
         setSelectedNodeIds(new Set(nodeIds));
         if (nodeIds.length === 1) {
             setSelectedNodeId(nodeIds[0]);
+        } else {
+            setSelectedNodeId(null);
         }
     }, []);
 
     const handleNodeDragStop = async (nodeId: string, x: number, y: number) => {
+        // Optimistic update
+        setProject(prev => {
+            if (!prev) return null;
+            return {
+                ...prev,
+                nodes: prev.nodes.map(n =>
+                    n.id === nodeId
+                        ? { ...n, position: { x, y } }
+                        : n
+                )
+            };
+        });
+
         try {
             await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
                 method: 'PUT',
@@ -195,6 +210,8 @@ export default function ProjectMapPage() {
             showSaveStatus();
         } catch (err) {
             console.error('Drag error:', err);
+            // Revert on error (optional, but good practice)
+            loadProject(false);
         }
     };
 
@@ -292,6 +309,96 @@ export default function ProjectMapPage() {
         }
     };
 
+    const handleEdgeUpdate = async (oldEdge: EdgeData, newConnection: Connection) => {
+        if (!newConnection.source || !newConnection.target) return;
+        try {
+            // Delete old edge
+            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${oldEdge.id}`, {
+                method: 'DELETE',
+            });
+            // Create new edge
+            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source: newConnection.source,
+                    target: newConnection.target,
+                    type: oldEdge.type,
+                    reason: oldEdge.reason,
+                }),
+            });
+            setUndoCount(prev => prev + 1);
+            showSaveStatus();
+            loadProject(false);
+        } catch (err) {
+            console.error('Edge update error:', err);
+        }
+    };
+
+    const handleEdgesDelete = async (edgeIds: string[]) => {
+        if (edgeIds.length === 0) return;
+        // Removed confirmation dialog as requested
+        try {
+            await Promise.all(edgeIds.map(id =>
+                fetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${id}`, {
+                    method: 'DELETE',
+                })
+            ));
+            setUndoCount(prev => prev + edgeIds.length);
+            showSaveStatus();
+            loadProject(false);
+        } catch (err) {
+            console.error('Edge delete error:', err);
+        }
+    };
+
+    const handleNodesDelete = async (nodeIds: string[]) => {
+        if (nodeIds.length === 0) return;
+        // Removed confirmation dialog as requested
+        try {
+            await Promise.all(nodeIds.map(id =>
+                fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${id}`, {
+                    method: 'DELETE',
+                })
+            ));
+            setSelectedNodeId(null);
+            setSelectedNodeIds(new Set());
+            setUndoCount(prev => prev + nodeIds.length);
+            showSaveStatus();
+            loadProject(false);
+        } catch (err) {
+            console.error('Delete error:', err);
+        }
+    };
+
+    const handleNodeUpdate = async (nodeId: string, updates: Partial<ProcessNode>) => {
+        try {
+            // Optimistic update for UI responsiveness
+            setProject(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    nodes: prev.nodes.map(n =>
+                        n.id === nodeId ? { ...n, ...updates } : n
+                    )
+                };
+            });
+
+            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updates),
+            });
+            setUndoCount(prev => prev + 1);
+            showSaveStatus();
+            // Background reload to ensure consistency
+            loadProject(false);
+        } catch (err) {
+            console.error('Node update error:', err);
+            loadProject(false);
+        }
+    };
+
     const handleAddNode = async (nodeData: {
         label: string;
         description: string;
@@ -321,10 +428,10 @@ export default function ProjectMapPage() {
     const handleDeleteNode = async () => {
         const idsToDelete = selectedNodeIds.size > 0 ? Array.from(selectedNodeIds) : (selectedNodeId ? [selectedNodeId] : []);
         if (idsToDelete.length === 0) return;
-        const msg = idsToDelete.length > 1
-            ? `${idsToDelete.length}個のノードを削除しますか？`
-            : 'このノードを削除しますか？';
-        if (!confirm(msg)) return;
+        // const msg = idsToDelete.length > 1
+        //     ? `${idsToDelete.length}個のノードを削除しますか？`
+        //     : 'このノードを削除しますか？';
+        // if (!confirm(msg)) return; // Removed confirmation
         try {
             await Promise.all(idsToDelete.map(id =>
                 fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${id}`, {
@@ -380,8 +487,6 @@ export default function ProjectMapPage() {
             } else if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 showSaveStatus(); // Manual save is just visual since we auto-save
-            } else if (e.key === 'Delete' || e.key === 'Backspace') {
-                if (selectedNodeId) handleDeleteNode();
             } else if (e.key === 'n' || e.key === 'N') {
                 e.preventDefault();
                 if (selectedNodeId) {
@@ -722,6 +827,9 @@ export default function ProjectMapPage() {
                             onNodeCollapse={handleNodeCollapse}
                             onNodeContextMenu={handleNodeContextMenu}
                             onPaneContextMenu={handlePaneContextMenu}
+                            onEdgeUpdate={handleEdgeUpdate}
+                            onEdgesDelete={handleEdgesDelete}
+                            onNodesDelete={handleNodesDelete}
                         />
                     </ReactFlowProvider>
                 </div>
@@ -781,6 +889,9 @@ export default function ProjectMapPage() {
                             onNavigate={(nodeId) => setSelectedNodeId(nodeId)}
                             isEditMode={isEditMode}
                             onStatusChange={handleStatusChange}
+                            phases={PHASES}
+                            categories={CATEGORIES}
+                            onUpdate={handleNodeUpdate}
                         />
                     </aside>
                 )}

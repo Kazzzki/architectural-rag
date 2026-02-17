@@ -21,7 +21,10 @@ def get_collection():
     if not os.path.exists(CHROMA_DB_DIR):
         os.makedirs(CHROMA_DB_DIR, exist_ok=True)
     
-    client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
+    client = chromadb.PersistentClient(
+        path=CHROMA_DB_DIR,
+        settings=chromadb.config.Settings(anonymized_telemetry=False)
+    )
     embedding_function = GeminiEmbeddingFunction()
     
     return client.get_or_create_collection(

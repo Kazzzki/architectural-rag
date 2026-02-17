@@ -6,6 +6,7 @@ import yaml
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from enum import Enum
 
 from fastapi import APIRouter, HTTPException, File, UploadFile
 
@@ -15,7 +16,8 @@ from .models import (
     TemplateListItem, ReverseTreeResponse, Position,
     CreateProjectRequest, ProjectListItem, ProjectData,
     NodeUpdate, NodeCreate, EdgeCreate,
-    KnowledgeNode, KnowledgeEntry, KnowledgeDepth
+    KnowledgeNode, KnowledgeEntry, KnowledgeDepth,
+    ProjectImportRequest
 )
 from .graph_service import GraphService
 from . import project_store
@@ -245,6 +247,57 @@ async def create_project(req: CreateProjectRequest):
         "template_id": req.template_id,
         "message": f"プロジェクト作成: {req.name}",
     }
+
+
+@router.post("/projects/import")
+async def import_project(req: ProjectImportRequest):
+    """分析結果などを元にプロジェクトを作成（blankテンプレート + delta）"""
+    try:
+        # blankテンプレートをベースにプロジェクト作成
+        template = _load_template(req.template_id)
+        project_id = project_store.create_project(req.name, template)
+        
+        # ノードを追加
+        for node in req.nodes:
+            # プロジェクトのルートノードとIDが重複する場合（rootなど）はmodify扱いにする
+            # ただし、blankテンプレートは "root" ノードを持つため、
+            # インポートデータも "root" を持っていれば上書き更新したい。
+            # project_store.add_node は常に新しいIDを生成するわけではなく、ID指定も可能（delta type=add_node）
+            # ここではシンプルに、全てのノードを add_node として記録する。
+            # blankテンプレートの初期ノードと衝突する場合は、後勝ちで delta が適用されるはず？
+            # project_store.get_project_with_merged_data のロジックでは:
+            # 1. テンプレートノード展開
+            # 2. Delta適用 (add_node -> 上書き)
+            # なので、add_node で同IDを送れば上書きになる。
+            
+            node_data = node.model_dump()
+            # 座標データの構造調整
+            if hasattr(node, "position"):
+                node_data["pos_x"] = node.position.x
+                node_data["pos_y"] = node.position.y
+                del node_data["position"]
+
+            # ステータス調整
+            if "status" in node_data and isinstance(node_data["status"], Enum):
+                node_data["status"] = node_data["status"].value
+
+            project_store.add_node(project_id, node_data)
+
+        # エッジを追加
+        for edge in req.edges:
+            edge_data = edge.model_dump()
+            if "type" in edge_data and isinstance(edge_data["type"], Enum):
+                edge_data["type"] = edge_data["type"].value
+            project_store.add_edge(project_id, edge_data)
+            
+        return {
+            "id": project_id,
+            "name": req.name,
+            "message": f"プロジェクトをインポートしました: {len(req.nodes)} nodes",
+        }
+    except Exception as e:
+        logger.error(f"Import failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Project import failed: {str(e)}")
 
 
 @router.get("/projects/{project_id}")

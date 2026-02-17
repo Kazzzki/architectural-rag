@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import List, Dict, Any
 from tenacity import RetryError
 
-from config import GEMINI_MODEL, GEMINI_API_KEY
+from config import GEMINI_MODEL_OCR, GEMINI_API_KEY
+
+# 互換性のため
+GEMINI_MODEL = GEMINI_MODEL_OCR
 from ocr_utils import retry_gemini_call
 
 if GEMINI_API_KEY:

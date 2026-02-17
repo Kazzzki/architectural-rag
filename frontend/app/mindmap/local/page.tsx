@@ -504,9 +504,83 @@ export default function LocalMindmapPage() {
         }
     };
 
+    // Save to Project
+    const [showSaveModal, setShowSaveModal] = useState(false);
+    const [projectName, setProjectName] = useState('');
+    const [savingProject, setSavingProject] = useState(false);
+
+    const handleSaveToProject = async () => {
+        if (!projectName.trim()) return;
+        setSavingProject(true);
+        try {
+            const body = {
+                name: projectName,
+                nodes: nodes,
+                edges: edges,
+                template_id: "blank"
+            };
+            const res = await fetch(`${API_BASE}/api/mindmap/projects/import`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.detail || 'Project save failed');
+            }
+
+            const data = await res.json();
+            // Redirect to the new project
+            window.location.href = `/mindmap/projects/${data.id}`;
+
+        } catch (err: any) {
+            setError(err.message || 'Failed to save project');
+            setSavingProject(false);
+            setShowSaveModal(false);
+        }
+    };
+
     return (
         <div className="h-screen flex flex-col bg-[var(--background)]">
             {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onSave={(hasKey) => setHasApiKey(hasKey)} />}
+
+            {showSaveModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
+                        <h3 className="font-bold text-lg mb-4">プロジェクトとして保存</h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">プロジェクト名</label>
+                                <input
+                                    type="text"
+                                    value={projectName}
+                                    onChange={e => setProjectName(e.target.value)}
+                                    placeholder="例: 文書分析プロジェクト"
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+                                    autoFocus
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button
+                                    onClick={() => setShowSaveModal(false)}
+                                    className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium"
+                                >
+                                    キャンセル
+                                </button>
+                                <button
+                                    onClick={handleSaveToProject}
+                                    disabled={!projectName.trim() || savingProject}
+                                    className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    {savingProject && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                                    作成して移動
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <header className="border-b border-[var(--border)] bg-white/80 backdrop-blur-sm px-6 py-3 z-10">
                 <div className="flex items-center justify-between mb-3">
@@ -574,6 +648,17 @@ export default function LocalMindmapPage() {
                                         <Download className="w-3.5 h-3.5" />
                                     )}
                                     MD出力
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setProjectName(analysisTitle || "分析結果マインドマップ");
+                                        setShowSaveModal(true);
+                                    }}
+                                    title="プロジェクトとして保存"
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all"
+                                >
+                                    <FolderOpen className="w-3.5 h-3.5" />
+                                    保存
                                 </button>
                             </div>
                         )}

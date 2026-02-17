@@ -4,7 +4,10 @@ from typing import List, Dict, Any, AsyncGenerator
 
 import google.generativeai as genai
 
-from config import GEMINI_MODEL, MAX_TOKENS, TEMPERATURE, GEMINI_API_KEY
+from config import GEMINI_MODEL_RAG, MAX_TOKENS, TEMPERATURE, GEMINI_API_KEY
+
+# 互換性のため
+GEMINI_MODEL = GEMINI_MODEL_RAG
 
 # Gemini API設定
 if GEMINI_API_KEY:
