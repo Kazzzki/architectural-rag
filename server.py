@@ -89,9 +89,8 @@ if APP_PASSWORD:
                     _, password = decoded.split(":", 1)
                     if secrets.compare_digest(password, APP_PASSWORD):
                         authenticated = True
-                except Exception:
-                    pass
-            
+                except (ValueError, TypeError, base64.binascii.Error) as e:
+                    logger.warning(f"Basic Auth decode error: {e}")
             if authenticated:
                 return await call_next(request)
 

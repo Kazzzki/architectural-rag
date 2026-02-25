@@ -231,7 +231,8 @@ async def list_projects():
             template = _load_template(p["template_id"])
             progress = project_store.get_progress(p["id"], template)
             item["progress"] = progress
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to calculate progress for project {p['id']}: {e}")
             item["progress"] = {"total": 0, "completed": 0, "in_progress": 0, "percent": 0}
         result.append(item)
     return result
@@ -908,8 +909,8 @@ async def learn_rules(request: dict):
             with open(rules_path, 'r', encoding='utf-8') as f:
                 existing_data = json.load(f)
             existing_rules = existing_data.get("rules", [])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to read existing rules: {e}")
 
     merged = existing_rules + new_rules.get("rules", [])
     # 重複除去（順序保持）
@@ -944,7 +945,8 @@ async def get_rules():
         with open(rules_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         return {"rules": data.get("rules", []), "total": len(data.get("rules", []))}
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load rules: {e}")
         return {"rules": [], "total": 0}
 
 
@@ -1214,7 +1216,8 @@ async def ai_auto_link_endpoint(req: AutoLinkRequest):
             # Try direct JSON parse first
             try:
                 keywords = json.loads(text).get("keywords", [])
-            except:
+            except json.JSONDecodeError as e:
+                logger.debug(f"JSON parse failed, falling back to regex: {e}")
                 # Fallback regex
                 json_match = re.search(r'\{.*\}', text, re.DOTALL)
                 if json_match:

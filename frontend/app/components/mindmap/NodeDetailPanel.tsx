@@ -1,7 +1,8 @@
 'use client';
 
-import { X, CheckSquare, FileText, Users, ArrowRight, ArrowLeft, ExternalLink, BookOpen } from 'lucide-react';
+import { X, CheckSquare, FileText, Users, ArrowRight, ArrowLeft, ExternalLink, BookOpen, ClipboardList } from 'lucide-react';
 import KnowledgePanel from './KnowledgePanel';
+import ResearchTab from './ResearchTab';
 
 interface ProcessNode {
     id: string;
@@ -154,6 +155,15 @@ export default function NodeDetailPanel({
                         知識・ナレッジ
                     </h3>
                     <KnowledgePanel nodeId={node.id} categoryColor={categoryColor} />
+                </section>
+
+                {/* Research Planner Panel */}
+                <section>
+                    <h3 className="flex items-center gap-2 text-sm font-bold mb-2">
+                        <ClipboardList className="w-4 h-4" style={{ color: categoryColor }} />
+                        リサーチ・調査プラン
+                    </h3>
+                    <ResearchTab node={node as any} onUpdate={onUpdate} />
                 </section>
 
                 {/* Checklist */}

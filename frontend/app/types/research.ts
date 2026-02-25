@@ -1,21 +1,11 @@
-export interface PipelineNode {
-    id: string;
-    label: string;
-    description: string;
-    components: string[];
-    domains: string[];
-    default_doc_type: string;
-    default_tools: string[];
-}
-
 export interface ResearchGenerateRequest {
     node_id: string;
     node_label: string;
-    node_desc: string;
-    node_components: string[];
-    node_domains: string[];
-    search_category: string;
-    doc_type: string;
+    node_phase: string;
+    node_category: string;
+    node_description: string;
+    node_checklist: string[];
+    node_deliverables: string[];
     selected_tools: string[];
     focus: string;
     extra_context?: string;
@@ -26,13 +16,13 @@ export interface KnowledgeItem {
     title: string;
     content: string;
     tags: string[];
-    search_category: string;
-    doc_type: string;
 }
 
 export interface ResearchInjectRequest {
     node_id: string;
     node_label: string;
+    node_phase: string;
+    node_category: string;
     items: KnowledgeItem[];
 }
 

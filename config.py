@@ -56,15 +56,9 @@ CHUNK_OVERLAP = 200  # オーバーラップ文字数
 TOP_K_RESULTS = 8  # 検索で返すチャンク数
 
 # Gemini API設定
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    import warnings
-    warnings.warn(
-        "⚠️  GEMINI_API_KEYが未設定です。"
-        "チャット・インデックス機能が動作しません。"
-        ".env ファイルまたは環境変数に GEMINI_API_KEY を設定してください。",
-        stacklevel=2,
-    )
+    raise EnvironmentError("GEMINI_API_KEY が未設定です。.env ファイルを確認してください。")
 MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "65536"))
 PDF_CHUNK_PAGES = int(os.environ.get("PDF_CHUNK_PAGES", "1"))
 TEMPERATURE = 0.2  # 技術的正確性を重視
@@ -94,10 +88,13 @@ EXCLUDE_FOLDERS = [
 # 除外ファイルパターン（ファイル名に含む文字列）
 EXCLUDE_PATTERNS = [".chunk_"]  # OCR一時チャンクファイル
 
-# CORS設定 (#15: 本番環境では環境変数で制御することを推奨)
-_default_cors = (
-    "http://localhost:3000,"
-    "https://antigravity.rag-architecture.com,"
+# CORS設定 (#15: ALLOW_LOCALHOSTによるローカルホスト許可)
+_default_cors_list = [
+    "https://antigravity.rag-architecture.com",
     "https://api.rag-architecture.com"
-)
+]
+if os.environ.get("ALLOW_LOCALHOST", "false").lower() == "true":
+    _default_cors_list.append("http://localhost:3000")
+
+_default_cors = ",".join(_default_cors_list)
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", _default_cors).split(",")

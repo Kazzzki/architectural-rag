@@ -30,8 +30,9 @@ def get_db():
     try:
         yield conn
         conn.commit()
-    except Exception:
+    except Exception as e:
         conn.rollback()
+        logger.error(f"Database transaction failed: {e}", exc_info=True)
         raise
     finally:
         conn.close()
@@ -79,8 +80,8 @@ def init_db():
         for old_table in ['project_nodes', 'project_edges']:
             try:
                 conn.execute(f"DROP TABLE IF EXISTS {old_table}")
-            except Exception:
-                pass
+            except sqlite3.Error as e:
+                logger.debug(f"Failed to drop old table {old_table}: {e}")
 
     logger.info("Project DB initialized (v2 delta mode)")
 

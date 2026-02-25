@@ -218,8 +218,8 @@ def main():
                 response = requests.get("http://localhost:8000/api/health", timeout=5)
                 if response.status_code != 200:
                     log("⚠️ Server health check failed")
-            except:
-                log("⚠️ Server not responding")
+            except requests.RequestException as e:
+                log(f"⚠️ Server not responding: {e}")
 
     except KeyboardInterrupt:
         log("Shutting down...")

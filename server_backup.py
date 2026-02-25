@@ -83,8 +83,8 @@ if APP_PASSWORD:
                     _, password = decoded.split(":", 1)
                     if secrets.compare_digest(password, APP_PASSWORD):
                         authenticated = True
-                except Exception:
-                    pass
+                except (ValueError, TypeError, base64.binascii.Error) as e:
+                    logger.warning(f"Basic Auth decode error: {e}")
             
             if authenticated:
                 return await call_next(request)
@@ -1148,8 +1148,8 @@ async def get_pdf(file_id: str):
             if fp.exists():
                 return FileResponse(fp, media_type="application/pdf",
                                    filename=file_info.get("original_name", fp.name))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"file_store lookup failed: {e}")
     
     # 2. PDF_STORAGE_DIR内のID名ファイルにフォールバック
     from config import PDF_STORAGE_DIR

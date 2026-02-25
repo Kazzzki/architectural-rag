@@ -28,9 +28,9 @@ def get_db():
     try:
         yield conn
         conn.commit()
-    except Exception:
+    except Exception as e:
         conn.rollback()
-        logger.error("Database transaction failed, rolled back", exc_info=True)
+        logger.error(f"Database transaction failed, rolled back: {e}", exc_info=True)
         raise
     finally:
         conn.close()

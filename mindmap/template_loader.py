@@ -186,7 +186,8 @@ def get_knowledge_for_node(template_id: str, node_id: str) -> Optional[Dict[str,
             if k.get("node_id") == node_id:
                 return k
         return None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to get knowledge for node {node_id} from {template_id}: {e}")
         return None
 
 

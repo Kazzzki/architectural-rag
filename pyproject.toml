@@ -1,0 +1,5 @@
+[project]
+name = "architectural-rag"
+version = "0.1.0"
+description = "Antigravity Architectural RAG System"
+requires-python = ">=3.10"

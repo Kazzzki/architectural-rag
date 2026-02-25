@@ -1,3 +1,4 @@
+# Python >= 3.10 is required
 google-genai>=1.0.0
 chromadb>=0.5.0
 PyMuPDF>=1.24.0

@@ -1,8 +1,6 @@
-# routers/research.py
-
 import json
 import logging
-from datetime import datetime
+from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -19,71 +17,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ====================
-# Pipeline Nodes Specs
-# ====================
-
-PIPELINE_NODES = [
-    {
-        "id": "ingestion",
-        "label": "Ingestion",
-        "description": "PDFのOCR処理・メタデータ抽出・チャンキング (Small-to-Big)",
-        "components": ["ocr_processor.py", "indexer.py"],
-        "domains": ["PDF構造解析", "PyMuPDFテキスト抽出", "マークダウン変換", "ドキュメントカテゴリ推論"],
-        "default_doc_type": "catalog",
-        "default_tools": ["Gemini Deep Research", "Perplexity Pro"],
-    },
-    {
-        "id": "retrieval",
-        "label": "Retrieval",
-        "description": "クエリ展開・HyDE・並列ベクトル検索・LLMリランキング",
-        "components": ["retriever.py"],
-        "domains": ["Query Expansion建築特化チューニング", "HyDE仮想文書生成", "Cross-Encoder Reranking"],
-        "default_doc_type": "spec",
-        "default_tools": ["Claude web_fetch", "arXiv Explorer"],
-    },
-    {
-        "id": "generation",
-        "label": "Generation",
-        "description": "コンテキスト結合・回答生成・ソース参照マッピング",
-        "components": ["generator.py"],
-        "domains": ["System Prompt最適化", "ソース引用アイコン付与", "会話履歴コンテキスト補完"],
-        "default_doc_type": "law",
-        "default_tools": ["Gemini Code Assist"],
-    },
-    {
-        "id": "routing",
-        "label": "Routing / API",
-        "description": "FastAPIルーター・SSEストリーミング・依存関係注入",
-        "components": ["server.py", "routers/*.py"],
-        "domains": ["FastAPI Pydantic", "SSE Server-Sent Events", "Middleware/CORS"],
-        "default_doc_type": "spec",
-        "default_tools": ["Github Issues/Discussions"],
-    },
-    {
-        "id": "data_layer",
-        "label": "Data Layer",
-        "description": "ChromaDBベクトルDB・SQLite状態管理",
-        "components": ["database.py", "file_store.py", "drive_sync.py"],
-        "domains": ["ChromaDB Metadata Filtering", "SQLite SQLAlchemy", "Google Drive API Auth"],
-        "default_doc_type": "drawing",
-        "default_tools": ["Gemini Deep Research"],
-    }
-]
-
-# ====================
 # Models
 # ====================
 
 class ResearchGenerateRequest(BaseModel):
     node_id: str
     node_label: str
-    node_desc: str
-    node_components: List[str]
-    node_domains: List[str]
-    search_category: str
-    doc_type: str
-    selected_tools: List[str]
-    focus: str
+    node_phase: str
+    node_category: str
+    node_description: str = ""
+    node_checklist: List[str] = []
+    node_deliverables: List[str] = []
+    selected_tools: List[str] = []
+    focus: str = ""
     extra_context: Optional[str] = ""
 
 class KnowledgeItem(BaseModel):
@@ -91,21 +37,17 @@ class KnowledgeItem(BaseModel):
     title: str
     content: str
     tags: List[str]
-    search_category: str
-    doc_type: str
 
 class ResearchInjectRequest(BaseModel):
     node_id: str
     node_label: str
+    node_phase: str
+    node_category: str
     items: List[KnowledgeItem]
 
 # ====================
 # Endpoints
 # ====================
-
-@router.get("/nodes")
-def get_research_nodes():
-    return PIPELINE_NODES
 
 @router.post("/generate")
 def generate_research_plan(request: ResearchGenerateRequest):
@@ -115,11 +57,11 @@ def generate_research_plan(request: ResearchGenerateRequest):
     prompt = build_research_prompt(
         node_id=request.node_id,
         node_label=request.node_label,
-        node_desc=request.node_desc,
-        node_components=request.node_components,
-        node_domains=request.node_domains,
-        search_category=request.search_category,
-        doc_type=request.doc_type,
+        node_phase=request.node_phase,
+        node_category=request.node_category,
+        node_description=request.node_description,
+        node_checklist=request.node_checklist,
+        node_deliverables=request.node_deliverables,
         selected_tools=request.selected_tools,
         focus=request.focus,
         extra_context=request.extra_context
@@ -149,7 +91,6 @@ def generate_research_plan(request: ResearchGenerateRequest):
                     yield f"data: {json.dumps({'type': 'chunk', 'data': content}, ensure_ascii=False)}\n\n"
                     
             # 最後にプレーンテキスト全体をパース用データとして送る
-            # フロント側で独自パースする実装なので生テキストを渡す
             yield f"data: {json.dumps({'type': 'parsed', 'data': full_text}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
             
@@ -181,9 +122,7 @@ def inject_research_items(request: ResearchInjectRequest):
     ids = []
     documents = []
     metadatas = []
-    timestamp = datetime.utcnow().isoformat()
-    
-    preview_titles = []
+    timestamp = date.today().isoformat()
     
     for item in request.items:
         ids.append(item.id)
@@ -193,24 +132,15 @@ def inject_research_items(request: ResearchInjectRequest):
         
         metadatas.append({
             "source": f"research_planner/{request.node_id}",
-            "doc_type": item.doc_type,
-            "category": item.search_category,
+            "doc_type": "spec",
+            "category": f"process_{request.node_category}",
             "node_id": request.node_id,
+            "node_label": request.node_label,
+            "node_phase": request.node_phase,
             "tier": "knowledge_item",
             "created_at": timestamp,
-            "source_pdf_name": f"{request.node_label}_Research.md",
-            "source_pdf_hash": f"ki_hash_{request.node_id}_{item.id[-8:]}",
-            "filename": f"{request.node_label}_Research.md",
-            "rel_path": f"{request.node_label}_Research.md",
-            "tags_str": tags_str,
-            "page_no": 1,
-            "chunk_index": 0,
-            "parent_chunk_id": "",
-            "has_image": False,
-            "drive_file_id": ""
+            "tags_str": tags_str
         })
-        
-        preview_titles.append(f"{item.title}: {item.content[:60]}...")
         
     if ids:
         try:
@@ -223,11 +153,10 @@ def inject_research_items(request: ResearchInjectRequest):
             return {
                 "injected": len(ids),
                 "node_id": request.node_id,
-                "category": request.items[0].search_category if request.items else "",
-                "preview": preview_titles
+                "category": f"process_{request.node_category}"
             }
         except Exception as e:
             logger.error(f"Failed to inject knowledge items: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
     else:
-        return {"injected": 0, "preview": []}
+        return {"injected": 0, "node_id": request.node_id, "category": f"process_{request.node_category}"}
