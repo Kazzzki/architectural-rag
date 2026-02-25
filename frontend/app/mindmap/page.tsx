@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { authFetch } from '../../lib/api';
 import { ReactFlowProvider } from 'reactflow';
 import MindmapCanvas from '../components/mindmap/MindmapCanvas';
 import GoalSearchBar from '../components/mindmap/GoalSearchBar';
 import { Building2, ArrowLeft, Plus, Trash2, Clock, Target, ChevronDown, Eye, FolderOpen, Layers } from 'lucide-react';
 import Link from 'next/link';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 interface ProjectItem {
     id: string;
@@ -68,8 +69,8 @@ export default function MindmapDashboard() {
         setLoading(true);
         try {
             const [projRes, tmplRes] = await Promise.all([
-                fetch(`${API_BASE}/api/mindmap/projects`),
-                fetch(`${API_BASE}/api/mindmap/templates`),
+                authFetch(`${API_BASE}/api/mindmap/projects`),
+                authFetch(`${API_BASE}/api/mindmap/templates`),
             ]);
             if (projRes.ok) setProjects(await projRes.json());
             if (tmplRes.ok) setTemplates(await tmplRes.json());
@@ -87,7 +88,7 @@ export default function MindmapDashboard() {
     // Create project
     const handleCreateProject = async (name: string, templateId: string) => {
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/projects`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/projects`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, template_id: templateId }),
@@ -106,7 +107,7 @@ export default function MindmapDashboard() {
         e.stopPropagation();
         if (!confirm('このプロジェクトを削除しますか？')) return;
         try {
-            await fetch(`${API_BASE}/api/mindmap/projects/${id}`, { method: 'DELETE' });
+            await authFetch(`${API_BASE}/api/mindmap/projects/${id}`, { method: 'DELETE' });
             loadData();
         } catch (err) {
             console.error('Delete error:', err);
@@ -116,7 +117,7 @@ export default function MindmapDashboard() {
     // Preview template
     const handlePreviewTemplate = async (templateId: string) => {
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/templates/${templateId}`);
+            const res = await authFetch(`${API_BASE}/api/mindmap/templates/${templateId}`);
             if (res.ok) setPreviewTemplate(await res.json());
         } catch (err) {
             console.error('Preview error:', err);

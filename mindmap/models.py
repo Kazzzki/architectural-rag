@@ -77,6 +77,8 @@ class ProcessNode(BaseModel):
     position: Position = Position(x=0, y=0)
     is_custom: bool = False
     status: NodeStatus = NodeStatus.NOT_STARTED
+    ragResults: Optional[List[Dict[str, Any]]] = []
+    chatHistory: Optional[List[Dict[str, Any]]] = []
 
 
 class Edge(BaseModel):
@@ -161,6 +163,8 @@ class NodeUpdate(BaseModel):
     deliverables: Optional[List[str]] = None
     key_stakeholders: Optional[List[str]] = None
     notes: Optional[str] = None
+    ragResults: Optional[List[Dict[str, Any]]] = None
+    chatHistory: Optional[List[Dict[str, Any]]] = None
 
 
 class NodeCreate(BaseModel):
@@ -208,3 +212,9 @@ class ProjectImportRequest(BaseModel):
     nodes: List[ProcessNode]
     edges: List[Edge]
     template_id: str = "blank"
+
+class AIActionRequest(BaseModel):
+    action: str
+    nodeId: str
+    content: str
+    context: Optional[Dict[str, Any]] = None

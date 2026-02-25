@@ -1,4 +1,5 @@
 'use client';
+import { authFetch } from '@/lib/api';
 
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { ReactFlowProvider } from 'reactflow';
@@ -6,7 +7,7 @@ import MindmapCanvas from '../../components/mindmap/MindmapCanvas';
 import { FolderOpen, ArrowLeft, RefreshCw, AlertCircle, FileText, Brain, Sparkles, Upload, X, Download, BookOpen, Check, Trash2, Settings, CheckCircle } from 'lucide-react';
 import Link from 'next/link';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 const CATEGORY_COLORS: Record<string, string> = {
     'Folder': '#fbbf24',
@@ -64,7 +65,7 @@ function SettingsModal({ onClose, onSave }: { onClose: () => void; onSave?: (has
     const [rulesSaving, setRulesSaving] = useState(false);
 
     useEffect(() => {
-        fetch(`${API_BASE}/api/mindmap/settings`)
+        authFetch(`${API_BASE}/api/mindmap/settings`)
             .then(res => res.json())
             .then(data => {
                 setMaskedKey(data.gemini_api_key_masked || '');
@@ -73,7 +74,7 @@ function SettingsModal({ onClose, onSave }: { onClose: () => void; onSave?: (has
                 setAvailableModels(data.available_models || []);
             }).catch(console.error);
         setRulesLoading(true);
-        fetch(`${API_BASE}/api/mindmap/fs/rules`)
+        authFetch(`${API_BASE}/api/mindmap/fs/rules`)
             .then(res => res.json())
             .then(data => setRules(data.rules || []))
             .catch(console.error)
@@ -85,7 +86,7 @@ function SettingsModal({ onClose, onSave }: { onClose: () => void; onSave?: (has
         try {
             const body: Record<string, string> = { analysis_model: selectedModel };
             if (apiKey) body.gemini_api_key = apiKey;
-            const res = await fetch(`${API_BASE}/api/mindmap/settings`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/settings`, {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
@@ -103,7 +104,7 @@ function SettingsModal({ onClose, onSave }: { onClose: () => void; onSave?: (has
     const saveRules = async (updated: string[]) => {
         setRulesSaving(true);
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/fs/rules`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/fs/rules`, {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ rules: updated }),
             });
@@ -279,7 +280,7 @@ export default function LocalMindmapPage() {
 
     // Check API key status on mount
     useEffect(() => {
-        fetch(`${API_BASE}/api/mindmap/settings`)
+        authFetch(`${API_BASE}/api/mindmap/settings`)
             .then(res => res.json())
             .then(data => {
                 setHasApiKey(data.has_api_key || false);
@@ -369,7 +370,7 @@ export default function LocalMindmapPage() {
         try {
             const formData = new FormData();
             uploadFiles.forEach(file => formData.append('files', file));
-            const res = await fetch(`${API_BASE}/api/mindmap/fs/upload-analyze`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/fs/upload-analyze`, {
                 method: 'POST',
                 body: formData,
             });
@@ -393,7 +394,7 @@ export default function LocalMindmapPage() {
         setError(null);
         try {
             if (mode === 'directory') {
-                const res = await fetch(`${API_BASE}/api/mindmap/fs/scan?path=${encodeURIComponent(path)}`);
+                const res = await authFetch(`${API_BASE}/api/mindmap/fs/scan?path=${encodeURIComponent(path)}`);
                 if (!res.ok) {
                     const errData = await res.json().catch(() => ({}));
                     throw new Error(errData.detail || 'Path not found or access denied');
@@ -416,7 +417,7 @@ export default function LocalMindmapPage() {
                 setHasEdits(false);
                 setRuleMessage(null);
             } else if (mode === 'analyze') {
-                const res = await fetch(`${API_BASE}/api/mindmap/fs/analyze`, {
+                const res = await authFetch(`${API_BASE}/api/mindmap/fs/analyze`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ path: path, max_files: 20 }),
@@ -441,7 +442,7 @@ export default function LocalMindmapPage() {
         setLearningRules(true);
         setRuleMessage(null);
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/fs/learn-rules`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/fs/learn-rules`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -473,7 +474,7 @@ export default function LocalMindmapPage() {
         if (nodes.length === 0) return;
         setExporting(true);
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/fs/export-md`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/fs/export-md`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -519,7 +520,7 @@ export default function LocalMindmapPage() {
                 edges: edges,
                 template_id: "blank"
             };
-            const res = await fetch(`${API_BASE}/api/mindmap/projects/import`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/projects/import`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),

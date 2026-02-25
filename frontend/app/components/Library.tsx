@@ -1,4 +1,5 @@
 'use client';
+import { authFetch } from '@/lib/api';
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -14,7 +15,7 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 interface FileNode {
     name: string;
@@ -35,13 +36,14 @@ export default function Library() {
     const [tree, setTree] = useState<FileNode | null>(null);
     const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<FileNode | null>(null);
+    const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
     const [isDeleting, setIsDeleting] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
 
     const fetchTree = async () => {
         setIsLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/api/files/tree`);
+            const res = await authFetch(`${API_BASE}/api/files/tree`);
             const data = await res.json();
             setTree(data);
         } catch (error) {
@@ -74,7 +76,7 @@ export default function Library() {
         setIsDeleting(true);
 
         try {
-            const res = await fetch(`${API_BASE}/api/files/delete`, {
+            const res = await authFetch(`${API_BASE}/api/files/delete`, {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ file_path: deleteTarget.path })
@@ -97,9 +99,65 @@ export default function Library() {
         }
     };
 
+    const confirmBulkDelete = async () => {
+        if (selectedPaths.size === 0) return;
+        if (!window.confirm(`選択した ${selectedPaths.size} 件のファイルを完全に削除します。よろしいですか？`)) return;
+
+        setIsDeleting(true);
+
+        try {
+            const res = await authFetch(`${API_BASE}/api/files/bulk-delete`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_paths: Array.from(selectedPaths) })
+            });
+
+            if (res.ok) {
+                if (selectedFile && selectedPaths.has(selectedFile.path)) {
+                    setSelectedFile(null);
+                }
+                setSelectedPaths(new Set());
+                fetchTree();
+            } else {
+                alert('一括削除に失敗しました');
+            }
+        } catch (error) {
+            console.error('Bulk delete error:', error);
+            alert('一括削除エラーが発生しました');
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
+    const handleCheckToggle = (node: FileNode, checked: boolean) => {
+        const newSelected = new Set(selectedPaths);
+
+        const toggleRecursive = (targetNode: FileNode, isChecked: boolean) => {
+            if (targetNode.type === 'file') {
+                if (isChecked) newSelected.add(targetNode.path);
+                else newSelected.delete(targetNode.path);
+            }
+            if (targetNode.children) {
+                targetNode.children.forEach(child => toggleRecursive(child, isChecked));
+            }
+        };
+
+        toggleRecursive(node, checked);
+        setSelectedPaths(newSelected);
+    };
+
     const TreeNode = ({ node, level = 0 }: { node: FileNode, level?: number }) => {
         const [isOpen, setIsOpen] = useState(level < 2); // 2階層目まで開く（rootはlevel0）
         const isSelected = selectedFile?.path === node.path;
+
+        const isChecked = node.type === 'file'
+            ? selectedPaths.has(node.path)
+            : node.children ? node.children.length > 0 && node.children.every(child => selectedPaths.has(child.path) || (child.type === 'directory')) : false;
+
+        const isPartiallyChecked = node.type === 'directory'
+            && node.children
+            && node.children.some(child => selectedPaths.has(child.path))
+            && !isChecked;
 
         if (node.type === 'file') {
             return (
@@ -108,6 +166,16 @@ export default function Library() {
                     style={{ marginLeft: `${level * 16}px` }}
                     onClick={() => setSelectedFile(node)}
                 >
+                    <input
+                        type="checkbox"
+                        checked={selectedPaths.has(node.path)}
+                        onChange={(e) => {
+                            e.stopPropagation();
+                            handleCheckToggle(node, e.target.checked);
+                        }}
+                        className="w-3 h-3 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+                        onClick={(e) => e.stopPropagation()}
+                    />
                     {node.name.endsWith('.pdf') ? (
                         <FileText className="w-4 h-4 text-red-500" />
                     ) : node.name.endsWith('.md') ? (
@@ -141,6 +209,18 @@ export default function Library() {
                     style={{ marginLeft: `${level * 16}px` }}
                     onClick={() => setIsOpen(!isOpen)}
                 >
+                    <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = !!isPartiallyChecked; }}
+                        checked={isChecked}
+                        onChange={(e) => {
+                            e.stopPropagation();
+                            handleCheckToggle(node, e.target.checked);
+                        }}
+                        className="w-3 h-3 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer disabled:opacity-50"
+                        onClick={(e) => e.stopPropagation()}
+                        disabled={!node.children || node.children.length === 0}
+                    />
                     {isOpen ? (
                         <ChevronDown className="w-4 h-4 text-slate-400" />
                     ) : (
@@ -165,7 +245,20 @@ export default function Library() {
             {/* Tree View */}
             <div className="w-1/2 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg p-2 bg-white dark:bg-slate-900 h-[calc(100vh-200px)]">
                 <div className="flex justify-between items-center mb-2 px-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-                    <h3 className="text-sm font-semibold">ファイル一覧</h3>
+                    <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-semibold">ファイル一覧</h3>
+                        {selectedPaths.size > 0 && (
+                            <button
+                                onClick={confirmBulkDelete}
+                                disabled={isDeleting}
+                                className="flex items-center gap-1 bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-900/20 dark:hover:bg-red-900/40 dark:text-red-400 text-[10px] px-2 py-0.5 rounded transition-colors disabled:opacity-50"
+                                title="選択した項目を一括削除"
+                            >
+                                <Trash2 className="w-3 h-3" />
+                                {isDeleting ? '削除中...' : `${selectedPaths.size}件を削除`}
+                            </button>
+                        )}
+                    </div>
                     <div className="flex items-center gap-1">
                         <a
                             href={`${API_BASE}/api/system/export-source`}
@@ -221,7 +314,7 @@ export default function Library() {
                         <div className="flex-1 overflow-hidden bg-slate-100 dark:bg-black/20 p-4">
                             {selectedFile.name.toLowerCase().endsWith('.pdf') ? (
                                 <iframe
-                                    src={`${API_BASE}/api/files/view/${selectedFile.path}`}
+                                    src={`${API_BASE}/api/files/view/${selectedFile.path.split('/').map(encodeURIComponent).join('/')}`}
                                     className="w-full h-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white shadow-sm"
                                     title="PDF Preview"
                                 />
@@ -349,7 +442,7 @@ function MarkdownPreview({ filePath }: { filePath: string }) {
 
     useEffect(() => {
         setLoading(true);
-        fetch(`${API_BASE}/api/files/view/${filePath}`)
+        authFetch(`${API_BASE}/api/files/view/${filePath}`)
             .then(res => res.text())
             .then(text => setContent(text))
             .catch(err => setContent('読み込みエラー'))

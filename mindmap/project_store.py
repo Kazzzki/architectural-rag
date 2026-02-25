@@ -194,6 +194,8 @@ def get_project_with_merged_data(project_id: str, template: MindmapTemplate) -> 
                               y=n.get('pos_y', n.get('position', {}).get('y', 0))),
             is_custom=n.get('is_custom', False),
             status=n.get('status', '未着手'),
+            chatHistory=n.get('chatHistory', []),
+            ragResults=n.get('ragResults', []),
         ))
 
     result_edges = []
@@ -290,7 +292,7 @@ def _add_delta(conn, project_id: str, delta_type: str, target_id: str, data: Dic
 def update_node(project_id: str, node_id: str, updates: Dict[str, Any]) -> bool:
     """ノードを更新（差分として記録）"""
     allowed = {'label', 'description', 'phase', 'category', 'status', 'pos_x', 'pos_y',
-               'checklist', 'deliverables', 'key_stakeholders', 'notes'}
+               'checklist', 'deliverables', 'key_stakeholders', 'notes', 'chatHistory', 'ragResults'}
     filtered = {k: v for k, v in updates.items() if k in allowed}
     if not filtered:
         return False
@@ -406,10 +408,11 @@ def _node_to_dict(node: ProcessNode) -> Dict[str, Any]:
         "checklist": node.checklist,
         "deliverables": node.deliverables,
         "key_stakeholders": node.key_stakeholders,
-        "pos_x": node.position.x,
         "pos_y": node.position.y,
         "is_custom": node.is_custom,
         "status": node.status.value if hasattr(node.status, 'value') else node.status,
+        "chatHistory": node.chatHistory,
+        "ragResults": node.ragResults,
     }
 
 

@@ -17,8 +17,9 @@ from .models import (
     CreateProjectRequest, ProjectListItem, ProjectData,
     NodeUpdate, NodeCreate, EdgeCreate,
     KnowledgeNode, KnowledgeEntry, KnowledgeDepth,
-    ProjectImportRequest
+    ProjectImportRequest, AIActionRequest
 )
+from pydantic import BaseModel
 from .graph_service import GraphService
 from . import project_store
 from . import template_loader
@@ -650,7 +651,8 @@ async def upload_and_analyze(files: List[UploadFile] = File(...)):
 async def _analyze_with_gemini(file_contents: List[Dict[str, str]]) -> dict:
     """ファイル内容をGemini APIで分析し、マインドマップ構造を返す共通ロジック"""
     import json
-    import google.generativeai as genai
+    from google import genai as _genai
+    from google.genai import types as _types
 
     # Web設定からAPIキーとモデルを取得
     api_key = api_settings.get_api_key()
@@ -658,9 +660,8 @@ async def _analyze_with_gemini(file_contents: List[Dict[str, str]]) -> dict:
 
     if not api_key:
         raise HTTPException(status_code=400, detail="APIキーが設定されていません。設定画面からGemini APIキーを入力してください。")
-    
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(analysis_model)
+
+    _client = _genai.Client(api_key=api_key)
     
     files_text = ""
     for fc in file_contents:
@@ -687,7 +688,7 @@ async def _analyze_with_gemini(file_contents: List[Dict[str, str]]) -> dict:
 ファイル一覧:
 {files_text}
 
-以下のJSON形式で出力してください。ノード数は10〜30個程度にしてください:
+以下のJSON形式で出力してください。要約や間引きを行わず、テキスト内のすべての重要な決定事項、依存関係、前提条件、リスクなどの要素を漏れなく個別のノードとして詳細に抽出してください。ノード数に上限はありません。可能な限り詳細なマインドマップツリーを生成してください:
 {{
   "title": "マインドマップのタイトル",
   "nodes": [
@@ -717,23 +718,12 @@ async def _analyze_with_gemini(file_contents: List[Dict[str, str]]) -> dict:
 - JSONのみを出力（マークダウンやコメント不要）{rules_section}"""
 
     try:
-        response = model.generate_content(prompt)
+        response = _client.models.generate_content(
+            model=analysis_model,
+            contents=prompt,
+            config=_types.GenerateContentConfig(response_mime_type="application/json")
+        )
         response_text = response.text.strip()
-        
-        if response_text.startswith("```"):
-            lines = response_text.split("\n")
-            json_lines = []
-            in_block = False
-            for line in lines:
-                if line.startswith("```") and not in_block:
-                    in_block = True
-                    continue
-                elif line.startswith("```") and in_block:
-                    break
-                elif in_block:
-                    json_lines.append(line)
-            response_text = "\n".join(json_lines)
-        
         result = json.loads(response_text)
     except json.JSONDecodeError as e:
         logger.error(f"JSON parse error from Gemini: {e}\nResponse: {response_text[:500]}")
@@ -831,7 +821,7 @@ async def _analyze_with_gemini(file_contents: List[Dict[str, str]]) -> dict:
 async def learn_rules(request: dict):
     """オリジナルと編集後のマインドマップを比較し、分析ルールを学習・保存する"""
     import json
-    import google.generativeai as genai
+    from google import genai as _genai
     from config import GEMINI_API_KEY, PREVIEW_MODEL
 
     original_nodes = request.get("original_nodes", [])
@@ -845,8 +835,7 @@ async def learn_rules(request: dict):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(PREVIEW_MODEL)
+    _client = _genai.Client(api_key=GEMINI_API_KEY)
 
     # 差分を作りやすい形にシリアライズ
     orig_summary = json.dumps(
@@ -886,7 +875,7 @@ async def learn_rules(request: dict):
 - JSONのみを出力"""
 
     try:
-        response = model.generate_content(prompt)
+        response = _client.models.generate_content(model=PREVIEW_MODEL, contents=prompt)
         response_text = response.text.strip()
 
         if response_text.startswith("```"):
@@ -1059,3 +1048,282 @@ async def export_mindmap_md(request: dict):
 
     return {"markdown": markdown, "title": title}
 
+    return {"markdown": markdown, "title": title}
+
+
+class AIActionRequest(BaseModel):
+    action: str
+    nodeId: str
+    content: str
+    context: Optional[Dict[str, Any]] = None
+
+
+@router.post("/ai/action")
+async def ai_action_endpoint(req: AIActionRequest):
+    """AI Copilot Action Handler"""
+    from google import genai as _genai
+    import json
+
+    # 1. Configuration
+    api_key = api_settings.get_api_key()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API Key not configured")
+
+    _client = _genai.Client(api_key=api_key)
+    model_name = api_settings.get_analysis_model() or "gemini-2.0-flash"
+
+    try:
+        # 2. Handle Actions
+        if req.action == "summarize":
+            prompt = f"以下のテキストを要約してください。文脈: {req.context}\n\nテキスト: {req.content}"
+            resp = _client.models.generate_content(model=model_name, contents=prompt)
+            return {"text": resp.text.strip()}
+
+        elif req.action == "expand":
+            prompt = f"""
+            あなたは建築・設計・プロジェクト管理の専門家のリサーチアシスタントです。
+            ユーザーがマインドマップのノード「{req.content}」について情報を深めるべく、次の意思決定を行おうとしています。
+            
+            目的: このノードの意思決定を確実なものにするため「何を調べるべきか」「どういうキーワードでリサーチすべきか」「関係者や専門家に具体的に何を聞くべきか」という【リサーチプロンプト（調査指示書）】を5〜7件作成してください。
+            単なるアイデアの羅列ではなく、具体的なアクションや調査行動につながる「問い」を重視してください。
+
+            プロジェクト文脈: {req.context}
+            
+            出力フォーマット:
+            Markdown形式のリストで出力してください。
+            各項目には、リサーチの観点と、そのままコピーして使える具体的な質問文・検索クエリを含めてください。
+            
+            例:
+            * **【〇〇の調査】**: 関連法令や基準を確認する
+              * 検索キーワード例: `...`
+              * 専門家への質問例: 「〜〜の場合、...はどうなりますか？」
+            """
+            resp = _client.models.generate_content(model=model_name, contents=prompt)
+            return {"text": resp.text.strip()}
+
+        elif req.action == "rag":
+            # RAG implementation requires imports from root
+            try:
+                import sys
+                import os
+                
+                # Add parent directory to path if not present (for accessing retriever.py from mindmap/router.py)
+                # This handles cases where we are running from root but mindmap is treated as a package
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                parent_dir = os.path.dirname(current_dir)
+                if parent_dir not in sys.path:
+                    sys.path.append(parent_dir)
+
+                # Try absolute imports (assuming running from root)
+                try:
+                    import retriever
+                    import generator
+                except ImportError:
+                    # Try relative imports if loaded as a package
+                    from .. import retriever
+                    from .. import generator
+                
+                # 1. Search
+                query = f"{req.content}に関連する重要な情報は？"
+                search_results = retriever.search(query)
+                
+                # 2. Context
+                rag_context = retriever.build_context(search_results)
+                
+                # 3. Generate
+                answer = generator.generate_answer(query, rag_context, [])
+                return {"text": answer}
+                
+            except ImportError as e:
+                # Fallback if RAG modules not available
+                logger.warning(f"RAG modules not found ({e}), falling back to pure LLM")
+                prompt = f"以下のトピックについて、一般的知識に基づいて解説してください: {req.content}"
+                resp = _client.models.generate_content(model=model_name, contents=prompt)
+                return {"text": "【注意: RAGモジュール利用不可のため、一般知識回答です】\n" + resp.text.strip()}
+
+        elif req.action == "investigate":
+            # Research Assistant: Generate verification items
+            prompt = f"""
+            あなたは建築のプロフェッショナルです。
+            以下のノードについて、設計・施工・管理の観点から「確認すべきこと」「調査すべきこと」「検討すべきリスク」をリストアップしてください。
+            
+            対象: {req.content}
+            プロジェクト文脈: {req.context}
+            
+            出力フォーマット:
+            Markdown形式のチェックリストで出力してください。
+            重要な項目は太字にしてください。
+            カテゴリごとに分けて記述してください（例: ### 法規, ### 施工, ### コスト）。
+            """
+            resp = _client.models.generate_content(model=model_name, contents=prompt)
+            return {"text": resp.text.strip()}
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
+
+    except Exception as e:
+        logger.error(f"AI Action Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AutoLinkRequest(BaseModel):
+    nodeId: str
+    label: str
+    description: Optional[str] = ""
+    projectContext: Optional[str] = ""
+
+@router.post("/ai/auto-link")
+async def ai_auto_link_endpoint(req: AutoLinkRequest):
+    """
+    バックグラウンドでノードの内容に関連する知識を検索し、リンク候補を返す
+    """
+    try:
+        # Check API key configuration
+        api_key = api_settings.get_api_key()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="API Key not configured")
+
+        # Configure Generative AI
+        from google import genai as _genai
+        _client = _genai.Client(api_key=api_key)
+
+        # 1. Extract Keywords using Gemini (lightweight model)
+        model_name = api_settings.get_analysis_model() or "gemini-2.0-flash"
+
+        prompt = f"""
+        以下のノード情報から、建築知識データベースを検索するための重要なキーワードを3つ抽出してください。
+        JSON形式で `keywords` 配列として返してください。
+
+        ノードラベル: {req.label}
+        説明: {req.description}
+        プロジェクト文脈: {req.projectContext}
+        """
+        
+        # Use JSON generation if possible, or parse text
+        try:
+            resp = _client.models.generate_content(model=model_name, contents=prompt)
+            text = resp.text.strip()
+            # Cleanup code blocks
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("\n", 1)[0]
+            if text.startswith("json"):
+                text = text[4:]
+            
+            import json
+            import re
+            # Try direct JSON parse first
+            try:
+                keywords = json.loads(text).get("keywords", [])
+            except:
+                # Fallback regex
+                json_match = re.search(r'\{.*\}', text, re.DOTALL)
+                if json_match:
+                    keywords = json.loads(json_match.group(0)).get("keywords", [])
+                else:
+                    keywords = [req.label]
+        except Exception as e:
+            logger.warning(f"Keyword extraction failed: {e}")
+            keywords = [req.label]
+
+        # 2. Search RAG (Retriever)
+        query = " ".join(keywords)
+        results = []
+        
+        try:
+            import sys
+            import os
+            
+            # Setup path for imports (same as ai_action_endpoint)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            parent_dir = os.path.dirname(current_dir)
+            if parent_dir not in sys.path:
+                sys.path.append(parent_dir)
+
+            try:
+                import retriever
+            except ImportError:
+                from .. import retriever
+            
+            # Perform search
+            search_results = retriever.search(query, top_k=3)
+            
+            # Format results
+            for res in search_results:
+                results.append({
+                    "id": res.get("id", "unknown"),
+                    "source": res.get("source", "Unknown Source"),
+                    "content": res.get("content", "")[:200] + "...", # Truncate for preview
+                    "relevance": res.get("distance", 0.0), # or score
+                    "full_content": res.get("content", "")
+                })
+
+        except ImportError as e:
+            logger.error(f"RAG module import failed: {e}")
+        except Exception as e:
+            logger.error(f"RAG search failed: {e}")
+
+        return {
+            "nodeId": req.nodeId,
+            "keywords": keywords,
+            "results": results
+        }
+
+    except Exception as e:
+        logger.error(f"Auto-link error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/ai/action")
+async def ai_action(req: AIActionRequest):
+    """マインドマップ上のAIアクション（要約・拡張・RAG補完）を実行する"""
+    import json
+    from google import genai as _genai
+    from google.genai import types as _types
+
+    api_key = api_settings.get_api_key()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="APIキーが設定されていません。設定画面からGemini APIキーを入力してください。")
+
+    _client = _genai.Client(api_key=api_key)
+    _model_name = "gemini-2.0-flash"
+
+    label = req.content or req.nodeId
+    action = req.action
+
+    try:
+        if action == "summarize":
+            prompt = f"あなたは建築プロジェクトのPMです。\n指定されたプロセスマップのノード「{label}」について、一般的にどのような作業が求められるか、重要なポイントを3点程度で簡潔に要約してください。"
+            res = _client.models.generate_content(model=_model_name, contents=prompt)
+            return {"text": f"【AI要約】\n{res.text}"}
+
+        elif action == "expand":
+            prompt = f'''あなたはチーフアーキテクトです。
+プロセスマップのノード「{label}」をさらに細分化する場合、どのようなサブタスクや具体的な検討事項（子ノード）が考えられますか？
+以下のJSON形式で3〜5個出力してください。
+
+{{
+  "children": [
+    {{
+      "label": "サブタスク名",
+      "phase": "フェーズ名（例: 基本設計, 実施設計, 施工など）",
+      "category": "カテゴリ名（例: 意匠, 構造, 設備, 管理など）"
+    }}
+  ]
+}}'''
+            res = _client.models.generate_content(
+                model=_model_name, contents=prompt,
+                config=_types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            data = json.loads(res.text)
+            return data
+
+        elif action == "rag":
+            prompt = f"あなたは熟練の建築技術者です。\nプロセスマップのノード「{label}」に関連して、過去のプロジェクトで起きがちなトラブル、注意すべき法規制、または参考となるベストプラクティスを簡潔に教えてください。"
+            res = _client.models.generate_content(model=_model_name, contents=prompt)
+            return {"text": f"【RAG/AI知見補完】\n{res.text}"}
+            
+        else:
+            raise HTTPException(status_code=400, detail="Invalid action")
+            
+    except Exception as e:
+        logger.error(f"AI Action Error: {e}")
+        raise HTTPException(status_code=500, detail=f"AIアクション実行中にエラーが発生しました: {str(e)}")

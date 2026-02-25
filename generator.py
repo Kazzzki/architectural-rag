@@ -1,17 +1,18 @@
-# generator.py - Gemini 3.0 Flash APIで回答生成（Webアプリ版）
+# generator.py - Gemini APIで回答生成（Webアプリ版）
 
-from typing import List, Dict, Any, AsyncGenerator
+from typing import List, Dict, Any, AsyncGenerator, Optional
 
-import google.generativeai as genai
+from google.genai import types
 
-from config import GEMINI_MODEL_RAG, MAX_TOKENS, TEMPERATURE, GEMINI_API_KEY
+from config import GEMINI_MODEL_RAG, MAX_TOKENS, TEMPERATURE
+from gemini_client import get_client
+from utils.retry import sync_retry
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 互換性のため
 GEMINI_MODEL = GEMINI_MODEL_RAG
-
-# Gemini API設定
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 
 SYSTEM_PROMPT = """あなたは建築意匠設計の技術アドバイザーです。
@@ -24,32 +25,82 @@ SYSTEM_PROMPT = """あなたは建築意匠設計の技術アドバイザーで�
 4. 知識ベースの情報で回答できない場合は、その旨を正直に伝える
 5. 回答の最後に「📎 関連資料」セクションを必ず設ける
 6. 日本の建築基準法・JIS・JASS等の日本国内基準に基づく
-24: 7. 回答は必ず日本語で行うこと
+7. 回答は必ず日本語で行うこと
+8. 出典には必ず「ファイル名 (p.XX)」の形式でページ番号を明記する
+9. 図面（doc_type=drawing）からの出典には「📐」アイコンを付与する
 
 【出力フォーマット】
 回答本文
 （Markdown形式、見出し・箇条書き・表を適宜使用）
 
 📎 関連資料:
-- [ファイル名]（カテゴリ）
+- [ファイル名]（カテゴリ）p.XX
+- 📐 [図面ファイル名]（図面）p.XX
 """
 
+# フロントから受け取る会話履歴の1件あたりの最大文字数（長い回答を切り詰めてトークン節約）
+_HISTORY_MAX_CONTENT_CHARS = 2000
+
+
+def _build_contents(
+    user_prompt: str,
+    history: Optional[List[Dict]] = None
+) -> List[types.Content]:
+    """
+    会話履歴（history）と現在のユーザープロンプトを Gemini の Contents リストに変換する。
+    history の role は "user" / "assistant" を想定。Gemini では "model" に変換する。
+    直近 10 件（5往復）のみ使用してトークン超過を防ぐ。
+    """
+    contents: List[types.Content] = []
+
+    if history:
+        # 直近10件に制限（古いほど省略）
+        recent = history[-10:]
+        for msg in recent:
+            role = "user" if msg.get("role") == "user" else "model"
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+            # 長い回答は切り詰め
+            if len(content) > _HISTORY_MAX_CONTENT_CHARS:
+                content = content[:_HISTORY_MAX_CONTENT_CHARS] + "…（省略）"
+            contents.append(types.Content(
+                role=role,
+                parts=[types.Part.from_text(text=content)]
+            ))
+
+    # 現在の質問を末尾に追加
+    contents.append(types.Content(
+        role="user",
+        parts=[types.Part.from_text(text=user_prompt)]
+    ))
+    return contents
+
+
+@sync_retry(max_retries=3, base_wait=2.0)
+def _call_gemini_generate(client, model, contents, config):
+    return client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=config
+    )
 
 def generate_answer(
     question: str,
     context: str,
-    source_files: List[Dict[str, Any]]
+    source_files: List[Dict[str, Any]],
+    history: Optional[List[Dict]] = None,
 ) -> str:
-    """Gemini 3.0 Flash APIで回答を生成"""
-    
+    """Gemini APIで回答を生成（会話履歴対応）"""
+
     source_files_formatted = "\n".join([
         f"- {file['filename']}（{file['category']}）"
         for file in source_files
     ])
-    
+
     if not context.strip():
         context = "（知識ベースからの検索結果はありませんでした）"
-    
+
     user_prompt = f"""以下の知識ベースの情報を参照して回答してください。
 
 【知識ベースから検索された情報】
@@ -61,39 +112,50 @@ def generate_answer(
 【利用可能な関連ファイル（回答末尾の「📎 関連資料」に含めること）】
 {source_files_formatted if source_files_formatted.strip() else "（関連ファイルなし）"}
 """
-    
+
     try:
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,
-            generation_config={
-                "temperature": TEMPERATURE,
-                "max_output_tokens": MAX_TOKENS,
-            },
-            system_instruction=SYSTEM_PROMPT
+        client = get_client()
+        contents = _build_contents(user_prompt, history)
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=TEMPERATURE,
+            max_output_tokens=MAX_TOKENS,
         )
-        
-        response = model.generate_content(user_prompt)
+        response = _call_gemini_generate(client, GEMINI_MODEL, contents, config)
         return response.text
-        
+
     except Exception as e:
-        return f"エラーが発生しました: {str(e)}\n\nもう一度お試しください。"
+        logger.error(f"Gemini generation failed: {e}", exc_info=True)
+        raise RuntimeError("AI回答生成に一時的な問題が発生しています。しばらく待ってから再試行してください。")
 
 
-async def generate_answer_stream(
+@sync_retry(max_retries=3, base_wait=2.0)
+def _call_gemini_stream(client, model, contents, config):
+    # ストリームの初期化自体をリトライ可能にする
+    return client.models.generate_content_stream(
+        model=model,
+        contents=contents,
+        config=config
+    )
+
+from typing import List, Dict, Any, Optional, Iterator
+
+def generate_answer_stream(
     question: str,
     context: str,
-    source_files: List[Dict[str, Any]]
-) -> AsyncGenerator[str, None]:
-    """ストリーミング形式で回答を生成"""
-    
+    source_files: List[Dict[str, Any]],
+    history: Optional[List[Dict]] = None,
+) -> Iterator[str]:
+    """ストリーミング形式で回答を生成（会話履歴対応）"""
+
     source_files_formatted = "\n".join([
         f"- {file['filename']}（{file['category']}）"
         for file in source_files
     ])
-    
+
     if not context.strip():
         context = "（知識ベースからの検索結果はありませんでした）"
-    
+
     user_prompt = f"""以下の知識ベースの情報を参照して回答してください。
 
 【知識ベースから検索された情報】
@@ -105,22 +167,16 @@ async def generate_answer_stream(
 【利用可能な関連ファイル（回答末尾の「📎 関連資料」に含めること）】
 {source_files_formatted if source_files_formatted.strip() else "（関連ファイルなし）"}
 """
+
+    client = get_client()
+    contents = _build_contents(user_prompt, history)
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT,
+        temperature=TEMPERATURE,
+        max_output_tokens=MAX_TOKENS,
+    )
     
-    try:
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,
-            generation_config={
-                "temperature": TEMPERATURE,
-                "max_output_tokens": MAX_TOKENS,
-            },
-            system_instruction=SYSTEM_PROMPT
-        )
-        
-        response = model.generate_content(user_prompt, stream=True)
-        
-        for chunk in response:
-            if chunk.text:
-                yield chunk.text
-                
-    except Exception as e:
-        yield f"エラーが発生しました: {str(e)}"
+    stream_iter = _call_gemini_stream(client, GEMINI_MODEL, contents, config)
+    for chunk in stream_iter:
+        if chunk.text:
+            yield chunk.text

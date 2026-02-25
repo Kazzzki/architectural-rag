@@ -6,21 +6,18 @@ import logging
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-import google.generativeai as genai
-from config import GEMINI_API_KEY, GEMINI_MODEL
+from google.genai import types
+from config import GEMINI_MODEL, UNCATEGORIZED_FOLDER
+from gemini_client import get_client
 
 # ロガー設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Gemini API設定
-genai.configure(api_key=GEMINI_API_KEY)
-
 class DocumentClassifier:
     def __init__(self, rules_path: str = "classification_rules.yaml"):
         self.rules_path = rules_path
         self.rules = self._load_rules()
-        self.model = genai.GenerativeModel(GEMINI_MODEL)
 
     def _load_rules(self) -> Dict[str, Any]:
         """分類ルールをYAMLから読み込む"""
@@ -77,19 +74,20 @@ class DocumentClassifier:
                 body_excerpt=body_excerpt
             )
             
-            # JSONモードを強制するための設定
-            generation_config = {"response_mime_type": "application/json"}
-            
-            response = self.model.generate_content(
-                [system_prompt, prompt],
-                generation_config=generation_config
+            client = get_client()
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[system_prompt, prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
             )
             
             return json.loads(response.text)
-            
+
         except Exception as e:
             logger.error(f"AI分類エラー: {e}")
-            return {"primary_category": "uploads", "tags": [], "page_mapping": {}}
+            return {"primary_category": UNCATEGORIZED_FOLDER, "tags": [], "page_mapping": {}}
 
     def _validate_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """分類結果をルールに基づいて検証・修正"""
@@ -120,8 +118,8 @@ class DocumentClassifier:
                 logger.info(f"カテゴリ修正: {category} -> {allowed_cat}")
                 return allowed_cat
                 
-        logger.warning(f"不正なカテゴリ: {category} -> uploads に変更")
-        return "uploads"
+        logger.warning(f"不正なカテゴリ: {category} -> {UNCATEGORIZED_FOLDER} に変更")
+        return UNCATEGORIZED_FOLDER
 
     def _validate_tags(self, tags: List[str]) -> List[str]:
         """タグが許可リストにあるか確認"""
@@ -139,7 +137,7 @@ class DocumentClassifier:
                 
         return valid_tags[:10] # 最大10個
 
-    def generate_frontmatter(self, classification_result: Dict[str, Any]) -> str:
+    def generate_frontmatter(self, classification_result: Dict[str, Any], extra_meta: Optional[Dict[str, Any]] = None) -> str:
         """分類結果からYAML Frontmatterを生成"""
         # 必要なフィールドのみ抽出
         data = {
@@ -147,6 +145,10 @@ class DocumentClassifier:
             "tags": classification_result.get("tags", []),
             "page_mapping": classification_result.get("page_mapping", {})
         }
+        
+        if extra_meta:
+            data.update(extra_meta)
+        
         
         # YAMLとしてダンプ
         yaml_str = yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)

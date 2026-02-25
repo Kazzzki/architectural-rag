@@ -1,44 +1,39 @@
 import fitz  # PyMuPDF
-import google.generativeai as genai
+from google.genai import types
 import os
 import time
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
-from config import VISION_ANALYSIS_MODEL, GEMINI_API_KEY
+from config import VISION_ANALYSIS_MODEL
+from gemini_client import get_client
 
-# Configure Gemini API
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-
-def get_gemini_model():
-    return genai.GenerativeModel(VISION_ANALYSIS_MODEL)
 
 def process_page_drawing(page_num, img_data):
     """
     図面1ページをVision APIで解析する
     """
     try:
-        model = get_gemini_model()
-        
-        image_part = {
-            "mime_type": "image/png",
-            "data": img_data
-        }
-        
+        client = get_client()
+
+        image_part = types.Part.from_bytes(data=img_data, mime_type="image/png")
+
         prompt = """
         あなたは建築図面の専門家です。この図面画像を詳細に分析し、以下の情報を抽出してください。
-        
+
         1. **図面の種類**: (例: 1階平面図、立面図、断面詳細図)
         2. **主要な部屋名・スペース**: 図面に記載されている部屋名やエリア名を列挙してください。
         3. **仕上げ情報**: 壁、床、天井などの仕上げ記載があれば抽出してください。
         4. **特記事項**: 寸法、注釈、特記仕様などで重要なもの。
-        
+
         出力フォーマット:
         Markdown形式で出力してください。見出しを適切に使ってください。
         """
 
-        response = model.generate_content([prompt, image_part])
+        response = client.models.generate_content(
+            model=VISION_ANALYSIS_MODEL,
+            contents=[prompt, image_part]
+        )
         return {
             "page": page_num,
             "text": response.text,
@@ -72,15 +67,15 @@ def process_drawing_pdf(pdf_path: str) -> str:
 
         for future in tqdm(as_completed(futures), total=total_pages, desc="Analyzing Drawings"):
             results.append(future.result())
-    
+
     doc.close()
-    
+
     # ページ順にソート
     results.sort(key=lambda x: x['index'])
-    
+
     # Markdown結合
     final_markdown = f"# 図面解析結果: {os.path.basename(pdf_path)}\n\n"
-    
+
     # Frontmatter (簡易的な分類タグ)
     final_markdown = "---\n"
     final_markdown += f"filename: {os.path.basename(pdf_path)}\n"

@@ -25,22 +25,24 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
-from config import KNOWLEDGE_BASE_DIR, SUPPORTED_EXTENSIONS
+from config import KNOWLEDGE_BASE_DIR, SUPPORTED_EXTENSIONS, BASE_DIR
 
 logger = logging.getLogger(__name__)
 
 # ========== 定数 ==========
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
-CREDENTIALS_PATH = Path(__file__).parent / 'credentials.json'
-TOKEN_PATH = Path(__file__).parent / 'token.pickle'
-REDIRECT_URI = "http://localhost:8000/api/drive/callback"
+SECRETS_DIR = BASE_DIR / "secrets"
+SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+CREDENTIALS_PATH = SECRETS_DIR / 'credentials.json'
+TOKEN_PATH = SECRETS_DIR / 'token.pickle'
+# NOTE: REDIRECT_URI は server.py 側で動的に構築して渡す（ハードコード廃止）
 
 
 # ========== 認証 ==========
 
-def get_auth_url() -> str:
-    """認証用URLを生成"""
+def get_auth_url(redirect_uri: str) -> str:
+    """認証用URLを生成（redirect_uri は呼び出し元が動的に構築する）"""
     if not CREDENTIALS_PATH.exists():
         raise FileNotFoundError(
             f"credentials.json が見つかりません。\n"
@@ -49,16 +51,16 @@ def get_auth_url() -> str:
         )
     
     flow = InstalledAppFlow.from_client_secrets_file(
-        str(CREDENTIALS_PATH), SCOPES, redirect_uri=REDIRECT_URI
+        str(CREDENTIALS_PATH), SCOPES, redirect_uri=redirect_uri
     )
     auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
     return auth_url
 
 
-def save_credentials_from_code(code: str):
-    """認可コードからトークンを取得して保存"""
+def save_credentials_from_code(code: str, redirect_uri: str):
+    """認可コードからトークンを取得して保存（redirect_uri は呼び出し元が動的に構築する）"""
     flow = InstalledAppFlow.from_client_secrets_file(
-        str(CREDENTIALS_PATH), SCOPES, redirect_uri=REDIRECT_URI
+        str(CREDENTIALS_PATH), SCOPES, redirect_uri=redirect_uri
     )
     flow.fetch_token(code=code)
     creds = flow.credentials
@@ -87,7 +89,7 @@ def get_drive_service():
                     pickle.dump(creds, token)
                 logger.info("Google Drive token refreshed successfully")
             except Exception as e:
-                logger.error(f"Token refresh failed: {e}")
+                logger.error(f"Token refresh failed: {e}", exc_info=True)
                 raise Exception("トークンの更新に失敗しました。再認証が必要です。/api/drive/auth で認証してください。")
         else:
             raise Exception("認証が必要です。/api/drive/auth で認証してください。")
@@ -288,7 +290,7 @@ def upload_recursive(service, local_path: Path, parent_id: str = None, stats: Di
                 stats['created'] += 1
                 _update_file_store_drive_id(local_path, result.get('id'))
         except Exception as e:
-            logger.error(f"Upload error ({local_path.name}): {e}")
+            logger.error(f"Upload error ({local_path.name}): {e}", exc_info=True)
             stats['errors'] += 1
             
     elif local_path.is_dir():
@@ -300,7 +302,7 @@ def upload_recursive(service, local_path: Path, parent_id: str = None, stats: Di
             for child in local_path.iterdir():
                 upload_recursive(service, child, folder_id, stats)
         except Exception as e:
-            logger.error(f"Folder process error ({local_path.name}): {e}")
+            logger.error(f"Folder process error ({local_path.name}): {e}", exc_info=True)
             stats['errors'] += 1
 
 
@@ -342,6 +344,7 @@ def sync_upload_to_drive(target_folder_name: str = "建築意匠ナレッジDB")
         return {"status": "success", "folder": target_folder_name, "stats": stats}
         
     except Exception as e:
+        logger.error(f"sync_upload_to_drive failed: {e}", exc_info=True)
         return {"status": "error", "message": str(e), "stats": stats}
 
 
@@ -403,7 +406,7 @@ def sync_drive_folder(
             stats['downloaded'] += 1
             
         except Exception as e:
-            logger.error(f"  エラー ({file['name']}): {e}")
+            logger.error(f"  エラー ({file['name']}): {e}", exc_info=True)
             stats['errors'] += 1
     
     logger.info(f"同期完了: {stats['downloaded']}ダウンロード, {stats['skipped']}スキップ, {stats['errors']}エラー")
@@ -438,7 +441,7 @@ def upload_mirror_to_drive(local_dir: str, drive_folder_id: str):
                     logger.info(f"Uploaded: {file_path.name}")
                 except Exception as e:
                     errors.append(f"{file_path.name}: {str(e)}")
-                    logger.error(f"Failed to upload {file_path.name}: {e}")
+                    logger.error(f"Failed to upload {file_path.name}: {e}", exc_info=True)
                 
     return {
         "success": True,

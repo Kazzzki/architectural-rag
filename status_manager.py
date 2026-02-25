@@ -53,7 +53,7 @@ class OCRStatusManager:
             session.commit()
         except Exception as e:
             session.rollback()
-            logger.error(f"start_processing error: {e}")
+            logger.error(f"start_processing error ({rel_path}): {e}", exc_info=True)
         finally:
             session.close()
 
@@ -81,7 +81,7 @@ class OCRStatusManager:
                 session.commit()
         except Exception as e:
             session.rollback()
-            logger.error(f"update_progress error: {e}")
+            logger.error(f"update_progress error ({rel_path}): {e}", exc_info=True)
         finally:
             session.close()
 
@@ -106,7 +106,7 @@ class OCRStatusManager:
                 session.commit()
         except Exception as e:
             session.rollback()
-            logger.error(f"complete_processing error: {e}")
+            logger.error(f"complete_processing error ({rel_path}): {e}", exc_info=True)
         finally:
             session.close()
 
@@ -128,7 +128,7 @@ class OCRStatusManager:
                 session.commit()
         except Exception as e:
             session.rollback()
-            logger.error(f"fail_processing error: {e}")
+            logger.error(f"fail_processing error ({rel_path}): {e}", exc_info=True)
         finally:
             session.close()
 
@@ -156,17 +156,26 @@ class OCRStatusManager:
                 session.commit()
         except Exception as e:
             session.rollback()
-            logger.error(f"remove_status error: {e}")
+            logger.error(f"remove_status error ({rel_path}): {e}", exc_info=True)
         finally:
             session.close()
 
     def rename_status(self, old_path: str, new_path: str):
-        """ステータスの移動（リネーム）"""
+        """ステータスの移動（リネーム）— 既存レコードとの衝突を安全に処理"""
         from database import Document
         session = self._get_session()
         try:
             old_rel = self._get_rel_path(old_path)
             new_rel = self._get_rel_path(new_path)
+            
+            # 移動先パスに既存レコードがある場合は先に削除（UNIQUE制約対策）
+            existing = session.query(Document).filter(
+                Document.file_path == new_rel
+            ).first()
+            if existing:
+                session.delete(existing)
+                session.flush()  # DELETE を先に実行してからUPDATE
+            
             doc = session.query(Document).filter(
                 Document.file_path == old_rel
             ).first()
@@ -176,9 +185,11 @@ class OCRStatusManager:
                 doc.filename = Path(new_path).name
                 doc.updated_at = datetime.now()
                 session.commit()
+            else:
+                session.commit()  # flush した DELETE を確定
         except Exception as e:
             session.rollback()
-            logger.error(f"rename_status error: {e}")
+            logger.error(f"rename_status error ({old_rel} -> {new_rel}): {e}", exc_info=True)
         finally:
             session.close()
 

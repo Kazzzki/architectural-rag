@@ -1,9 +1,10 @@
 'use client';
+import { authFetch } from '@/lib/api';
 
 import { useState, useEffect } from 'react';
 import { FolderOpen, Plus, Trash2, Clock, ChevronDown } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 interface Project {
     id: string;
@@ -32,7 +33,7 @@ export default function ProjectSelector({ templateId, templateName, currentProje
 
     const fetchProjects = async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/projects`);
+            const res = await authFetch(`${API_BASE}/api/mindmap/projects`);
             const data = await res.json();
             setProjects(data.filter((p: Project) => p.template_id === templateId));
         } catch (err) {
@@ -48,7 +49,7 @@ export default function ProjectSelector({ templateId, templateName, currentProje
         if (!newName.trim()) return;
         setCreating(true);
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/projects`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/projects`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: newName.trim(), template_id: templateId }),
@@ -68,7 +69,7 @@ export default function ProjectSelector({ templateId, templateName, currentProje
         e.stopPropagation();
         if (!confirm('このプロジェクトを削除しますか？')) return;
         try {
-            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}`, { method: 'DELETE' });
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}`, { method: 'DELETE' });
             if (currentProjectId === projectId) onProjectSelect(null);
             await fetchProjects();
         } catch (err) {

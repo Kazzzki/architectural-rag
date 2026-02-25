@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 
 const API_PASSWORD = process.env.NEXT_PUBLIC_API_PASSWORD || '';
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 /**
  * グローバルfetchにBasic認証ヘッダーを自動付与するプロバイダー。
@@ -18,9 +18,10 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
             const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
 
             // APIサーバーへのリクエストのみ認証ヘッダーを付与
-            const isApiRequest = url.includes('/api/') || url.startsWith(API_URL);
+            const isApiRequest = url.includes('/api/') || (API_URL && url.startsWith(API_URL));
 
             if (isApiRequest) {
+                console.log('AuthProvider: Injecting Auth Header', { url });
                 const encoded = btoa(`user:${API_PASSWORD}`);
                 const headers = new Headers(init?.headers);
                 if (!headers.has('Authorization')) {

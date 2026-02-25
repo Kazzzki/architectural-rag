@@ -1,9 +1,10 @@
 'use client';
+import { authFetch } from '@/lib/api';
 
 import { useState, useEffect } from 'react';
 import { BookOpen, ChevronDown, ChevronRight, Lightbulb, GraduationCap, Wrench } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 interface KnowledgeEntry {
     depth: string;
@@ -32,7 +33,7 @@ export default function KnowledgePanel({ nodeId, categoryColor }: Props) {
         const fetchKnowledge = async () => {
             setLoading(true);
             try {
-                const res = await fetch(`${API_BASE}/api/mindmap/knowledge/${nodeId}`);
+                const res = await authFetch(`${API_BASE}/api/mindmap/knowledge/${nodeId}`);
                 const data = await res.json();
                 setEntries(data.entries || []);
             } catch (err) {
@@ -119,16 +120,38 @@ export default function KnowledgePanel({ nodeId, categoryColor }: Props) {
 }
 
 function formatContent(content: string): string {
-    // Simple markdown-like formatting
-    return content
+    // Basic Markdown to HTML converter
+    let html = content
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/^- (.+)$/gm, '<li style="margin-left:12px;list-style:disc">$1</li>')
-        .replace(/^(\d+)\. (.+)$/gm, '<li style="margin-left:12px;list-style:decimal">$2</li>')
-        .replace(/\|(.+)\|/g, (match) => {
-            // Simple table rendering
-            const cells = match.split('|').filter(Boolean).map(c => c.trim());
-            return `<div style="display:flex;gap:8px;font-size:10px;padding:2px 0">${cells.map(c => `<span style="flex:1">${c}</span>`).join('')}</div>`;
-        })
-        .replace(/\n\n/g, '<br/><br/>')
-        .replace(/\n/g, '<br/>');
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        // Convert headers
+        .replace(/^### (.*$)/gim, '<h3 style="font-weight:bold;margin-top:8px;margin-bottom:4px">$1</h3>')
+        .replace(/^## (.*$)/gim, '<h2 style="font-weight:bold;font-size:1.1em;margin-top:12px;margin-bottom:6px">$1</h2>')
+        .replace(/^# (.*$)/gim, '<h1 style="font-weight:bold;font-size:1.2em;margin-top:16px;margin-bottom:8px">$1</h1>')
+        // Convert unordered lists
+        .replace(/^\s*[-*+] (.*$)/gim, '<li style="margin-left:16px;list-style-type:disc;margin-bottom:2px">$1</li>')
+        // Convert ordered lists
+        .replace(/^\s*\d+\. (.*$)/gim, '<li style="margin-left:16px;list-style-type:decimal;margin-bottom:2px">$1</li>')
+        // Convert blockquotes
+        .replace(/^> (.*$)/gim, '<blockquote style="border-left:3px solid #ccc;padding-left:8px;color:#666;margin:4px 0">$1</blockquote>')
+        // Handle code blocks
+        .replace(/`([^`]+)`/g, '<code style="background-color:#f1f5f9;padding:2px 4px;border-radius:4px;font-family:monospace;font-size:0.9em">$1</code>');
+
+    // Handle simple tables
+    const tableRegex = /((?:\|.+)+\|)\n/g;
+    html = html.replace(tableRegex, (match) => {
+        if (match.includes('---')) return ''; // Skip separator row
+        const cells = match.split('|').filter(Boolean).map(c => c.trim());
+        return `<div style="display:flex;gap:8px;font-size:10px;padding:4px;border-bottom:1px solid #e2e8f0">${cells.map(c => `<span style="flex:1">${c}</span>`).join('')}</div>`;
+    });
+
+    // Replace double newlines with breaks, while preserving list elements
+    html = html.replace(/\n\n/g, '<br/><br/>');
+    html = html.replace(/\n(?!(<li|<blockquote|<h|<div))/g, '<br/>');
+
+    // Wrap consecutive li elements in ul
+    html = html.replace(/(<li style="margin-left:16px;list-style-type:disc.*?>.*?<\/li>(?:<br\/>)*)+/g, match => `<ul style="margin:4px 0">${match.replace(/<br\/>/g, '')}</ul>`);
+    html = html.replace(/(<li style="margin-left:16px;list-style-type:decimal.*?>.*?<\/li>(?:<br\/>)*)+/g, match => `<ol style="margin:4px 0">${match.replace(/<br\/>/g, '')}</ol>`);
+
+    return html;
 }

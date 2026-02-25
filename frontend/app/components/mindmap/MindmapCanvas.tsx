@@ -21,6 +21,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import CustomNode from './CustomNode';
+import AICopilotNode from './AICopilotNode';
 
 interface ProcessNode {
     id: string;
@@ -66,15 +67,18 @@ interface Props {
     onNodeCollapse?: (nodeId: string) => void;
     onNodeContextMenu?: (event: React.MouseEvent, nodeId: string) => void;
     onPaneContextMenu?: (event: React.MouseEvent) => void;
+    onAiAction?: (action: 'summarize' | 'expand' | 'rag', nodeId: string, label: string) => void;
+    allEdges?: EdgeData[];
 }
 
-const nodeTypes = { custom: CustomNode };
+const nodeTypes = { custom: CustomNode, aiCopilot: AICopilotNode };
 const EMPTY_SET = new Set<string>();
 const EMPTY_MAP = new Map<string, number>();
 
 function MindmapCanvasInner({
     nodes: processNodes,
     edges: processEdges,
+    allEdges,
     selectedNodeId,
     selectedNodeIds = EMPTY_SET,
     highlightedNodes,
@@ -95,6 +99,7 @@ function MindmapCanvasInner({
     onNodeCollapse,
     onNodeContextMenu,
     onPaneContextMenu,
+    onAiAction,
 }: Props) {
     const hasHighlight = highlightedNodes.size > 0;
     const { screenToFlowPosition } = useReactFlow();
@@ -121,9 +126,13 @@ function MindmapCanvasInner({
     // Build set of node IDs that have children (for collapse button visibility)
     const nodeIdsWithChildren = useMemo(() => {
         const parentIds = new Set<string>();
-        processEdges.forEach(e => parentIds.add(e.source));
+        if (allEdges) {
+            allEdges.forEach(e => parentIds.add(e.source));
+        } else {
+            processEdges.forEach(e => parentIds.add(e.source));
+        }
         return parentIds;
-    }, [processEdges]);
+    }, [processEdges, allEdges]);
 
     const isDraggingRef = useRef(false);
 
@@ -131,8 +140,10 @@ function MindmapCanvasInner({
     const rfNodes: Node[] = useMemo(() => {
         return processNodes.map(pn => ({
             id: pn.id,
-            type: 'custom',
+            // Use 'aiCopilot' type to enable AI features, or fallback to 'custom'
+            type: 'aiCopilot',
             position: pn.position,
+            selected: pn.id === selectedNodeId,
             data: {
                 label: pn.label,
                 phase: pn.phase,
@@ -145,17 +156,18 @@ function MindmapCanvasInner({
                 isDimmed: hasHighlight && !highlightedNodes.has(pn.id),
                 collapsed: collapsedNodeIds.has(pn.id),
                 hiddenDescendantCount: descendantCounts.get(pn.id),
-                hasChildren: nodeIdsWithChildren.has(pn.id),
+                hasChildren: nodeIdsWithChildren.has(pn.id) || collapsedNodeIds.has(pn.id),
                 onLabelChange: isEditMode && onNodeLabelChange ? (newLabel: string) => onNodeLabelChange(pn.id, newLabel) : undefined,
-                onCollapseToggle: onNodeCollapse && nodeIdsWithChildren.has(pn.id) ? () => onNodeCollapse(pn.id) : undefined,
+                onCollapseToggle: onNodeCollapse && (nodeIdsWithChildren.has(pn.id) || collapsedNodeIds.has(pn.id)) ? () => onNodeCollapse(pn.id) : undefined,
                 onContextMenu: onNodeContextMenu ? (e: React.MouseEvent) => {
                     e.preventDefault();
                     e.stopPropagation();
                     onNodeContextMenu(e, pn.id);
                 } : undefined,
+                onAiAction: onAiAction,
             },
         }));
-    }, [processNodes, selectedNodeId, highlightedNodes, hasHighlight, categoryColors, collapsedNodeIds, descendantCounts, nodeIdsWithChildren, isEditMode, onNodeLabelChange, onNodeCollapse, onNodeContextMenu]);
+    }, [processNodes, selectedNodeId, highlightedNodes, hasHighlight, categoryColors, collapsedNodeIds, descendantCounts, nodeIdsWithChildren, isEditMode, onNodeLabelChange, onNodeCollapse, onNodeContextMenu, onAiAction]);
 
     // Convert to React Flow edges
     const rfEdges: RFEdge[] = useMemo(() => {

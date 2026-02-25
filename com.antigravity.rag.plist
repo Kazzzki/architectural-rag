@@ -7,8 +7,9 @@
     
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
-        <string>/Users/kkk/Library/Mobile Documents/com~apple~CloudDocs/antigravity/architectural_rag/start_remote.py</string>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>python3 "start_remote.py"</string>
     </array>
     
     <key>WorkingDirectory</key>
@@ -18,7 +19,7 @@
     <true/>
     
     <key>KeepAlive</key>
-    <false/>
+    <true/>
     
     <key>StandardOutPath</key>
     <string>/Users/kkk/Library/Mobile Documents/com~apple~CloudDocs/antigravity/architectural_rag/logs/launchd_stdout.log</string>

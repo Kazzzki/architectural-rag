@@ -1,6 +1,6 @@
 'use client';
 
-import { Plus, Trash2, Undo2, Edit3, Eye } from 'lucide-react';
+import { Plus, Trash2, Undo2, Edit3, Eye, Search } from 'lucide-react';
 
 interface Props {
     isEditMode: boolean;
@@ -9,6 +9,7 @@ interface Props {
     onAddNode: () => void;
     onDeleteNode: () => void;
     onUndo: () => void;
+    onInvestigate: () => void;
     hasSelectedNode: boolean;
     canUndo: boolean;
 }
@@ -20,6 +21,7 @@ export default function EditToolbar({
     onAddNode,
     onDeleteNode,
     onUndo,
+    onInvestigate,
     hasSelectedNode,
     canUndo,
 }: Props) {
@@ -53,6 +55,19 @@ export default function EditToolbar({
                     >
                         <Plus className="w-3.5 h-3.5" />
                         <span className="hidden sm:inline">追加</span>
+                    </button>
+
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onInvestigate(); }}
+                        disabled={!hasSelectedNode}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs transition-colors ${hasSelectedNode
+                            ? 'hover:bg-indigo-50 text-indigo-600'
+                            : 'text-[var(--muted)] opacity-40 cursor-not-allowed'
+                            }`}
+                        title="AI調査 (確認事項をリストアップ)"
+                    >
+                        <Search className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">調査</span>
                     </button>
 
                     <button

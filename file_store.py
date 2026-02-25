@@ -30,6 +30,7 @@ def get_db():
         conn.commit()
     except Exception:
         conn.rollback()
+        logger.error("Database transaction failed, rolled back", exc_info=True)
         raise
     finally:
         conn.close()
@@ -189,6 +190,15 @@ def list_files(
     with get_db() as conn:
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_file_by_path(current_path: str) -> Optional[Dict[str, Any]]:
+    """現在のパスからファイル情報を取得（ファイル移動後のパス更新に使用）"""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM files WHERE current_path = ?", (current_path,)
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def get_file_by_checksum(checksum: str) -> Optional[Dict[str, Any]]:

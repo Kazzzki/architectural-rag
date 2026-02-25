@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from 'react';
+import { authFetch } from '@/lib/api';
 
 interface SyncButtonProps {
     onSyncComplete?: (result: any) => void;
@@ -17,8 +18,8 @@ const SyncButton = ({ onSyncComplete }: SyncButtonProps) => {
         setStatus(null);
 
         try {
-            const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-            const res = await fetch(`${API_BASE}/api/sync-drive`, {
+            const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+            const res = await authFetch(`${API_BASE}/api/sync-drive`, {
                 method: 'POST',
             });
 
@@ -50,8 +51,8 @@ const SyncButton = ({ onSyncComplete }: SyncButtonProps) => {
                 onClick={handleSync}
                 disabled={syncing}
                 className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${syncing
-                        ? 'bg-gray-400 cursor-not-allowed'
-                        : 'bg-blue-600 hover:bg-blue-700 text-white'
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
                     }`}
             >
                 {syncing && (
@@ -62,7 +63,7 @@ const SyncButton = ({ onSyncComplete }: SyncButtonProps) => {
 
             {message && (
                 <div className={`text-sm px-3 py-1 rounded ${status === 'success' ? 'bg-green-100 text-green-700' :
-                        status === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
+                    status === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
                     }`}>
                     {message}
                 </div>

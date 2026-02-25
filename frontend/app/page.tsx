@@ -1,4 +1,5 @@
 'use client';
+import { authFetch } from '@/lib/api';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -40,9 +41,11 @@ interface Message {
 
 interface SourceFile {
     filename: string;
+    original_filename?: string;
     category: string;
     relevance_count: number;
     source_pdf?: string;
+    pdf_filename?: string;
     pages?: number[];
 }
 
@@ -52,7 +55,7 @@ interface Stats {
     last_updated: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 const EXAMPLE_QUESTIONS = [
     'ALCとECPの防水性能・コスト・メンテナンス性の違いを比較して',
@@ -64,11 +67,14 @@ const EXAMPLE_QUESTIONS = [
 
 const CATEGORIES = [
     { value: '', label: '全て（横断検索）' },
-    { value: '01_カタログ', label: '01_カタログ' },
-    { value: '02_図面', label: '02_図面' },
-    { value: '03_技術基準', label: '03_技術基準' },
-    { value: '04_リサーチ成果物', label: '04_リサーチ成果物' },
-    { value: 'uploads', label: 'アップロード' },
+    { value: '01_カタログ', label: '01 カタログ' },
+    { value: '02_図面', label: '02 図面' },
+    { value: '03_技術基準', label: '03 技術基準' },
+    { value: '04_リサーチ成果物', label: '04 リサーチ成果物' },
+    { value: '05_法規', label: '05 法規' },
+    { value: '06_設計マネジメント', label: '06 設計マネジメント' },
+    { value: '07_コストマネジメント', label: '07 コストマネジメント' },
+    { value: '00_未分類', label: '00 未分類' },
 ];
 
 export default function Home() {
@@ -96,6 +102,7 @@ export default function Home() {
     const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
     const [activeTab, setActiveTab] = useState<'chat' | 'library'>('chat');
     const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+    const [pdfInitialPage, setPdfInitialPage] = useState(1);
     const [isPdfOpen, setIsPdfOpen] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -111,7 +118,7 @@ export default function Home() {
 
     const fetchStats = useCallback(async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/stats`);
+            const res = await authFetch(`${API_BASE}/api/stats`);
             if (res.ok) {
                 const data = await res.json();
                 setStats(data);
@@ -123,7 +130,7 @@ export default function Home() {
 
     const fetchTags = useCallback(async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/tags`);
+            const res = await authFetch(`${API_BASE}/api/tags`);
             if (res.ok) {
                 const data = await res.json();
                 setAvailableTags(data);
@@ -147,7 +154,7 @@ export default function Home() {
 
     const checkDriveStatus = async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/drive/status`);
+            const res = await authFetch(`${API_BASE}/api/drive/status`);
             if (res.ok) {
                 const data = await res.json();
                 setDriveStatus(data);
@@ -159,7 +166,17 @@ export default function Home() {
 
     const handleDriveAuth = async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/drive/auth`, { method: 'POST' });
+            // Next.js frontend is fetching across the network. Tell the backend what our current hostname is
+            const currentHost = window.location.host;
+            const currentProto = window.location.protocol.replace(':', '');
+
+            const res = await authFetch(`${API_BASE}/api/drive/auth`, {
+                method: 'POST',
+                headers: {
+                    'X-Forwarded-Host': currentHost,
+                    'X-Forwarded-Proto': currentProto
+                }
+            });
             if (res.ok) {
                 const data = await res.json();
                 if (data.auth_url) {
@@ -176,7 +193,7 @@ export default function Home() {
         setIsSyncing(true);
         setSyncResult(null);
         try {
-            const res = await fetch(`${API_BASE}/api/drive/sync`, {
+            const res = await authFetch(`${API_BASE}/api/drive/sync`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ folder_name: '建築意匠ナレッジDB' }),
@@ -200,7 +217,7 @@ export default function Home() {
         if (!confirm('Google Driveへファイルを同期（アップロード）しますか？\n（同名ファイルは上書きされます）')) return;
         setIsUploadingToDrive(true);
         try {
-            const res = await fetch(`${API_BASE}/api/sync-drive`, { method: 'POST' });
+            const res = await authFetch(`${API_BASE}/api/sync-drive`, { method: 'POST' });
             if (!res.ok) {
                 const err = await res.json();
                 throw new Error(err.detail || '同期失敗');
@@ -222,6 +239,12 @@ export default function Home() {
 
         const userMessage = input.trim();
         setInput('');
+
+        // 現在の会話履歴を送信前にキャプチャ（新しいメッセージを追加する前）
+        const historySnapshot = messages.map(m => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+        }));
 
         // Add user message
         setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
@@ -245,7 +268,8 @@ export default function Home() {
                 fileType,
                 dateRange,
                 selectedTags.length > 0 ? selectedTags : undefined,
-                tagMatchMode
+                tagMatchMode,
+                historySnapshot.length > 0 ? historySnapshot : undefined,
             )) {
                 if (update.type === 'sources') {
                     setMessages(prev => {
@@ -302,7 +326,7 @@ export default function Home() {
         formData.append('category', 'uploads');
 
         try {
-            const res = await fetch(`${API_BASE}/api/upload/multiple`, {
+            const res = await authFetch(`${API_BASE}/api/upload/multiple`, {
                 method: 'POST',
                 body: formData,
             });
@@ -327,7 +351,7 @@ export default function Home() {
     const handleReindex = async () => {
         setIsIndexing(true);
         try {
-            const res = await fetch(`${API_BASE}/api/index`, { method: 'POST' });
+            const res = await authFetch(`${API_BASE}/api/index`, { method: 'POST' });
             if (res.ok) {
                 fetchStats();
             }
@@ -720,24 +744,32 @@ export default function Home() {
                                                             {msg.sources.map((src, j) => (
                                                                 <div
                                                                     key={j}
-                                                                    className="flex items-center gap-2 bg-[var(--card)] border border-[var(--border)] px-2 py-1.5 rounded-md"
+                                                                    className="flex flex-col gap-1 bg-[var(--card)] border border-[var(--border)] px-3 py-2 rounded-md"
                                                                 >
-                                                                    <span className="text-xs flex items-center gap-1">
-                                                                        <FileText className="w-3 h-3 text-primary-500" />
-                                                                        {src.filename}
-                                                                    </span>
-                                                                    {src.source_pdf && (
-                                                                        <button
-                                                                            onClick={() => {
-                                                                                setPdfUrl(`${API_BASE}/api/files/view/${src.source_pdf}`);
-                                                                                setIsPdfOpen(true);
-                                                                            }}
-                                                                            className="text-xs text-blue-500 hover:text-blue-600 hover:underline flex items-center gap-0.5 ml-1 border-l border-[var(--border)] pl-2 cursor-pointer bg-transparent border-0"
-                                                                            title="PDFを表示"
-                                                                        >
-                                                                            <ExternalLink className="w-3 h-3" />
-                                                                            PDF
-                                                                        </button>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className="text-sm font-medium flex items-center gap-1 text-[var(--foreground)]">
+                                                                            <FileText className="w-3.5 h-3.5 text-primary-500" />
+                                                                            {src.original_filename || src.filename}
+                                                                        </span>
+                                                                        {src.source_pdf && (
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    setPdfUrl(`${API_BASE}/api/pdf/${src.source_pdf}`);
+                                                                                    setPdfInitialPage(src.pages?.[0] ?? 1);
+                                                                                    setIsPdfOpen(true);
+                                                                                }}
+                                                                                className="text-[10px] text-blue-500 hover:text-blue-600 hover:underline flex items-center gap-0.5 border border-blue-200 bg-blue-50 dark:border-blue-900/40 dark:bg-blue-900/10 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+                                                                                title={`原本PDFを開く${src.pdf_filename ? ` (${src.pdf_filename})` : ''}${src.pages?.[0] ? ` p.${src.pages[0]}` : ''}`}
+                                                                            >
+                                                                                <ExternalLink className="w-2.5 h-2.5" />
+                                                                                📄 PDF表示{src.pages?.[0] ? ` (p.${src.pages[0]})` : ''}
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                    {src.original_filename && src.original_filename !== src.filename && (
+                                                                        <span className="text-[10px] text-[var(--muted)] flex items-center gap-1">
+                                                                            Chunk: {src.filename}
+                                                                        </span>
                                                                     )}
                                                                 </div>
                                                             ))}
@@ -763,10 +795,10 @@ export default function Home() {
                                 }
 
                                 <div ref={messagesEndRef} />
-                            </div >
+                            </div>
 
                             {/* Input */}
-                            < form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-4" >
+                            <form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-4">
                                 <div className="flex gap-2">
                                     <input
                                         type="text"
@@ -784,8 +816,8 @@ export default function Home() {
                                         <Send className="w-5 h-5" />
                                     </button>
                                 </div>
-                            </form >
-                        </div >
+                            </form>
+                        </div>
 
                         {/* Right Pane: PDF Viewer */}
                         {
@@ -793,13 +825,13 @@ export default function Home() {
                                 <div className="w-1/2 h-full border-l border-[var(--border)] relative transition-all duration-300">
                                     <PDFViewer
                                         url={pdfUrl}
-                                        initialPage={1} // TODO: Pass page from source info if available
+                                        initialPage={pdfInitialPage}
                                         onClose={() => setIsPdfOpen(false)}
                                     />
                                 </div>
                             )
                         }
-                    </div >
+                    </div>
 
                     {/* Library Container */}
                     {
@@ -809,8 +841,8 @@ export default function Home() {
                             </div>
                         )
                     }
-                </div >
-            </div >
-        </div >
+                </div>
+            </div>
+        </div>
     );
 }

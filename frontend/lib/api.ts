@@ -1,5 +1,6 @@
 export interface SourceFile {
     filename: string;
+    original_filename?: string;
     category: string;
     relevance_count: number;
     source_pdf?: string;
@@ -11,7 +12,7 @@ export type StreamUpdate =
     | { type: 'answer'; data: string }
     | { type: 'done' };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 const API_PASSWORD = process.env.NEXT_PUBLIC_API_PASSWORD || '';
 
 /** Basic認証ヘッダーを生成 */
@@ -34,13 +35,19 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
 
 export { API_BASE };
 
+export interface HistoryMessage {
+    role: 'user' | 'assistant';
+    content: string;
+}
+
 export async function* chatStream(
     question: string,
     category?: string,
     file_type?: string,
     date_range?: string,
     tags?: string[],
-    tag_match_mode?: "any" | "all"
+    tag_match_mode?: "any" | "all",
+    history?: HistoryMessage[],
 ): AsyncGenerator<StreamUpdate> {
     const response = await fetch(`${API_BASE}/api/chat/stream`, {
         method: 'POST',
@@ -51,7 +58,8 @@ export async function* chatStream(
             file_type: file_type || null,
             date_range: date_range || null,
             tags: tags || null,
-            tag_match_mode: tag_match_mode || "any"
+            tag_match_mode: tag_match_mode || "any",
+            history: history || [],
         }),
     });
 

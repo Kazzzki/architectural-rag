@@ -9,10 +9,18 @@
 
 ## セットアップ
 
-### 1. 環境変数
+### 1. 環境設定
 
+#### 1.1 環境変数
 ```bash
 export GEMINI_API_KEY="your-api-key"
+export APP_PASSWORD="your-secure-password" # Basic認証用（任意）
+```
+
+#### 1.2 Google Drive認証情報
+Google Cloud ConsoleからOAuthクライアントIDを発行し、ダウンロードした `credentials.json` を以下のディレクトリに配置してください：
+```text
+architectural_rag/data/secrets/credentials.json
 ```
 
 ### 2. バックエンド起動

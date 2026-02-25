@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 class PipelineManager:
     def __init__(self):
         self.router = ContentRouter()
-        self.base_dir = Path("data")
+        from config import BASE_DIR
+        self.base_dir = Path(BASE_DIR)
         self.base_dir.mkdir(exist_ok=True)
         
     def process_file(self, file_path: Path):
@@ -41,16 +42,11 @@ class PipelineManager:
             
             # 3. パイプライン実行
             try:
-                if file_type == "Document":
-                    # ドキュメントパイプライン (OCR)
+                if file_type in ("Document", "Drawing"):
+                    # ドキュメント・図面ともにOCRパイプラインを使用
                     output_path = new_path.with_suffix(".md")
-                    logger.info(f"Starting OCR pipeline for {new_path} -> {output_path}")
+                    logger.info(f"Starting OCR pipeline for {new_path} -> {output_path} (type={file_type})")
                     process_pdf_background(str(new_path), str(output_path))
-                    
-                elif file_type == "Drawing":
-                    # 図面パイプライン (未実装のためログ出力のみ)
-                    logger.info(f"Drawing pipeline pending for {new_path}")
-                    # process_drawing_pipeline(str(new_path))
             except Exception as e:
                 # パイプライン実行中のエラー。ファイルはすでに移動済み。
                 # 移動先のファイルパスでエラー処理を行う必要があるが、
@@ -59,9 +55,17 @@ class PipelineManager:
                 
         except Exception as e:
             logger.error(f"Pipeline processing failed for {file_path}: {e}", exc_info=True)
+            
+            from status_manager import OCRStatusManager
+            try:
+                OCRStatusManager().fail_processing(str(file_path), str(e))
+            except Exception as sm_err:
+                logger.error(f"Failed to update DB failed status: {sm_err}")
+                
             # エラー時は error フォルダへ移動 (隔離)
-            error_dir = self.base_dir / "error"
-            error_dir.mkdir(exist_ok=True)
+            from config import ERROR_DIR
+            error_dir = Path(ERROR_DIR)
+            error_dir.mkdir(parents=True, exist_ok=True)
             
             # 移動元(input)にある場合
             if file_path.exists():

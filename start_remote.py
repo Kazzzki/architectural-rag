@@ -62,6 +62,19 @@ def start_daemon():
     )
     return process
 
+def start_frontend():
+    """Next.jsフロントエンドを起動"""
+    log("Starting Next.js frontend...")
+    frontend_log = open(LOG_DIR / "frontend.log", "w")
+    process = subprocess.Popen(
+        ["npm", "run", "dev"],
+        cwd=SCRIPT_DIR / "frontend",
+        stdout=frontend_log,
+        stderr=subprocess.STDOUT,
+    )
+    time.sleep(5)  # ビルド/起動待ち
+    return process
+
 
 def start_tunnel():
     """Cloudflare Tunnelを起動"""
@@ -174,9 +187,16 @@ def main():
     log("Starting Antigravity Remote Access")
     log("=" * 50)
 
-    # サーバー起動
+    # サーバー再起動（念のため既存プロセスを終了）
+    subprocess.run(["pkill", "-f", "server.py"], capture_output=True)
+    subprocess.run(["pkill", "-f", "antigravity_daemon.py"], capture_output=True)
+    subprocess.run(["pkill", "-f", "next dev"], capture_output=True)
+    time.sleep(1)
+
+    # サーバーとフロント起動
     server_proc = start_server()
     daemon_proc = start_daemon()
+    frontend_proc = start_frontend()
 
     # Cloudflare Tunnel起動
     tunnel_proc, tunnel_url = start_tunnel()
@@ -205,6 +225,7 @@ def main():
         log("Shutting down...")
         server_proc.terminate()
         daemon_proc.terminate()
+        frontend_proc.terminate()
         tunnel_proc.terminate()
         log("Goodbye!")
 

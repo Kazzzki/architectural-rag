@@ -18,9 +18,8 @@ export function middleware(req: NextRequest) {
         const authValue = basicAuth.split(' ')[1];
         const [user, pwd] = atob(authValue).split(':');
 
-        // ユーザー名は任意(user)、パスワードが一致すればOK
-        // または "user:password" 全体で一致を見る
-        if (user === 'user' && pwd === process.env.NEXT_PUBLIC_API_PASSWORD) {
+        // ユーザー名は任意、パスワードが一致すればOK
+        if (pwd === process.env.NEXT_PUBLIC_API_PASSWORD) {
             return NextResponse.next();
         }
     }

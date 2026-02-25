@@ -1,18 +1,21 @@
 'use client';
+import { authFetch } from '@/lib/api';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ReactFlowProvider, Connection } from 'reactflow';
+import { ReactFlowProvider, Connection, useReactFlow } from 'reactflow';
 import MindmapCanvas from '../../../components/mindmap/MindmapCanvas';
 import NodeDetailPanel from '../../../components/mindmap/NodeDetailPanel';
 import GoalSearchBar from '../../../components/mindmap/GoalSearchBar';
 import EditToolbar from '../../../components/mindmap/EditToolbar';
 import AddNodeDialog from '../../../components/mindmap/AddNodeDialog';
 import ContextMenu from '../../../components/mindmap/ContextMenu';
-import { Building2, ArrowLeft, Filter, ChevronDown, Plus, Edit2, Trash2, CornerDownRight, Minimize2, Maximize2 } from 'lucide-react';
+import IntegratedSidebar from '../../../components/mindmap/IntegratedSidebar'; // New
+import { useAutoRag } from '../../../hooks/useAutoRag'; // New
+import { Building2, ArrowLeft, Filter, ChevronDown, Plus, Edit2, Trash2, CornerDownRight, Minimize2, Maximize2, Sidebar } from 'lucide-react';
 import Link from 'next/link';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 interface ProcessNode {
     id: string;
@@ -26,6 +29,8 @@ interface ProcessNode {
     position: { x: number; y: number };
     status: string;
     is_custom?: boolean;
+    ragResults?: any[]; // Store RAG results in node data
+    chatHistory?: any[]; // Store Chat history
 }
 
 interface EdgeData {
@@ -81,6 +86,39 @@ export default function ProjectMapPage() {
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'node' | 'pane'; targetId?: string } | null>(null);
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
 
+    // Sidebar state
+    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const [sidebarWidth, setSidebarWidth] = useState(320);
+    const isDraggingSidebarRef = useRef(false);
+
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            if (!isDraggingSidebarRef.current) return;
+            const newWidth = document.body.clientWidth - e.clientX;
+            const clampedWidth = Math.max(300, Math.min(newWidth, 800));
+            setSidebarWidth(clampedWidth);
+        };
+        const handleMouseUp = () => {
+            if (isDraggingSidebarRef.current) {
+                isDraggingSidebarRef.current = false;
+                document.body.style.cursor = '';
+            }
+        };
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+            document.body.style.cursor = '';
+        };
+    }, []);
+
+    const startSidebarResize = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        isDraggingSidebarRef.current = true;
+        document.body.style.cursor = 'ew-resize';
+    }, []);
+
     const activeNodes = project?.nodes || [];
     const activeEdges = project?.edges || [];
 
@@ -88,13 +126,13 @@ export default function ProjectMapPage() {
     const loadProject = useCallback(async (isInitial = false) => {
         if (isInitial) setLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/projects/${projectId}`);
+            const res = await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}`);
             if (!res.ok) throw new Error('Project not found');
             const data = await res.json();
             setProject(data);
 
             // Load next actions
-            const actionsRes = await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/next-actions`);
+            const actionsRes = await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/next-actions`);
             if (actionsRes.ok) {
                 setNextActions(await actionsRes.json());
             }
@@ -117,11 +155,109 @@ export default function ProjectMapPage() {
         setTimeout(() => setSaveStatus('idle'), 2500);
     }, []);
 
+    // ─────────────────────────────────────────────────────────────
+    // Integrated Sidebar Logic
+    // ─────────────────────────────────────────────────────────────
+
+    const selectedNode = useMemo(() => {
+        return activeNodes.find(n => n.id === selectedNodeId) || null;
+    }, [activeNodes, selectedNodeId]);
+
+    // Auto-RAG Hook
+    const { isSearching } = useAutoRag({
+        projectId,
+        selectedNode,
+        onResultsFound: (nodeId, data) => {
+            // Update node with RAG results
+            setProject(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    nodes: prev.nodes.map(n =>
+                        n.id === nodeId
+                            ? { ...n, ragResults: data.results }
+                            : n
+                    )
+                };
+            });
+            // Persist to backend (optional, if we want to save RAG results permanently)
+            // For now, we keep it in memory or could save as special metadata
+        }
+    });
+
+    // Chat Handler
+    const handleChatSend = async (message: string) => {
+        if (!selectedNodeId) return;
+
+        // Add user message
+        const newMessage = { role: 'user', content: message };
+
+        setProject(prev => {
+            if (!prev) return null;
+            return {
+                ...prev,
+                nodes: prev.nodes.map(n => {
+                    if (n.id === selectedNodeId) {
+                        return { ...n, chatHistory: [...(n.chatHistory || []), newMessage] };
+                    }
+                    return n;
+                })
+            };
+        });
+
+        // Mock AI Response (Replace with real API call if needed)
+        // Ideally, call /api/mindmap/ai/chat
+        setTimeout(() => {
+            const aiMessage = { role: 'assistant', content: `AIの回答モック: "${message}" についてですね。このノードのコンテキストとRAG結果に基づいて回答します。` };
+            setProject(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    nodes: prev.nodes.map(n => {
+                        if (n.id === selectedNodeId) {
+                            return { ...n, chatHistory: [...(n.chatHistory || []), aiMessage] };
+                        }
+                        return n;
+                    })
+                };
+            });
+        }, 1000);
+    };
+
+    // Drag & Drop Knowledge to Canvas
+    const onDragStartKnowledge = (event: React.DragEvent, item: any) => {
+        event.dataTransfer.setData('application/json', JSON.stringify({
+            type: 'knowledge',
+            sourceId: selectedNodeId,
+            content: item.content,
+            source: item.source
+        }));
+        event.dataTransfer.effectAllowed = 'copy';
+    };
+
+    const onDropOnCanvas = useCallback(async (event: React.DragEvent) => {
+        event.preventDefault();
+
+        const dataStr = event.dataTransfer.getData('application/json');
+        if (!dataStr) return;
+
+        try {
+            const data = JSON.parse(dataStr);
+            if (data.type === 'knowledge' && data.sourceId) {
+                console.log("Dropped knowledge:", data);
+            }
+        } catch (e) {
+            console.error("Drop parse error", e);
+        }
+    }, [/*handleAddNodeAt*/]);
+
+    // ─────────────────────────────────────────────────────────────
+
     // Goal search
     const handleGoalSearch = async (nodeId: string) => {
         if (!project) return;
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/tree/${project.template_id}/${nodeId}`);
+            const res = await authFetch(`${API_BASE}/api/mindmap/tree/${project.template_id}/${nodeId}`);
             const data = await res.json();
             setHighlightedNodes(new Set(data.path_order));
             const edgeIds = new Set<string>();
@@ -144,7 +280,7 @@ export default function ProjectMapPage() {
     // Node operations
     const handleStatusChange = async (nodeId: string, newStatus: string) => {
         try {
-            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ status: newStatus }),
@@ -163,7 +299,7 @@ export default function ProjectMapPage() {
         if (ids.length === 0) return;
         try {
             await Promise.all(ids.map(nodeId =>
-                fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
+                authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ status: newStatus }),
@@ -202,7 +338,7 @@ export default function ProjectMapPage() {
         });
 
         try {
-            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ pos_x: x, pos_y: y }),
@@ -217,7 +353,7 @@ export default function ProjectMapPage() {
 
     const handleNodeLabelChange = async (nodeId: string, newLabel: string) => {
         try {
-            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ label: newLabel }),
@@ -248,7 +384,7 @@ export default function ProjectMapPage() {
             // Find source node's category to inherit
             const sourceNode = sourceNodeId ? activeNodes.find(n => n.id === sourceNodeId) : null;
 
-            const res = await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -267,7 +403,7 @@ export default function ProjectMapPage() {
                 const newNodeId = newNode.node_id || newNode.id;
                 if (newNodeId) {
                     // Auto-connect edge from source to new node
-                    await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
+                    await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -291,7 +427,7 @@ export default function ProjectMapPage() {
     // Connect two existing nodes with an edge
     const handleConnectNodes = async (sourceId: string, targetId: string) => {
         try {
-            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -313,11 +449,11 @@ export default function ProjectMapPage() {
         if (!newConnection.source || !newConnection.target) return;
         try {
             // Delete old edge
-            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${oldEdge.id}`, {
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${oldEdge.id}`, {
                 method: 'DELETE',
             });
             // Create new edge
-            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -337,10 +473,9 @@ export default function ProjectMapPage() {
 
     const handleEdgesDelete = async (edgeIds: string[]) => {
         if (edgeIds.length === 0) return;
-        // Removed confirmation dialog as requested
         try {
             await Promise.all(edgeIds.map(id =>
-                fetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${id}`, {
+                authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${id}`, {
                     method: 'DELETE',
                 })
             ));
@@ -354,10 +489,9 @@ export default function ProjectMapPage() {
 
     const handleNodesDelete = async (nodeIds: string[]) => {
         if (nodeIds.length === 0) return;
-        // Removed confirmation dialog as requested
         try {
             await Promise.all(nodeIds.map(id =>
-                fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${id}`, {
+                authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${id}`, {
                     method: 'DELETE',
                 })
             ));
@@ -384,7 +518,7 @@ export default function ProjectMapPage() {
                 };
             });
 
-            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(updates),
@@ -407,7 +541,7 @@ export default function ProjectMapPage() {
         checklist: string[];
     }) => {
         try {
-            await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes`, {
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -428,13 +562,9 @@ export default function ProjectMapPage() {
     const handleDeleteNode = async () => {
         const idsToDelete = selectedNodeIds.size > 0 ? Array.from(selectedNodeIds) : (selectedNodeId ? [selectedNodeId] : []);
         if (idsToDelete.length === 0) return;
-        // const msg = idsToDelete.length > 1
-        //     ? `${idsToDelete.length}個のノードを削除しますか？`
-        //     : 'このノードを削除しますか？';
-        // if (!confirm(msg)) return; // Removed confirmation
         try {
             await Promise.all(idsToDelete.map(id =>
-                fetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${id}`, {
+                authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${id}`, {
                     method: 'DELETE',
                 })
             ));
@@ -450,7 +580,7 @@ export default function ProjectMapPage() {
 
     const handleUndo = async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/mindmap/projects/${projectId}/undo`, {
+            const res = await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/undo`, {
                 method: 'POST',
             });
             if (res.ok) {
@@ -463,10 +593,76 @@ export default function ProjectMapPage() {
         }
     };
 
-    // Computed values
-    const selectedNode = useMemo(() => {
-        return activeNodes.find(n => n.id === selectedNodeId) || null;
-    }, [activeNodes, selectedNodeId]);
+    // AI Copilot Handler
+    const handleAiAction = async (action: 'summarize' | 'expand' | 'rag' | 'investigate', nodeId: string, content: string) => {
+        const node = activeNodes.find(n => n.id === nodeId);
+        if (!node) return;
+
+        showSaveStatus();
+
+        try {
+            const res = await authFetch(`${API_BASE}/api/mindmap/ai/action`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action,
+                    nodeId,
+                    content: content || node.label,
+                    context: {
+                        projectId,
+                        projectContext: project?.description,
+                        nodeContext: node
+                    }
+                }),
+            });
+
+            if (!res.ok) throw new Error('AI API failed');
+
+            const data = await res.json();
+
+            if ((action === 'expand' || action === 'investigate') && data.text) {
+                // Add to chat history
+                const title = action === 'expand' ? 'アイデア拡張' : '調査レポート';
+                const aiMessage = {
+                    role: 'assistant',
+                    content: `【${title}: ${node.label}】\n\n${data.text}`
+                };
+
+                setProject(prev => {
+                    if (!prev) return null;
+                    return {
+                        ...prev,
+                        nodes: prev.nodes.map(n => {
+                            if (n.id === nodeId) {
+                                return { ...n, chatHistory: [...(n.chatHistory || []), aiMessage] };
+                            }
+                            return n;
+                        })
+                    };
+                });
+
+                // Persist chat history
+                const updatedChatHistory = [...(node.chatHistory || []), aiMessage];
+                await handleNodeUpdate(nodeId, { chatHistory: updatedChatHistory });
+
+                // Open sidebar
+                setIsSidebarOpen(true);
+            } else if ((action === 'summarize' || action === 'rag') && data.text) {
+                const newDescription = (node.description ? node.description + '\n\n' : '') + data.text;
+                await handleNodeUpdate(nodeId, { description: newDescription });
+                setSelectedNodeId(nodeId);
+
+
+            }
+
+            showSaveStatus();
+            loadProject(false);
+        } catch (err) {
+            console.error('AI Action error:', err);
+            alert('AI処理に失敗しました。');
+        }
+    };
+
 
     const selectedNodeEdges = useMemo(() => {
         if (!selectedNodeId) return { incoming: [] as EdgeData[], outgoing: [] as EdgeData[] };
@@ -478,7 +674,6 @@ export default function ProjectMapPage() {
     // Keyboard Shortcuts
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Ignore if input/textarea is focused
             if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
 
             if (e.key === 'z' && (e.metaKey || e.ctrlKey)) {
@@ -486,32 +681,23 @@ export default function ProjectMapPage() {
                 handleUndo();
             } else if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                showSaveStatus(); // Manual save is just visual since we auto-save
+                showSaveStatus();
             } else if (e.key === 'n' || e.key === 'N') {
                 e.preventDefault();
                 if (selectedNodeId) {
-                    // Add child
                     const parent = activeNodes.find(n => n.id === selectedNodeId);
                     if (parent) {
                         handleAddNodeAt('新規ノード', parent.position.x + 200, parent.position.y, selectedNodeId);
                     }
                 } else {
-                    // Add independent
                     setShowAddDialog(true);
-                }
-            } else if (e.key === ' ' || e.key === 'Space') {
-                e.preventDefault();
-                if (selectedNodeId) {
-                    // Trigger edit mode visually or focus
-                    // For now, we rely on double-click, but we could trigger it via state if CustomNode supported it
-                    // TODO: Pass 'forceEdit' to CustomNode?
                 }
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedNodeId, activeNodes, undoCount]); // Dependencies for actions
+    }, [selectedNodeId, activeNodes, undoCount]);
 
     // Context Menu Handlers
     const handleNodeContextMenu = useCallback((event: React.MouseEvent, nodeId: string) => {
@@ -538,18 +724,15 @@ export default function ProjectMapPage() {
     }, []);
 
     const { visibleNodes, visibleEdges, descendantCounts } = useMemo(() => {
-        // 1. Build adjacency list for efficient traversal
         const adjacency = new Map<string, string[]>();
         activeEdges.forEach(e => {
             if (!adjacency.has(e.source)) adjacency.set(e.source, []);
             adjacency.get(e.source)!.push(e.target);
         });
 
-        // 2. Identify hidden nodes (descendants of collapsed nodes)
         const hiddenNodeIds = new Set<string>();
         const counts = new Map<string, number>();
 
-        // Helper to get all descendants
         const getDescendants = (rootId: string): Set<string> => {
             const descendants = new Set<string>();
             const queue = [rootId];
@@ -566,26 +749,20 @@ export default function ProjectMapPage() {
             return descendants;
         };
 
-        // For each collapsed node, hide its descendants
         collapsedNodeIds.forEach(collapsedId => {
             const descendants = getDescendants(collapsedId);
             descendants.forEach(d => hiddenNodeIds.add(d));
             counts.set(collapsedId, descendants.size);
         });
 
-        // 3. Filter nodes
         const nodes = activeNodes.filter(n => {
-            // Apply phase/category filters
             if (!filterPhases.has(n.phase) || !filterCategories.has(n.category)) return false;
-            // Apply collapse filter
             if (hiddenNodeIds.has(n.id)) return false;
             return true;
         });
 
-        // 4. Filter edges
         const visibleNodeIds = new Set(nodes.map(n => n.id));
         const edges = activeEdges.filter(e => {
-            // Both source and target must be visible
             return visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target);
         });
 
@@ -610,10 +787,6 @@ export default function ProjectMapPage() {
         });
     };
 
-    const getNodeLabel = (nodeId: string) => {
-        return activeNodes.find(n => n.id === nodeId)?.label || nodeId;
-    };
-
     const completedCount = activeNodes.filter(n => n.status === '決定済み').length;
     const progressPercent = activeNodes.length > 0 ? Math.round(completedCount / activeNodes.length * 100) : 0;
 
@@ -630,7 +803,6 @@ export default function ProjectMapPage() {
 
     return (
         <div className="min-h-screen flex flex-col bg-[var(--canvas-bg)]">
-            {/* Header */}
             <header className="border-b border-[var(--border)] bg-white/80 backdrop-blur-sm sticky top-0 z-50">
                 <div className="max-w-full mx-auto px-4 py-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -652,8 +824,16 @@ export default function ProjectMapPage() {
                         </div>
                     </div>
 
-                    {/* Progress bar + save status */}
                     <div className="flex items-center gap-4">
+                        <button
+                            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                            className={`p-2 rounded-md transition-colors ${isSidebarOpen ? 'bg-blue-100 text-blue-600' : 'text-gray-500 hover:bg-gray-100'
+                                }`}
+                            title="サイドバー切り替え"
+                        >
+                            <Sidebar className="w-5 h-5" />
+                        </button>
+
                         {saveStatus !== 'idle' && (
                             <span className={`text-xs font-medium transition-opacity ${saveStatus === 'saving' ? 'text-amber-500' : 'text-green-600'
                                 }`}>
@@ -673,11 +853,8 @@ export default function ProjectMapPage() {
                 </div>
             </header>
 
-            {/* Main Content */}
             <div className="flex-1 flex overflow-hidden">
-                {/* Left Sidebar */}
-                <aside className="w-64 border-r border-[var(--border)] bg-white/50 flex flex-col overflow-y-auto">
-                    {/* Next Actions */}
+                <aside className="w-64 border-r border-[var(--border)] bg-white/50 flex flex-col overflow-y-auto hidden md:flex">
                     {nextActions.length > 0 && (
                         <div className="p-3 border-b border-[var(--border)]">
                             <h4 className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider mb-2">
@@ -698,7 +875,6 @@ export default function ProjectMapPage() {
                         </div>
                     )}
 
-                    {/* Goal Search */}
                     <div className="p-3 border-b border-[var(--border)]">
                         <GoalSearchBar
                             nodes={activeNodes}
@@ -708,7 +884,6 @@ export default function ProjectMapPage() {
                         />
                     </div>
 
-                    {/* Filters */}
                     <div className="p-3 border-b border-[var(--border)]">
                         <button
                             onClick={() => setIsFilterOpen(!isFilterOpen)}
@@ -748,9 +923,9 @@ export default function ProjectMapPage() {
                                                     type="checkbox"
                                                     checked={filterCategories.has(cat)}
                                                     onChange={() => toggleCategory(cat)}
-                                                    className="rounded border-[var(--border)]"
+                                                    className="rounded border-[var(--border)] accent-violet-500"
                                                 />
-                                                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[cat] }} />
+                                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[cat] }} />
                                                 {cat}
                                             </label>
                                         ))}
@@ -759,189 +934,129 @@ export default function ProjectMapPage() {
                             </div>
                         )}
                     </div>
-
-                    {/* Legend */}
-                    <div className="p-3 border-b border-[var(--border)]">
-                        <h4 className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider mb-2">凡例</h4>
-                        <div className="space-y-1.5 text-xs text-[var(--muted)]">
-                            <div className="flex items-center gap-2">
-                                <div className="w-8 h-0.5 bg-[var(--edge-hard)]" />
-                                <span>必須依存 (hard)</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <div className="w-8 h-0.5 border-t-2 border-dashed" style={{ borderColor: 'var(--edge-soft)' }} />
-                                <span>推奨依存 (soft)</span>
-                            </div>
-                        </div>
-                        <div className="mt-3 space-y-1 text-xs">
-                            {CATEGORIES.map(cat => (
-                                <div key={cat} className="flex items-center gap-2">
-                                    <span className="w-3 h-3 rounded" style={{ backgroundColor: CATEGORY_COLORS[cat] }} />
-                                    <span className="text-[var(--muted)]">{cat}</span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Stats */}
-                    <div className="p-3 text-xs text-[var(--muted)]">
-                        <p>{visibleNodes.length} / {activeNodes.length} ノード表示</p>
-                        <p>{visibleEdges.length} 依存関係</p>
-                        {isEditMode && (
-                            <p className="mt-1 text-violet-600 font-medium">✏️ 編集モード</p>
-                        )}
-                    </div>
                 </aside>
 
-                {/* Canvas */}
-                <div className="flex-1 relative">
-                    <EditToolbar
-                        isEditMode={isEditMode}
-                        isProjectMode={true}
-                        onToggleEditMode={() => setIsEditMode(!isEditMode)}
-                        onAddNode={() => setShowAddDialog(true)}
-                        onDeleteNode={handleDeleteNode}
-                        onUndo={handleUndo}
-                        hasSelectedNode={!!selectedNodeId}
-                        canUndo={undoCount > 0}
-                    />
+                <main className="flex-1 relative bg-dot-pattern"
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={async (e) => {
+                        e.preventDefault();
+                        const dataStr = e.dataTransfer.getData('application/json');
+                        if (!dataStr) return;
+                        try {
+                            const data = JSON.parse(dataStr);
+                            if (data.type === 'knowledge' && data.sourceId) {
+                                const sourceNode = activeNodes.find(n => n.id === data.sourceId);
+                                const x = sourceNode ? sourceNode.position.x + 300 : 400;
+                                const y = sourceNode ? sourceNode.position.y : 400;
 
+                                await handleAddNodeAt(
+                                    data.content.substring(0, 20) + "...", // Short label
+                                    x,
+                                    y,
+                                    data.sourceId
+                                );
+                            }
+                        } catch (err) {
+                            console.error("Drop error", err);
+                        }
+                    }}
+                >
                     <ReactFlowProvider>
                         <MindmapCanvas
                             nodes={visibleNodes}
                             edges={visibleEdges}
+                            allEdges={activeEdges}
                             selectedNodeId={selectedNodeId}
                             selectedNodeIds={selectedNodeIds}
                             highlightedNodes={highlightedNodes}
                             highlightedEdges={highlightedEdges}
                             onNodeSelect={setSelectedNodeId}
-                            onSelectionChange={handleSelectionChange}
+                            onSelectionChange={(ids) => setSelectedNodeIds(new Set(ids))}
                             categoryColors={CATEGORY_COLORS}
                             isEditMode={isEditMode}
                             onNodeDragStop={handleNodeDragStop}
                             onAddNodeAt={handleAddNodeAt}
                             onConnectNodes={handleConnectNodes}
+                            onEdgeUpdate={handleEdgeUpdate}
+                            onEdgesDelete={handleEdgesDelete}
+                            onNodesDelete={handleNodesDelete}
                             collapsedNodeIds={collapsedNodeIds}
                             descendantCounts={descendantCounts}
                             onNodeLabelChange={handleNodeLabelChange}
                             onNodeCollapse={handleNodeCollapse}
                             onNodeContextMenu={handleNodeContextMenu}
                             onPaneContextMenu={handlePaneContextMenu}
-                            onEdgeUpdate={handleEdgeUpdate}
-                            onEdgesDelete={handleEdgesDelete}
-                            onNodesDelete={handleNodesDelete}
+                            onAiAction={handleAiAction}
                         />
-                    </ReactFlowProvider>
-                </div>
-
-                {/* Batch Selection Toolbar */}
-                {selectedNodeIds.size > 1 && (
-                    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 bg-white/95 backdrop-blur-sm border border-[var(--border)] rounded-xl shadow-2xl px-5 py-3 flex items-center gap-4">
-                        <span className="text-sm font-medium text-[var(--foreground)]">
-                            {selectedNodeIds.size} 個選択中
-                        </span>
-                        <div className="w-px h-6 bg-[var(--border)]" />
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs text-[var(--muted)]">一括変更:</span>
-                            {['未着手', '検討中', '決定済み'].map(s => (
-                                <button
-                                    key={s}
-                                    onClick={() => handleBatchStatusChange(s)}
-                                    className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${s === '決定済み' ? 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200'
-                                        : s === '検討中' ? 'bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200'
-                                            : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
-                                        }`}
-                                >
-                                    {s}
-                                </button>
-                            ))}
+                        <div className="absolute top-4 right-4 flex flex-col gap-2">
+                            <EditToolbar
+                                isEditMode={isEditMode}
+                                isProjectMode={true}
+                                onToggleEditMode={() => setIsEditMode(!isEditMode)}
+                                onAddNode={() => setShowAddDialog(true)}
+                                onDeleteNode={handleDeleteNode}
+                                onInvestigate={() => selectedNodeId && handleAiAction('investigate', selectedNodeId, '')}
+                                onUndo={handleUndo}
+                                hasSelectedNode={!!selectedNodeId || selectedNodeIds.size > 0}
+                                canUndo={undoCount > 0}
+                            />
                         </div>
-                        {isEditMode && (
-                            <>
-                                <div className="w-px h-6 bg-[var(--border)]" />
-                                <button
-                                    onClick={handleDeleteNode}
-                                    className="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors"
-                                >
-                                    削除
-                                </button>
-                            </>
-                        )}
-                        <button
-                            onClick={() => setSelectedNodeIds(new Set())}
-                            className="ml-2 text-[var(--muted)] hover:text-[var(--foreground)] text-xs"
-                        >
-                            ✕ 解除
-                        </button>
-                    </div>
-                )}
+                    </ReactFlowProvider>
+                </main>
 
-                {/* Right Detail Panel */}
-                {selectedNode && (
-                    <aside className="w-96 border-l border-[var(--border)] bg-white/50 overflow-y-auto">
-                        <NodeDetailPanel
-                            node={selectedNode}
-                            incomingEdges={selectedNodeEdges.incoming}
-                            outgoingEdges={selectedNodeEdges.outgoing}
-                            getNodeLabel={getNodeLabel}
-                            categoryColor={CATEGORY_COLORS[selectedNode.category] || '#6b7280'}
-                            onClose={() => setSelectedNodeId(null)}
-                            onNavigate={(nodeId) => setSelectedNodeId(nodeId)}
-                            isEditMode={isEditMode}
-                            onStatusChange={handleStatusChange}
-                            phases={PHASES}
-                            categories={CATEGORIES}
-                            onUpdate={handleNodeUpdate}
-                        />
+                {isSidebarOpen && (
+                    <aside className="border-l border-[var(--border)] bg-white/50 flex flex-col shadow-xl z-10 relative flex-shrink-0" style={{ width: sidebarWidth }}>
+                        {/* Resizer Handle */}
+                        <div
+                            className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-blue-400/20 z-50 flex items-center justify-center group -ml-1.5"
+                            onMouseDown={startSidebarResize}
+                        >
+                            <div className="w-1 h-12 bg-gray-300 rounded-full group-hover:bg-blue-500 transition-colors" />
+                        </div>
+                        <div className="flex-1 w-full overflow-hidden flex flex-col">
+                            <IntegratedSidebar
+                                selectedNode={selectedNode}
+                                knowledge={selectedNode?.ragResults || []}
+                                chatHistory={selectedNode?.chatHistory || []}
+                                isSearching={isSearching}
+                                onChatSend={handleChatSend}
+                                onDragStart={onDragStartKnowledge}
+                            />
+                        </div>
                     </aside>
                 )}
             </div>
 
-            {/* Context Menu */}
+            {showAddDialog && (
+                <AddNodeDialog
+                    onClose={() => setShowAddDialog(false)}
+                    onAdd={handleAddNode}
+                />
+            )}
+
             {contextMenu && (
                 <ContextMenu
                     x={contextMenu.x}
                     y={contextMenu.y}
-                    onClose={handleCloseContextMenu}
-                    options={contextMenu.type === 'node' && contextMenu.targetId ? [
-                        {
-                            label: '子ノードを追加',
-                            icon: <CornerDownRight className="w-4 h-4" />,
-                            shortcut: 'N',
-                            action: () => {
-                                const parent = activeNodes.find(n => n.id === contextMenu.targetId);
-                                if (parent) {
-                                    handleAddNodeAt('新規ノード', parent.position.x + 250, parent.position.y, contextMenu.targetId);
+                    options={[
+                        ...(contextMenu.type === 'node' ? [
+                            { label: '編集', icon: <Edit2 className="w-4 h-4" />, action: () => { handleCloseContextMenu(); /* TODO: Edit */ } },
+                            { label: '削除', icon: <Trash2 className="w-4 h-4" />, action: () => { handleDeleteNode(); handleCloseContextMenu(); }, danger: true },
+                            {
+                                label: '子ノード追加', icon: <CornerDownRight className="w-4 h-4" />, action: () => {
+                                    if (selectedNodeId) {
+                                        const parent = activeNodes.find(n => n.id === selectedNodeId);
+                                        if (parent) handleAddNodeAt('新規ノード', parent.position.x + 200, parent.position.y, selectedNodeId);
+                                    }
+                                    handleCloseContextMenu();
                                 }
                             }
-                        },
-                        {
-                            label: collapsedNodeIds.has(contextMenu.targetId) ? '展開する' : '折りたたむ',
-                            icon: collapsedNodeIds.has(contextMenu.targetId) ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />,
-                            action: () => handleNodeCollapse(contextMenu.targetId!)
-                        },
-                        {
-                            label: '削除',
-                            icon: <Trash2 className="w-4 h-4" />,
-                            danger: true,
-                            shortcut: 'Del',
-                            action: handleDeleteNode
-                        }
-                    ] : [
-                        {
-                            label: 'ここにノードを追加',
-                            icon: <Plus className="w-4 h-4" />,
-                            action: () => setShowAddDialog(true) // Ideal: use screen pos, but dialog doesn't support it yet
-                        }
+                        ] : []),
+                        ...(contextMenu.type === 'pane' ? [
+                            { label: '新規ノード作成', icon: <Plus className="w-4 h-4" />, action: () => { setShowAddDialog(true); handleCloseContextMenu(); } }
+                        ] : [])
                     ]}
-                />
-            )}
-
-            {/* Add Node Dialog */}
-            {showAddDialog && (
-                <AddNodeDialog
-                    onAdd={handleAddNode}
-                    onClose={() => setShowAddDialog(false)}
+                    onClose={handleCloseContextMenu}
                 />
             )}
         </div>
