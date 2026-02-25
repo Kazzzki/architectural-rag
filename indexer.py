@@ -226,8 +226,8 @@ def extract_text(filepath: str) -> List[Dict[str, Any]]:
         elif ext == ".docx":
             return _extract_docx(filepath)
         return []
-    except (fitz.fitz.FitzError, ValueError, IOError) as e:
-        logger.error(f"テキスト抽出エラー ({filepath}): {e}", exc_info=True)
+    except (fitz.FileDataError, ValueError, IOError) as e:
+        logger.error(f"  PyMuPDF open error {filepath}: {e}")
         return []
 
 
@@ -366,6 +366,7 @@ def chunk_for_indexing(
     tags_str: str = "",
     drawing_type: Optional[str] = None,
     scale: Optional[str] = None,
+    drive_file_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     テキストを Small-to-Big チャンクに分割し、
@@ -409,6 +410,7 @@ def chunk_for_indexing(
             "has_image":        has_image,
             "chunk_index":      idx,
             "parent_chunk_id":  parent_id,
+            "drive_file_id":    drive_file_id or "",
             # --- オプションフィールド（後方互換） ---
             "drawing_type":     drawing_type or "",
             "scale":            scale or "",
@@ -432,6 +434,8 @@ def chunk_for_indexing(
             missing.append("category")
         if not metadata["doc_type"]:
             missing.append("doc_type")
+        if not metadata.get("drive_file_id"):
+            missing.append("drive_file_id")
 
         if missing:
             logger.error(
@@ -471,6 +475,10 @@ def _upsert_doc_index(rel_path: str, file_info: Dict[str, Any], chunk_count: int
         doc.file_size    = int(file_info.get("file_size_kb", 0) * 1024)
         doc.category     = file_info.get("category", "")
         doc.subcategory  = file_info.get("subcategory", "")
+        doc.doc_type     = file_info.get("doc_type", "")
+        doc.source_pdf_hash = file_info.get("source_pdf_hash", "")
+        doc.source_pdf_name = file_info.get("source_pdf_name", "")
+        doc.drive_file_id = file_info.get("drive_file_id", "")
         doc.updated_at   = datetime.now()
         session.commit()
     except Exception as e:
@@ -573,6 +581,7 @@ def _index_single_file_info(
 
     tags_str = ",".join(frontmatter.get("tags", []))
     category = frontmatter.get("primary_category") or file_info["category"]
+    drive_file_id = file_info.get("drive_file_id", "")
 
     chunk_total = 0
     for page in pages:
@@ -589,9 +598,16 @@ def _index_single_file_info(
             file_type=file_info["file_type"],
             modified_at=file_info.get("modified_at", ""),
             tags_str=tags_str,
+            drive_file_id=drive_file_id,
         )
+        # Populate these so _upsert_doc_index has them later if needed
+        file_info["source_pdf_hash"] = source_pdf_hash
+        file_info["source_pdf_name"] = source_pdf_name
+        file_info["doc_type"] = doc_type
+
         for chunk in chunks:
-            doc_id = generate_doc_id(source_pdf_hash, rel_path, chunk["metadata"]["chunk_index"])
+            chunk["metadata"]["chunk_index"] = chunk_total
+            doc_id = generate_doc_id(source_pdf_hash, rel_path, chunk_total)
             collection.upsert(
                 ids=[doc_id],
                 documents=[chunk["text"]],

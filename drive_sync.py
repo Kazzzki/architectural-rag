@@ -306,6 +306,49 @@ def upload_recursive(service, local_path: Path, parent_id: str = None, stats: Di
             stats['errors'] += 1
 
 
+def upload_single_file_to_drive(local_path: str, target_folder_name: str = "建築意匠ナレッジDB", subfolder_name: str = "pdfs") -> Optional[str]:
+    """1つのファイルを指定したDriveフォルダにアップロードまたは更新し、ファイルIDを返す"""
+    service = get_drive_service()
+    try:
+        root_id = create_folder(service, target_folder_name)
+        if subfolder_name:
+            folder_id = create_folder(service, subfolder_name, root_id)
+        else:
+            folder_id = root_id
+            
+        local_p = Path(local_path)
+        if not local_p.exists() or not local_p.is_file():
+            return None
+            
+        query = f"name = '{local_p.name}' and '{folder_id}' in parents and trashed = false"
+        results = service.files().list(q=query, fields='files(id)').execute()
+        files = results.get('files', [])
+        
+        from googleapiclient.http import MediaFileUpload
+        media = MediaFileUpload(str(local_p), resumable=True)
+        
+        if files:
+            logger.info(f"Drive single upload: Updating {local_p.name}")
+            result = service.files().update(
+                fileId=files[0]['id'],
+                media_body=media
+            ).execute()
+            return files[0]['id']
+        else:
+            logger.info(f"Drive single upload: Creating {local_p.name}")
+            file_metadata = {'name': local_p.name, 'parents': [folder_id]}
+            result = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id'
+            ).execute()
+            return result.get('id')
+    except Exception as e:
+        logger.error(f"Single upload error ({local_path}): {e}", exc_info=True)
+        return None
+
+
+
 def _update_file_store_drive_id(local_path: Path, drive_id: str):
     """file_storeにDrive IDを記録（可能な場合）"""
     try:

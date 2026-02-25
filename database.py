@@ -34,6 +34,9 @@ class Document(Base):
     file_size = Column(Integer, default=0)         # バイト数
     category = Column(String, default="")          # フォルダ構造の第1層
     subcategory = Column(String, default="")       # フォルダ構造の第2層
+    doc_type = Column(String, nullable=True)       # catalog, drawing, spec, law 등
+    source_pdf_hash = Column(String, nullable=True)
+    source_pdf_name = Column(String, nullable=True)
 
     # --- OCR/処理ステータス (旧 ocr_progress.json) ---
     status = Column(String, default="unprocessed") # unprocessed, processing, completed, failed

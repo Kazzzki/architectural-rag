@@ -225,10 +225,24 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
         with open(filepath, 'rb') as f:
             pdf_hash = hashlib.sha256(f.read()).hexdigest()
 
+        # Google Driveへのアップロード実行とID取得
+        drive_file_id = ""
+        try:
+            from drive_sync import upload_single_file_to_drive
+            logger.info("Uploading PDF to Google Drive...")
+            # 連携用に元のファイル名でアップロードする
+            uploaded_id = upload_single_file_to_drive(filepath)
+            if uploaded_id:
+                drive_file_id = uploaded_id
+                logger.info(f"Successfully uploaded {filepath} to Drive: {drive_file_id}")
+        except Exception as e:
+            logger.error(f"Failed to upload {filepath} to Google Drive: {e}")
+
         # Frontmatter生成
         extra_meta = {
             "source_pdf": pdf_hash,
-            "pdf_filename": Path(filepath).name
+            "pdf_filename": Path(filepath).name,
+            "drive_file_id": drive_file_id
         }
         frontmatter = classifier.generate_frontmatter(classification_result, extra_meta)
         

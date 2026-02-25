@@ -7,51 +7,39 @@ from dotenv import load_dotenv
 # 環境変数をロード
 load_dotenv()
 
-# Google Driveマウントポイント
-GOOGLE_DRIVE_ROOT = os.getenv(
-    "GOOGLE_DRIVE_ROOT",
-    str(Path.home() / "Google Drive" / "My Drive")
-)
+# ローカルベースディレクトリ (Google Driveから完全分離)
+BASE_DIR = Path(__file__).parent
 
-# ナレッジベースフォルダ（Google Drive上）
-KNOWLEDGE_BASE_DIR = Path(os.path.join(GOOGLE_DRIVE_ROOT, "建築意匠ナレッジDB"))
+# 各種ディレクトリ
+KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
+PDF_STORAGE_DIR    = BASE_DIR / "data" / "pdfs"
 
-# ChromaDB保存先（ローカルに保持してDrive同期競合を回避）
-CHROMA_DB_DIR = str(Path(os.environ.get("RAG_BASE_DIR", str(Path(__file__).parent / "data"))) / "chroma_db")
+# ChromaDB保存先
+CHROMA_DB_DIR = str(BASE_DIR / "data" / "chroma")
 
 # ファイルインデックス保存先
 FILE_INDEX_PATH = str(KNOWLEDGE_BASE_DIR / "99_システム" / "file_index.json")
 
-# SQLiteデータベースパス (SQLAlchemy) - ローカルに保持 (ロック回避のため)
-# 既存のローカルデータを維持するか、移行するかはユーザー判断だが、システムデータはローカルが安全
-BASE_DIR = Path(os.environ.get("RAG_BASE_DIR", str(Path(__file__).parent / "data")))
-DB_PATH = f"sqlite:///{BASE_DIR / 'antigravity.db'}"
+# SQLiteデータベースパス
+DB_PATH = f"sqlite:///{BASE_DIR / 'data' / 'antigravity.db'}"
 
 # ===== ディレクトリ構成 =====
-# PDF と MD は同じカテゴリフォルダに同居する
-#   例: 建築意匠ナレッジDB/01_カタログ/document.pdf
-#       建築意匠ナレッジDB/01_カタログ/document.md  ← 同じフォルダ
-
-# 未分類フォルダ名（旧 uploads/）
+# 未分類フォルダ名
 UNCATEGORIZED_FOLDER = "00_未分類"
 
-# 後方互換エイリアス: PDF+MD を統合フォルダで管理するため両者ともKNOWLEDGE_BASE_DIRを指す
-REFERENCE_DIR = KNOWLEDGE_BASE_DIR  # 旧 "10_参照PDF/" → 廃止
-SEARCH_MD_DIR = KNOWLEDGE_BASE_DIR  # 旧 "20_検索MD/" → 廃止
+# 後方互換エリアス
+REFERENCE_DIR = KNOWLEDGE_BASE_DIR
+SEARCH_MD_DIR = KNOWLEDGE_BASE_DIR
 
-# 処理用データ・一時ファイル（ローカルに保持: Google Drive同期競合を回避）
-TEMP_CHUNK_DIR = BASE_DIR / "temp_chunks"  # OCR中の一時チャンクPDF（処理後自動削除）
-ERROR_DIR = BASE_DIR / "error"             # 処理失敗ファイルの隔離
+# 処理用データ・一時ファイル
+TEMP_CHUNK_DIR = BASE_DIR / "data" / "temp_chunks"
+ERROR_DIR = BASE_DIR / "data" / "error"
 
-# 後方互換のみ（新規コードでは使わない）
+# 後方互換のみ
 UPLOAD_DIR = KNOWLEDGE_BASE_DIR / UNCATEGORIZED_FOLDER
 
-# 実存するPDFの保存先（ハッシュ名で管理）
-PDF_STORAGE_DIR = BASE_DIR / "pdfs"
-
 # Small-to-Bigチャンク。親チャンクのMD保存先
-# {source_pdf_hash}/parent_{chunk_id}.md の形式で保存
-PARENT_CHUNKS_DIR = BASE_DIR / "parent_chunks"
+PARENT_CHUNKS_DIR = BASE_DIR / "data" / "parent_chunks"
 
 # OCR自動分類設定
 AUTO_CATEGORIZE_UPLOADS_ONLY = os.environ.get("AUTO_CATEGORIZE_UPLOADS_ONLY", "true").lower() == "true"

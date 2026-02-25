@@ -379,8 +379,8 @@ export default function Home() {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
-                        {/* Mindmap Link */}
+                    {/* Navigation Links */}
+                    <div className="flex items-center gap-2">
                         <Link
                             href="/mindmap"
                             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 border border-violet-500/30 text-violet-300 hover:from-violet-500/30 hover:to-fuchsia-500/30 hover:border-violet-500/50 transition-all text-sm font-medium"
@@ -388,18 +388,25 @@ export default function Home() {
                             <Map className="w-4 h-4" />
                             プロセスマップ
                         </Link>
-
-                        {/* Stats */}
-                        {stats && (
-                            <div className="hidden md:flex items-center gap-4 text-sm text-[var(--muted)]">
-                                <span className="flex items-center gap-1">
-                                    <FileText className="w-4 h-4" />
-                                    {stats.file_count}ファイル
-                                </span>
-                                <span>{stats.chunk_count}チャンク</span>
-                            </div>
-                        )}
+                        <Link
+                            href="/research-planner"
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500/20 to-indigo-500/20 border border-blue-500/30 text-blue-300 hover:from-blue-500/30 hover:to-indigo-500/30 hover:border-blue-500/50 transition-all text-sm font-medium"
+                        >
+                            <span className="w-4 h-4 flex items-center justify-center">📋</span>
+                            Research Planner
+                        </Link>
                     </div>
+
+                    {/* Stats */}
+                    {stats && (
+                        <div className="hidden md:flex items-center gap-4 text-sm text-[var(--muted)]">
+                            <span className="flex items-center gap-1">
+                                <FileText className="w-4 h-4" />
+                                {stats.file_count}ファイル
+                            </span>
+                            <span>{stats.chunk_count}チャンク</span>
+                        </div>
+                    )}
                 </div>
             </header>
 
@@ -416,7 +423,7 @@ export default function Home() {
                             Actually the design in StatsPanel is grid-cols-3. 
                             Let's assume it fits or style adjusts. 
                         */}
-                    </div>
+                    </div >
                     <StatsPanel stats={stats} onRefresh={fetchStats} isLoading={false} />
 
                     {/* File Upload Component (New) */}
@@ -795,10 +802,10 @@ export default function Home() {
                                 }
 
                                 <div ref={messagesEndRef} />
-                            </div>
+                            </div >
 
                             {/* Input */}
-                            <form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-4">
+                            < form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-4" >
                                 <div className="flex gap-2">
                                     <input
                                         type="text"
@@ -816,8 +823,8 @@ export default function Home() {
                                         <Send className="w-5 h-5" />
                                     </button>
                                 </div>
-                            </form>
-                        </div>
+                            </form >
+                        </div >
 
                         {/* Right Pane: PDF Viewer */}
                         {
@@ -831,7 +838,7 @@ export default function Home() {
                                 </div>
                             )
                         }
-                    </div>
+                    </div >
 
                     {/* Library Container */}
                     {
@@ -841,8 +848,8 @@ export default function Home() {
                             </div>
                         )
                     }
-                </div>
-            </div>
-        </div>
+                </div >
+            </div >
+        </div >
     );
 }

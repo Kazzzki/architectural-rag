@@ -169,19 +169,15 @@ app.add_middleware(
 
 
 # ====== Routers マウント ======
-from routers.system import router as system_router
-from routers.chat import router as chat_router
-from routers.pdf import router as pdf_router
-from routers.drive import router as drive_router
-from routers.tags import router as tags_router
-from routers.files import router as files_router
+from routers import system, chat, pdf, drive, tags, files, research
 
-app.include_router(system_router)
-app.include_router(chat_router)
-app.include_router(pdf_router)
-app.include_router(drive_router)
-app.include_router(tags_router)
-app.include_router(files_router)
+app.include_router(system.router)
+app.include_router(chat.router)
+app.include_router(pdf.router)
+app.include_router(drive.router)
+app.include_router(tags.router)
+app.include_router(files.router)
+app.include_router(research.router, prefix="/api/research", tags=["research"])
 
 @app.get("/")
 async def root():

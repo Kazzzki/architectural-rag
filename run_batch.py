@@ -25,6 +25,16 @@ def scan_only_pdfs(base_dir: Path):
         sub_subcategory = parts[2] if len(parts) > 3 else ""
         doc_type = _infer_doc_type(category, filepath.name)
 
+        from database import get_session, Document as DbDocument
+        drive_file_id = ""
+        session = get_session()
+        try:
+            doc = session.query(DbDocument).filter(DbDocument.file_path == str(rel_path)).first()
+            if doc and doc.drive_file_id:
+                drive_file_id = doc.drive_file_id
+        finally:
+            session.close()
+
         files.append({
             "filename":       filepath.name,
             "full_path":      str(filepath),
@@ -36,13 +46,15 @@ def scan_only_pdfs(base_dir: Path):
             "file_size_kb":   round(filepath.stat().st_size / 1024, 2),
             "modified_at":    datetime.fromtimestamp(filepath.stat().st_mtime).isoformat(),
             "doc_type":       doc_type,
+            "drive_file_id":  drive_file_id,
         })
     return files
 
 def run_batch(limit=5):
     init_db()
     
-    files = scan_only_pdfs(SEARCH_MD_DIR)
+    from config import PDF_STORAGE_DIR
+    files = scan_only_pdfs(PDF_STORAGE_DIR)
     client = get_chroma_client()
     embedding_function = GeminiEmbeddingFunction()
     collection = client.get_or_create_collection(
