@@ -16,9 +16,10 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 logger = logging.getLogger(__name__)
 
-# DBファイルの保存場所
-DB_DIR = Path(__file__).parent / "data"
-DB_PATH = f"sqlite:///{DB_DIR / 'antigravity.db'}"
+from config import DB_PATH, BASE_DIR
+
+# DBファイルの保存場所 (移行用)
+OLD_DB_FILE = BASE_DIR / "data" / "antigravity.db"
 
 Base = declarative_base()
 
@@ -65,12 +66,29 @@ class Document(Base):
 engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# 旧DBパス（データ移行用）
+# iCloud同期下の旧パスを想定。新しいDBパスはDB_DIR/antigravity.db
+OLD_DB_FILE = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "antigravity" / "data" / "antigravity.db"
+
 
 def init_db():
-    """テーブルを作成（存在しなければ）"""
-    DB_DIR.mkdir(parents=True, exist_ok=True)
+    """テーブルを作成（存在しなければ）およびデータ移行"""
+    # 新規パスのディレクトリ作成（config.pyでも行っているが念のため）
+    db_file_path = Path(DB_PATH.replace("sqlite:///", ""))
+    db_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 既存のDB（iCloud同期下）があれば、新規パスへコピー（移行）
+    if OLD_DB_FILE.exists() and not db_file_path.exists():
+        import shutil
+        try:
+            logger.info(f"Migrating database from {OLD_DB_FILE} to {db_file_path}")
+            shutil.copy2(OLD_DB_FILE, db_file_path)
+            logger.info("Database migration successful.")
+        except Exception as e:
+            logger.error(f"Database migration failed: {e}")
+
     Base.metadata.create_all(bind=engine)
-    logger.info(f"Database initialized at {DB_DIR / 'antigravity.db'}")
+    logger.info(f"Database initialized at {db_file_path}")
 
 
 def get_db():
@@ -216,7 +234,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     print("Initializing database...")
     init_db()
-    print(f"Database created at: {DB_DIR / 'antigravity.db'}")
+    db_file_path = Path(DB_PATH.replace("sqlite:///", ""))
+    print(f"Database created/migrated at: {db_file_path}")
 
     # 既存JSONからの移行
     result = migrate_from_json()

@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # ========== 定数 ==========
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
-SECRETS_DIR = BASE_DIR / "secrets"
+SECRETS_DIR = BASE_DIR / "data" / "secrets"
 SECRETS_DIR.mkdir(parents=True, exist_ok=True)
 CREDENTIALS_PATH = SECRETS_DIR / 'credentials.json'
 TOKEN_PATH = SECRETS_DIR / 'token.pickle'

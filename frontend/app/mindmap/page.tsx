@@ -75,7 +75,8 @@ export default function MindmapDashboard() {
             if (projRes.ok) setProjects(await projRes.json());
             if (tmplRes.ok) setTemplates(await tmplRes.json());
         } catch (err) {
-            console.error('Load error:', err);
+            console.error('Projects load error:', err);
+            setLoading(false);
         } finally {
             setLoading(false);
         }
