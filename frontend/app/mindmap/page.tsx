@@ -87,12 +87,12 @@ export default function MindmapDashboard() {
     }, [loadData]);
 
     // Create project
-    const handleCreateProject = async (name: string, templateId: string) => {
+    const handleCreateProject = async (name: string, templateId: string, buildingType: string) => {
         try {
             const res = await authFetch(`${API_BASE}/api/mindmap/projects`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, template_id: templateId }),
+                body: JSON.stringify({ name, template_id: templateId, building_type: buildingType }),
             });
             if (res.ok) {
                 const data = await res.json();
@@ -225,12 +225,12 @@ export default function MindmapDashboard() {
                                         onClick={() => router.push(`/mindmap/projects/${project.id}`)}
                                         className="group bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 cursor-pointer hover:border-violet-400 hover:shadow-lg hover:shadow-violet-100 transition-all"
                                     >
-                                        <div className="flex items-start justify-between mb-3">
+                                        <div className="flex items-start justify-between mb-2">
                                             <div>
                                                 <h3 className="font-semibold text-[var(--foreground)] group-hover:text-violet-700 transition-colors">
                                                     {project.name}
                                                 </h3>
-                                                <p className="text-xs text-[var(--muted)] mt-0.5">{project.description}</p>
+                                                <p className="text-xs text-[var(--muted)] mt-0.5 line-clamp-1">{project.description}</p>
                                             </div>
                                             <button
                                                 onClick={(e) => handleDeleteProject(project.id, e)}
@@ -240,11 +240,30 @@ export default function MindmapDashboard() {
                                             </button>
                                         </div>
 
+                                        <div className="flex items-center gap-2 mb-3 flex-wrap">
+                                            {project.building_type && (
+                                                <span className="text-[10px] px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full font-medium">
+                                                    🏢 {project.building_type}
+                                                </span>
+                                            )}
+                                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${project.status === 'active'
+                                                ? 'bg-green-50 text-green-600'
+                                                : 'bg-slate-100 text-slate-500'
+                                                }`}>
+                                                {project.status === 'active' ? '進行中' : 'アーカイブ'}
+                                            </span>
+                                        </div>
+
                                         {/* Progress Bar */}
                                         <div className="mb-3">
-                                            <div className="flex items-center justify-between text-xs text-[var(--muted)] mb-1">
-                                                <span>進捗</span>
-                                                <span>{project.progress.percent}%</span>
+                                            <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
+                                                <span>
+                                                    ✅ {project.progress.completed}件完了
+                                                    {project.progress.in_progress > 0 && (
+                                                        <span className="ml-2">🔄 {project.progress.in_progress}件検討中</span>
+                                                    )}
+                                                </span>
+                                                <span className="font-semibold text-violet-600">{project.progress.percent}%</span>
                                             </div>
                                             <div className="w-full h-2 bg-[var(--background)] rounded-full overflow-hidden">
                                                 <div
@@ -380,10 +399,13 @@ function CreateProjectDialog({
 }: {
     templates: TemplateListItem[];
     onClose: () => void;
-    onCreate: (name: string, templateId: string) => void;
+    onCreate: (name: string, templateId: string, buildingType: string) => void;
 }) {
     const [name, setName] = useState('');
     const [templateId, setTemplateId] = useState(templates[0]?.id || '');
+    const [buildingType, setBuildingType] = useState('');
+
+    const BUILDING_TYPES = ['事務所', '住宅', '商業施設', '工場・物流', '医療・福祉', '教育', 'その他'];
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
@@ -403,6 +425,21 @@ function CreateProjectDialog({
                             className="w-full px-3 py-2 bg-[var(--background)] border border-[var(--border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
                             autoFocus
                         />
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-[var(--muted)] mb-1">建物用途（任意）</label>
+                        <div className="relative">
+                            <select
+                                value={buildingType}
+                                onChange={(e) => setBuildingType(e.target.value)}
+                                className="w-full px-3 py-2 bg-[var(--background)] border border-[var(--border)] rounded-lg text-sm appearance-none pr-8 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            >
+                                <option value="">選択してください</option>
+                                {BUILDING_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--muted)] pointer-events-none" />
+                        </div>
                     </div>
 
                     <div>
@@ -434,7 +471,7 @@ function CreateProjectDialog({
                     <button
                         onClick={() => {
                             if (name.trim() && templateId) {
-                                onCreate(name.trim(), templateId);
+                                onCreate(name.trim(), templateId, buildingType);
                             }
                         }}
                         disabled={!name.trim() || !templateId}

@@ -55,8 +55,7 @@ export function useAutoRag({ projectId, selectedNode, onResultsFound }: UseAutoR
 
             setIsSearching(true);
             try {
-                const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
-                const res = await authFetch(`${API_BASE}/api/mindmap/ai/auto-link`, {
+                const res = await authFetch(`/api/mindmap/ai/auto-link`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

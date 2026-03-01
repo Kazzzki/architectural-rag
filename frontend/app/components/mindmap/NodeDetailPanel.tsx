@@ -37,6 +37,7 @@ interface Props {
     phases?: string[];
     categories?: string[];
     onUpdate?: (nodeId: string, updates: Partial<ProcessNode>) => void;
+    onChecklistToggle?: (nodeId: string, index: number, checked: boolean) => void;
 }
 
 const STATUS_OPTIONS = ['未着手', '検討中', '決定済み'];
@@ -46,6 +47,9 @@ const STATUS_CONFIG: Record<string, { label: string; bg: string; text: string }>
     '検討中': { label: '検討中', bg: 'bg-amber-100', text: 'text-amber-700' },
     '決定済み': { label: '決定済み', bg: 'bg-green-100', text: 'text-green-700' },
 };
+
+import { useState, useEffect } from 'react';
+import { Check } from 'lucide-react';
 
 export default function NodeDetailPanel({
     node,
@@ -60,8 +64,23 @@ export default function NodeDetailPanel({
     phases = [],
     categories = [],
     onUpdate,
+    onChecklistToggle,
 }: Props) {
     const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG['未着手'];
+    const [checkedItems, setCheckedItems] = useState<Set<number>>(new Set());
+
+    useEffect(() => {
+        try {
+            const notes = JSON.parse((node as any).notes || '{}');
+            if (notes.checkedIndices) {
+                setCheckedItems(new Set(notes.checkedIndices));
+            } else {
+                setCheckedItems(new Set());
+            }
+        } catch {
+            setCheckedItems(new Set());
+        }
+    }, [node.id, (node as any).notes]);
 
     return (
         <div className="h-full flex flex-col">
@@ -173,13 +192,33 @@ export default function NodeDetailPanel({
                             <CheckSquare className="w-4 h-4" style={{ color: categoryColor }} />
                             確認チェックリスト
                         </h3>
-                        <div className="space-y-1.5">
-                            {node.checklist.map((item, i) => (
-                                <div key={i} className="flex items-start gap-2 text-xs">
-                                    <div className="w-4 h-4 rounded border border-[var(--border)] flex-shrink-0 mt-0.5" />
-                                    <span className="text-[var(--foreground)] leading-relaxed">{item}</span>
-                                </div>
-                            ))}
+                        <div className="space-y-1">
+                            {node.checklist.map((item, i) => {
+                                const isChecked = checkedItems.has(i);
+                                return (
+                                    <button
+                                        key={i}
+                                        onClick={() => {
+                                            const newChecked = !isChecked;
+                                            setCheckedItems(prev => {
+                                                const next = new Set(prev);
+                                                newChecked ? next.add(i) : next.delete(i);
+                                                return next;
+                                            });
+                                            onChecklistToggle?.(node.id, i, newChecked);
+                                        }}
+                                        className="flex items-start gap-2 text-xs w-full text-left hover:bg-slate-50 rounded p-1.5 transition-colors group"
+                                    >
+                                        <div className={`w-4 h-4 rounded border flex-shrink-0 mt-0.5 flex items-center justify-center transition-colors ${isChecked ? 'bg-green-500 border-green-500' : 'border-slate-300 group-hover:border-slate-400'
+                                            }`}>
+                                            {isChecked && <Check className="w-3 h-3 text-white" />}
+                                        </div>
+                                        <span className={`leading-relaxed ${isChecked ? 'line-through text-slate-400' : 'text-slate-700'}`}>
+                                            {item}
+                                        </span>
+                                    </button>
+                                );
+                            })}
                         </div>
                     </section>
                 )}

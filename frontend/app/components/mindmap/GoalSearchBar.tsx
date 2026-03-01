@@ -15,9 +15,14 @@ interface Props {
     onSearch: (nodeId: string) => void;
     onClear: () => void;
     highlightedCount: number;
+    templateId: string;
+    onReverseTreeResult: (nodeIds: string[], edgeIds: string[]) => void;
 }
 
-export default function GoalSearchBar({ nodes, onSearch, onClear, highlightedCount }: Props) {
+import { authFetch } from '@/lib/api';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
+export default function GoalSearchBar({ nodes, onSearch, onClear, highlightedCount, templateId, onReverseTreeResult }: Props) {
     const [query, setQuery] = useState('');
     const [isOpen, setIsOpen] = useState(false);
 
@@ -31,11 +36,29 @@ export default function GoalSearchBar({ nodes, onSearch, onClear, highlightedCou
         ).slice(0, 10);
     }, [nodes, query]);
 
-    const handleSelect = (nodeId: string) => {
-        onSearch(nodeId);
+    const handleSelect = async (nodeId: string) => {
         setIsOpen(false);
         const node = nodes.find(n => n.id === nodeId);
         if (node) setQuery(node.label);
+
+        try {
+            // Call reverse tree API
+            const res = await authFetch(
+                `${API_BASE}/api/mindmap/tree/${templateId}/${nodeId}`
+            );
+            if (!res.ok) throw new Error('Reverse tree failed');
+            const data = await res.json();
+
+            // data.nodes: source nodes, data.edges: source edges
+            // Note: API might return slightly different structure, adjusting based on instructions
+            const nodeIds = data.nodes ? data.nodes.map((n: any) => n.id) : data.path_order || [];
+            const edgeIds = data.edges ? data.edges.map((e: any) => e.id) : [];
+
+            onReverseTreeResult(nodeIds, edgeIds);
+        } catch {
+            // Fallback: local single node highlight
+            onSearch(nodeId);
+        }
     };
 
     const handleClear = () => {

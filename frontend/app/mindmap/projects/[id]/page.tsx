@@ -12,10 +12,10 @@ import AddNodeDialog from '../../../components/mindmap/AddNodeDialog';
 import ContextMenu from '../../../components/mindmap/ContextMenu';
 import IntegratedSidebar from '../../../components/mindmap/IntegratedSidebar'; // New
 import { useAutoRag } from '../../../hooks/useAutoRag'; // New
-import { Building2, ArrowLeft, Filter, ChevronDown, Plus, Edit2, Trash2, CornerDownRight, Minimize2, Maximize2, Sidebar } from 'lucide-react';
+import { Building2, ArrowLeft, Filter, ChevronDown, Plus, Edit2, Trash2, CornerDownRight, Minimize2, Maximize2, Sidebar, X, GitBranch, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+// API_BASE is removed to use relative paths through Next.js rewrite
 
 interface ProcessNode {
     id: string;
@@ -88,6 +88,7 @@ export default function ProjectMapPage() {
 
     // Sidebar state
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const [isSidebarMaximized, setIsSidebarMaximized] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(320);
     const isDraggingSidebarRef = useRef(false);
 
@@ -126,13 +127,16 @@ export default function ProjectMapPage() {
     const loadProject = useCallback(async (isInitial = false) => {
         if (isInitial) setLoading(true);
         try {
-            const res = await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}`);
+            const res = await authFetch(`/api/mindmap/projects/${projectId}`);
             if (!res.ok) throw new Error('Project not found');
             const data = await res.json();
             setProject(data);
+            if (data.delta_count !== undefined) {
+                setUndoCount(data.delta_count);
+            }
 
             // Load next actions
-            const actionsRes = await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/next-actions`);
+            const actionsRes = await authFetch(`/api/mindmap/projects/${projectId}/next-actions`);
             if (actionsRes.ok) {
                 setNextActions(await actionsRes.json());
             }
@@ -187,41 +191,69 @@ export default function ProjectMapPage() {
 
     // Chat Handler
     const handleChatSend = async (message: string) => {
-        if (!selectedNodeId) return;
+        if (!selectedNodeId || !selectedNode) return;
 
-        // Add user message
-        const newMessage = { role: 'user', content: message };
-
+        const userMsg = { role: 'user' as const, content: message };
         setProject(prev => {
             if (!prev) return null;
             return {
                 ...prev,
-                nodes: prev.nodes.map(n => {
-                    if (n.id === selectedNodeId) {
-                        return { ...n, chatHistory: [...(n.chatHistory || []), newMessage] };
-                    }
-                    return n;
-                })
+                nodes: prev.nodes.map(n =>
+                    n.id === selectedNodeId
+                        ? { ...n, chatHistory: [...(n.chatHistory || []), userMsg] }
+                        : n
+                ),
             };
         });
 
-        // Mock AI Response (Replace with real API call if needed)
-        // Ideally, call /api/mindmap/ai/chat
-        setTimeout(() => {
-            const aiMessage = { role: 'assistant', content: `AIの回答モック: "${message}" についてですね。このノードのコンテキストとRAG結果に基づいて回答します。` };
+        try {
+            const res = await authFetch(`/api/mindmap/ai/action`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'rag',
+                    nodeId: selectedNodeId,
+                    content: message,
+                    context: {
+                        projectId,
+                        projectContext: project?.description,
+                        nodeContext: {
+                            label: selectedNode.label,
+                            phase: selectedNode.phase,
+                            category: selectedNode.category,
+                            description: selectedNode.description,
+                        }
+                    }
+                }),
+            });
+            if (!res.ok) throw new Error('AI API failed');
+            const data = await res.json();
+
+            const aiMsg = { role: 'assistant' as const, content: data.text || 'AIからの応答を取得できませんでした' };
             setProject(prev => {
                 if (!prev) return null;
                 return {
                     ...prev,
-                    nodes: prev.nodes.map(n => {
-                        if (n.id === selectedNodeId) {
-                            return { ...n, chatHistory: [...(n.chatHistory || []), aiMessage] };
-                        }
-                        return n;
-                    })
+                    nodes: prev.nodes.map(n =>
+                        n.id === selectedNodeId
+                            ? { ...n, chatHistory: [...(n.chatHistory || []), aiMsg] }
+                            : n
+                    ),
                 };
             });
-        }, 1000);
+        } catch (err) {
+            console.error('Chat API error:', err);
+            const aiMsg = { role: 'assistant' as const, content: 'エラーが発生しました。API設定を確認してください。' };
+            setProject(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    nodes: prev.nodes.map(n =>
+                        n.id === selectedNodeId ? { ...n, chatHistory: [...(n.chatHistory || []), aiMsg] } : n
+                    ),
+                };
+            });
+        }
     };
 
     // Drag & Drop Knowledge to Canvas
@@ -257,7 +289,7 @@ export default function ProjectMapPage() {
     const handleGoalSearch = async (nodeId: string) => {
         if (!project) return;
         try {
-            const res = await authFetch(`${API_BASE}/api/mindmap/tree/${project.template_id}/${nodeId}`);
+            const res = await authFetch(`/api/mindmap/tree/${project.template_id}/${nodeId}`);
             const data = await res.json();
             setHighlightedNodes(new Set(data.path_order));
             const edgeIds = new Set<string>();
@@ -384,7 +416,7 @@ export default function ProjectMapPage() {
             // Find source node's category to inherit
             const sourceNode = sourceNodeId ? activeNodes.find(n => n.id === sourceNodeId) : null;
 
-            const res = await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes`, {
+            const res = await authFetch(`/api/mindmap/projects/${projectId}/nodes`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -475,7 +507,7 @@ export default function ProjectMapPage() {
         if (edgeIds.length === 0) return;
         try {
             await Promise.all(edgeIds.map(id =>
-                authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${id}`, {
+                authFetch(`/api/mindmap/projects/${projectId}/edges/${id}`, {
                     method: 'DELETE',
                 })
             ));
@@ -580,7 +612,7 @@ export default function ProjectMapPage() {
 
     const handleUndo = async () => {
         try {
-            const res = await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/undo`, {
+            const res = await authFetch(`/api/mindmap/projects/${projectId}/undo`, {
                 method: 'POST',
             });
             if (res.ok) {
@@ -598,7 +630,26 @@ export default function ProjectMapPage() {
         const node = activeNodes.find(n => n.id === nodeId);
         if (!node) return;
 
+        const actionLabels: Record<string, string> = {
+            summarize: `「${node.label}」を要約してください`,
+            expand: `「${node.label}」のサブタスクを展開してください`,
+            rag: `「${node.label}」に関連する知識を検索してください`,
+            investigate: `「${node.label}」について詳しく調べてください`,
+        };
+
+        const userMsg = { role: 'user' as const, content: actionLabels[action] || 'AIアクションを実行' };
+        setProject(prev => {
+            if (!prev) return null;
+            return {
+                ...prev,
+                nodes: prev.nodes.map(n =>
+                    n.id === nodeId ? { ...n, chatHistory: [...(n.chatHistory || []), userMsg] } : n
+                ),
+            };
+        });
+
         showSaveStatus();
+        setIsSidebarOpen(true);
 
         try {
             const res = await authFetch(`${API_BASE}/api/mindmap/ai/action`, {
@@ -619,47 +670,93 @@ export default function ProjectMapPage() {
             if (!res.ok) throw new Error('AI API failed');
 
             const data = await res.json();
+            let aiContent = data.text || '';
 
-            if ((action === 'expand' || action === 'investigate') && data.text) {
-                // Add to chat history
-                const title = action === 'expand' ? 'アイデア拡張' : '調査レポート';
-                const aiMessage = {
-                    role: 'assistant',
-                    content: `【${title}: ${node.label}】\n\n${data.text}`
-                };
-
-                setProject(prev => {
-                    if (!prev) return null;
-                    return {
-                        ...prev,
-                        nodes: prev.nodes.map(n => {
-                            if (n.id === nodeId) {
-                                return { ...n, chatHistory: [...(n.chatHistory || []), aiMessage] };
-                            }
-                            return n;
-                        })
-                    };
-                });
-
-                // Persist chat history
-                const updatedChatHistory = [...(node.chatHistory || []), aiMessage];
-                await handleNodeUpdate(nodeId, { chatHistory: updatedChatHistory });
-
-                // Open sidebar
-                setIsSidebarOpen(true);
-            } else if ((action === 'summarize' || action === 'rag') && data.text) {
-                const newDescription = (node.description ? node.description + '\n\n' : '') + data.text;
-                await handleNodeUpdate(nodeId, { description: newDescription });
-                setSelectedNodeId(nodeId);
-
-
+            if ((action === 'expand' || action === 'investigate') && data.children) {
+                aiContent += `\n\n**展開候補:**\n${data.children.map((c: any) => `- **${c.label}** (${c.phase} / ${c.category})`).join('\n')}`;
             }
 
-            showSaveStatus();
-            loadProject(false);
+            const aiMsg = { role: 'assistant' as const, content: aiContent || '回答を取得できませんでした' };
+            setProject(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    nodes: prev.nodes.map(n =>
+                        n.id === nodeId ? { ...n, chatHistory: [...(n.chatHistory || []), aiMsg] } : n
+                    ),
+                };
+            });
         } catch (err) {
             console.error('AI Action error:', err);
-            alert('AI処理に失敗しました。');
+            const errMsg = { role: 'assistant' as const, content: 'AI処理に失敗しました。設定を確認してください。' };
+            setProject(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    nodes: prev.nodes.map(n =>
+                        n.id === nodeId ? { ...n, chatHistory: [...(n.chatHistory || []), errMsg] } : n
+                    ),
+                };
+            });
+        }
+    };
+
+    const handleChecklistToggle = async (nodeId: string, index: number, checked: boolean) => {
+        const node = activeNodes.find(n => n.id === nodeId);
+        if (!node) return;
+
+        const currentNotes = (() => {
+            try { return JSON.parse((node as any).notes || '{}'); } catch { return {}; }
+        })();
+        const checkedIndices: number[] = currentNotes.checkedIndices || [];
+        const updated = checked
+            ? [...new Set([...checkedIndices, index])]
+            : checkedIndices.filter(i => i !== index);
+
+        const updates = { notes: JSON.stringify({ ...currentNotes, checkedIndices: updated }) };
+
+        // Optimistic update
+        setProject(prev => {
+            if (!prev) return null;
+            return {
+                ...prev,
+                nodes: prev.nodes.map(n => n.id === nodeId ? { ...n, ...updates } : n)
+            };
+        });
+
+        try {
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updates),
+            });
+            showSaveStatus();
+        } catch (err) {
+            console.error('Checklist toggle error:', err);
+            loadProject(false);
+        }
+    };
+
+    const handleShowCriticalPath = async () => {
+        if (selectedNodeIds.size !== 2) return;
+        const [fromId, toId] = Array.from(selectedNodeIds);
+        try {
+            const res = await authFetch(
+                `/api/mindmap/path/${project?.template_id}/${fromId}/${toId}`
+            );
+            if (!res.ok) throw new Error('Critical path failed');
+            const data = await res.json();
+            if (data.path && data.path.length > 0) {
+                setHighlightedNodes(new Set(data.path));
+                const pathEdges = activeEdges.filter(e =>
+                    data.path.includes(e.source) && data.path.includes(e.target)
+                );
+                setHighlightedEdges(new Set(pathEdges.map(e => e.id)));
+            } else {
+                alert('パスが見つかりませんでした');
+            }
+        } catch (err) {
+            console.error('Critical path error:', err);
         }
     };
 
@@ -825,9 +922,18 @@ export default function ProjectMapPage() {
                     </div>
 
                     <div className="flex items-center gap-4">
+                        {selectedNodeIds.size === 2 && (
+                            <button
+                                onClick={handleShowCriticalPath}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors shadow-sm"
+                            >
+                                <GitBranch className="w-3.5 h-3.5" />
+                                クリティカルパスを表示
+                            </button>
+                        )}
                         <button
                             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                            className={`p-2 rounded-md transition-colors ${isSidebarOpen ? 'bg-blue-100 text-blue-600' : 'text-gray-500 hover:bg-gray-100'
+                            className={`p-2 rounded-md transition-colors ${isSidebarOpen ? 'bg-violet-100 text-violet-600' : 'text-gray-500 hover:bg-gray-100'
                                 }`}
                             title="サイドバー切り替え"
                         >
@@ -881,6 +987,11 @@ export default function ProjectMapPage() {
                             onSearch={handleGoalSearch}
                             onClear={clearHighlight}
                             highlightedCount={highlightedNodes.size}
+                            templateId={project?.template_id || ''}
+                            onReverseTreeResult={(nodeIds, edgeIds) => {
+                                setHighlightedNodes(new Set(nodeIds));
+                                setHighlightedEdges(new Set(edgeIds));
+                            }}
                         />
                     </div>
 
@@ -1005,15 +1116,42 @@ export default function ProjectMapPage() {
                 </main>
 
                 {isSidebarOpen && (
-                    <aside className="border-l border-[var(--border)] bg-white/50 flex flex-col shadow-xl z-10 relative flex-shrink-0" style={{ width: sidebarWidth }}>
+                    <aside
+                        className="border-l border-[var(--border)] bg-white/50 flex flex-col shadow-xl z-10 relative flex-shrink-0 transition-all duration-300"
+                        style={{ width: isSidebarMaximized ? '100%' : sidebarWidth }}
+                    >
                         {/* Resizer Handle */}
-                        <div
-                            className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-blue-400/20 z-50 flex items-center justify-center group -ml-1.5"
-                            onMouseDown={startSidebarResize}
-                        >
-                            <div className="w-1 h-12 bg-gray-300 rounded-full group-hover:bg-blue-500 transition-colors" />
-                        </div>
+                        {!isSidebarMaximized && (
+                            <div
+                                className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-violet-400/20 z-50 flex items-center justify-center group -ml-1.5"
+                                onMouseDown={startSidebarResize}
+                            >
+                                <div className="w-1 h-12 bg-gray-300 rounded-full group-hover:bg-violet-500 transition-colors" />
+                            </div>
+                        )}
+
                         <div className="flex-1 w-full overflow-hidden flex flex-col">
+                            {/* Panel Controls */}
+                            <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-white/80">
+                                <span className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider">詳細パネル</span>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        onClick={() => setIsSidebarMaximized(!isSidebarMaximized)}
+                                        className="p-1 rounded text-[var(--muted)] hover:text-violet-600 hover:bg-violet-50 transition-colors"
+                                        title={isSidebarMaximized ? 'パネルを縮小' : 'パネルを最大化'}
+                                    >
+                                        {isSidebarMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                                    </button>
+                                    <button
+                                        onClick={() => setIsSidebarOpen(false)}
+                                        className="p-1 rounded text-[var(--muted)] hover:text-red-600 hover:bg-red-50 transition-colors"
+                                        title="パネルを閉じる"
+                                    >
+                                        <X className="w-3.5 h-3.5" />
+                                    </button>
+                                </div>
+                            </div>
+
                             <IntegratedSidebar
                                 selectedNode={selectedNode}
                                 knowledge={selectedNode?.ragResults || []}
@@ -1021,6 +1159,17 @@ export default function ProjectMapPage() {
                                 isSearching={isSearching}
                                 onChatSend={handleChatSend}
                                 onDragStart={onDragStartKnowledge}
+                                incomingEdges={selectedNodeEdges.incoming}
+                                outgoingEdges={selectedNodeEdges.outgoing}
+                                getNodeLabel={(id) => activeNodes.find(n => n.id === id)?.label || id}
+                                onNavigate={setSelectedNodeId}
+                                isEditMode={isEditMode}
+                                onStatusChange={handleStatusChange}
+                                onUpdate={handleNodeUpdate}
+                                onChecklistToggle={handleChecklistToggle}
+                                categoryColors={CATEGORY_COLORS}
+                                phases={PHASES}
+                                categories={CATEGORIES}
                             />
                         </div>
                     </aside>

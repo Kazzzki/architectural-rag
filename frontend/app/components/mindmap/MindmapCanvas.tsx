@@ -137,6 +137,10 @@ function MindmapCanvasInner({
     const isDraggingRef = useRef(false);
 
     // Convert to React Flow nodes
+    const nodeFingerprint = processNodes
+        .map(n => `${n.id}:${n.status}:${n.label}:${Math.round(n.position.x)}:${Math.round(n.position.y)}`)
+        .join('|');
+
     const rfNodes: Node[] = useMemo(() => {
         return processNodes.map(pn => ({
             id: pn.id,
@@ -167,7 +171,8 @@ function MindmapCanvasInner({
                 onAiAction: onAiAction,
             },
         }));
-    }, [processNodes, selectedNodeId, highlightedNodes, hasHighlight, categoryColors, collapsedNodeIds, descendantCounts, nodeIdsWithChildren, isEditMode, onNodeLabelChange, onNodeCollapse, onNodeContextMenu, onAiAction]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [nodeFingerprint, selectedNodeId, highlightedNodes, hasHighlight, categoryColors, collapsedNodeIds, descendantCounts, nodeIdsWithChildren, isEditMode, onNodeLabelChange, onNodeCollapse, onNodeContextMenu, onAiAction]);
 
     // Convert to React Flow edges
     const rfEdges: RFEdge[] = useMemo(() => {
@@ -175,28 +180,6 @@ function MindmapCanvasInner({
             const isHighlighted = hasHighlight ? highlightedEdges.has(pe.id) : true;
             const isDimmed = hasHighlight && !highlightedEdges.has(pe.id);
             const isHard = pe.type === 'hard';
-            const isInfo = pe.type === 'info';
-
-            let strokeColor = 'var(--edge-hard)';
-            let strokeWidth = 2;
-            let dashArray: string | undefined = undefined;
-
-            if (isInfo) {
-                strokeColor = 'var(--edge-info)';
-                strokeWidth = 1;
-                dashArray = '4 4';
-            } else if (!isHard) {
-                strokeColor = 'var(--edge-soft)';
-                strokeWidth = 1.5;
-                dashArray = '8 4';
-            }
-
-            if (isDimmed) {
-                strokeColor = '#e2e8f020';
-            } else if (isHighlighted && hasHighlight) {
-                strokeColor = 'var(--edge-selected)';
-                strokeWidth = 3;
-            }
 
             return {
                 id: pe.id,
@@ -204,16 +187,18 @@ function MindmapCanvasInner({
                 target: pe.target,
                 type: 'smoothstep',
                 animated: isHighlighted && hasHighlight,
+                // hard: solid/thick / soft: dashed/thin
                 style: {
-                    stroke: strokeColor,
-                    strokeWidth,
-                    strokeDasharray: dashArray,
+                    stroke: isDimmed ? '#e2e8f0' : isHighlighted ? '#6366f1' : (isHard ? '#94a3b8' : '#cbd5e1'),
+                    strokeWidth: isDimmed ? 1 : (isHard ? 2 : 1.5),
+                    strokeDasharray: isHard ? undefined : '6 3',
+                    opacity: isDimmed ? 0.3 : 1,
                 },
                 markerEnd: {
                     type: MarkerType.ArrowClosed,
-                    color: strokeColor,
-                    width: 14,
-                    height: 14,
+                    color: isDimmed ? '#e2e8f0' : isHighlighted ? '#6366f1' : (isHard ? '#94a3b8' : '#cbd5e1'),
+                    width: isHard ? 12 : 10,
+                    height: isHard ? 12 : 10,
                 },
                 label: isHighlighted && hasHighlight ? pe.reason : undefined,
                 labelStyle: {
@@ -432,8 +417,7 @@ function MindmapCanvasInner({
                 onPaneClick={() => setInlineInput(null)}
                 onSelectionChange={handleSelectionChange}
                 nodeTypes={nodeTypes}
-                fitView
-                fitViewOptions={{ padding: 0.2 }}
+                defaultViewport={{ x: 50, y: 50, zoom: 0.65 }}
                 minZoom={0.2}
                 maxZoom={2}
                 nodesDraggable={true}
@@ -454,6 +438,16 @@ function MindmapCanvasInner({
                 <Controls
                     showInteractive={false}
                 />
+                <div className="absolute bottom-4 left-4 z-10 flex items-center gap-3 bg-white/80 backdrop-blur-sm rounded-lg px-3 py-1.5 text-[10px] text-slate-500 shadow-sm border border-slate-200">
+                    <span className="flex items-center gap-1.5">
+                        <span className="inline-block w-4 border-t-2 border-slate-400" />
+                        必須依存
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                        <span className="inline-block w-4 border-t-2 border-dashed border-slate-300" />
+                        参照依存
+                    </span>
+                </div>
                 <MiniMap
                     nodeColor={(n) => n.data?.color || '#6b7280'}
                     maskColor="rgba(241, 245, 249, 0.7)"

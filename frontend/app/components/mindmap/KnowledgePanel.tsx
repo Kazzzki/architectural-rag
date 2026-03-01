@@ -4,7 +4,7 @@ import { authFetch } from '@/lib/api';
 import { useState, useEffect } from 'react';
 import { BookOpen, ChevronDown, ChevronRight, Lightbulb, GraduationCap, Wrench } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+// API_BASE is removed to use relative paths
 
 interface KnowledgeEntry {
     depth: string;
@@ -33,7 +33,7 @@ export default function KnowledgePanel({ nodeId, categoryColor }: Props) {
         const fetchKnowledge = async () => {
             setLoading(true);
             try {
-                const res = await authFetch(`${API_BASE}/api/mindmap/knowledge/${nodeId}`);
+                const res = await authFetch(`/api/mindmap/knowledge/${nodeId}`);
                 const data = await res.json();
                 setEntries(data.entries || []);
             } catch (err) {

@@ -41,7 +41,7 @@ def start_server():
     log("Starting FastAPI server...")
     server_log = open(LOG_DIR / "server.log", "w")
     process = subprocess.Popen(
-        [sys.executable, "server.py"],
+        [sys.executable, str(SCRIPT_DIR / "server.py")],
         cwd=SCRIPT_DIR,
         stdout=server_log,
         stderr=subprocess.STDOUT,
@@ -55,7 +55,7 @@ def start_daemon():
     log("Starting classification daemon...")
     daemon_log = open(LOG_DIR / "daemon.log", "w")
     process = subprocess.Popen(
-        [sys.executable, "antigravity_daemon.py"],
+        [sys.executable, str(SCRIPT_DIR / "antigravity_daemon.py")],
         cwd=SCRIPT_DIR,
         stdout=daemon_log,
         stderr=subprocess.STDOUT,
@@ -66,13 +66,26 @@ def start_frontend():
     """Next.jsフロントエンドを起動"""
     log("Starting Next.js frontend...")
     frontend_log = open(LOG_DIR / "frontend.log", "w")
+    frontend_env = os.environ.copy()
+    
+    # PATHを確実に含める
+    extra_paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+    frontend_env["PATH"] = ":".join(extra_paths) + ":" + frontend_env.get("PATH", "")
+    frontend_env["API_URL"] = "http://localhost:8000/api/:path*"
+    
+    npm_path = "/opt/homebrew/bin/npm"
+    if not os.path.exists(npm_path):
+        npm_path = "npm" # Fallback to path search
+
+    log("Starting Next.js frontend in development mode...")
     process = subprocess.Popen(
-        ["npm", "run", "dev"],
+        [npm_path, "run", "dev"],
         cwd=SCRIPT_DIR / "frontend",
         stdout=frontend_log,
         stderr=subprocess.STDOUT,
+        env=frontend_env
     )
-    time.sleep(5)  # ビルド/起動待ち
+    time.sleep(10)  # 起動待ち
     return process
 
 
@@ -81,7 +94,7 @@ def start_tunnel():
     log("Starting Cloudflare Tunnel...")
 
     # cloudflaredの存在確認
-    cloudflared_path = "cloudflared"
+    cloudflared_path = "/opt/homebrew/bin/cloudflared"
     home_bin = Path.home() / "bin" / "cloudflared"
     if home_bin.exists():
         cloudflared_path = str(home_bin)
@@ -122,7 +135,7 @@ def start_ngrok_fallback():
 
     ngrok_log = open(LOG_DIR / "ngrok.log", "w")
     process = subprocess.Popen(
-        ["ngrok", "http", "8000", "--log=stdout"],
+        ["/opt/homebrew/bin/ngrok", "http", "3000", "--log=stdout"],
         stdout=ngrok_log,
         stderr=subprocess.STDOUT,
     )
@@ -188,10 +201,14 @@ def main():
     log("=" * 50)
 
     # サーバー再起動（念のため既存プロセスを終了）
+    log("Cleaning up old processes...")
     subprocess.run(["pkill", "-f", "server.py"], capture_output=True)
     subprocess.run(["pkill", "-f", "antigravity_daemon.py"], capture_output=True)
-    subprocess.run(["pkill", "-f", "next dev"], capture_output=True)
-    time.sleep(1)
+    subprocess.run(["pkill", "-f", "next"], capture_output=True)
+    subprocess.run(["pkill", "-f", "node"], capture_output=True)
+    subprocess.run(["pkill", "-f", "cloudflared"], capture_output=True)
+    subprocess.run(["pkill", "-f", "ngrok"], capture_output=True)
+    time.sleep(2)
 
     # サーバーとフロント起動
     server_proc = start_server()
@@ -223,10 +240,10 @@ def main():
 
     except KeyboardInterrupt:
         log("Shutting down...")
-        server_proc.terminate()
-        daemon_proc.terminate()
-        frontend_proc.terminate()
-        tunnel_proc.terminate()
+        if server_proc: server_proc.terminate()
+        if daemon_proc: daemon_proc.terminate()
+        if frontend_proc: frontend_proc.terminate()
+        if tunnel_proc: tunnel_proc.terminate()
         log("Goodbye!")
 
 
