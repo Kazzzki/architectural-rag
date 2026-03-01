@@ -15,7 +15,7 @@ import { useAutoRag } from '../../../hooks/useAutoRag'; // New
 import { Building2, ArrowLeft, Filter, ChevronDown, Plus, Edit2, Trash2, CornerDownRight, Minimize2, Maximize2, Sidebar, X, GitBranch, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 
-// API_BASE is removed to use relative paths through Next.js rewrite
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 interface ProcessNode {
     id: string;
@@ -85,6 +85,7 @@ export default function ProjectMapPage() {
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'node' | 'pane'; targetId?: string } | null>(null);
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
+    const [forceChatTab, setForceChatTab] = useState<string | null>(null);
 
     // Sidebar state
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -123,6 +124,17 @@ export default function ProjectMapPage() {
     const activeNodes = project?.nodes || [];
     const activeEdges = project?.edges || [];
 
+    const loadNextActions = useCallback(async () => {
+        try {
+            const actionsRes = await authFetch(`/api/mindmap/projects/${projectId}/next-actions`);
+            if (actionsRes.ok) {
+                setNextActions(await actionsRes.json());
+            }
+        } catch (err) {
+            console.error('Next actions error:', err);
+        }
+    }, [projectId]);
+
     // Load project data
     const loadProject = useCallback(async (isInitial = false) => {
         if (isInitial) setLoading(true);
@@ -136,17 +148,14 @@ export default function ProjectMapPage() {
             }
 
             // Load next actions
-            const actionsRes = await authFetch(`/api/mindmap/projects/${projectId}/next-actions`);
-            if (actionsRes.ok) {
-                setNextActions(await actionsRes.json());
-            }
+            loadNextActions();
         } catch (err) {
             console.error('Project load error:', err);
             router.push('/mindmap');
         } finally {
             if (isInitial) setLoading(false);
         }
-    }, [projectId, router]);
+    }, [projectId, router, loadNextActions]);
 
     useEffect(() => {
         loadProject(true);
@@ -320,6 +329,7 @@ export default function ProjectMapPage() {
             setUndoCount(prev => prev + 1);
             showSaveStatus();
             loadProject(false);
+            loadNextActions();
         } catch (err) {
             console.error('Status update error:', err);
         }
@@ -340,6 +350,7 @@ export default function ProjectMapPage() {
             setUndoCount(prev => prev + ids.length);
             showSaveStatus();
             loadProject(false);
+            loadNextActions();
         } catch (err) {
             console.error('Batch status error:', err);
         }
@@ -650,6 +661,7 @@ export default function ProjectMapPage() {
 
         showSaveStatus();
         setIsSidebarOpen(true);
+        setForceChatTab(nodeId);
 
         try {
             const res = await authFetch(`${API_BASE}/api/mindmap/ai/action`, {
@@ -1170,6 +1182,7 @@ export default function ProjectMapPage() {
                                 categoryColors={CATEGORY_COLORS}
                                 phases={PHASES}
                                 categories={CATEGORIES}
+                                forceChatTab={forceChatTab === selectedNode?.id}
                             />
                         </div>
                     </aside>

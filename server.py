@@ -125,19 +125,19 @@ except Exception as e:
     print(f"JSON migration skipped or error: {e}")
 
 import threading
-@app.on_event("startup")
-def startup_event():
-    def background_build_index():
-        try:
-            print("Starting background index build...")
-            build_index(force_rebuild=False)
-            print("Background index build completed.")
-        except Exception as e:
-            print(f"Background index build failed: {e}")
-            import traceback
-            traceback.print_exc()
-            
-    threading.Thread(target=background_build_index, daemon=True).start()
+# @app.on_event("startup")
+# def startup_event():
+#     def background_build_index():
+#         try:
+#             print("Starting background index build...")
+#             build_index(force_rebuild=False)
+#             print("Background index build completed.")
+#         except Exception as e:
+#             print(f"Background index build failed: {e}")
+#             import traceback
+#             traceback.print_exc()
+#             
+#     threading.Thread(target=background_build_index, daemon=True).start()
 
 # マインドマップルーターをマウント
 from mindmap.router import router as mindmap_router

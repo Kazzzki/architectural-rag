@@ -41,6 +41,8 @@ TOKEN_PATH = SECRETS_DIR / 'token.pickle'
 
 # ========== 認証 ==========
 
+from google_auth_oauthlib.flow import Flow
+
 def get_auth_url(redirect_uri: str) -> str:
     """認証用URLを生成（redirect_uri は呼び出し元が動的に構築する）"""
     if not CREDENTIALS_PATH.exists():
@@ -50,23 +52,48 @@ def get_auth_url(redirect_uri: str) -> str:
             f"{CREDENTIALS_PATH} に配置してください。"
         )
     
-    flow = InstalledAppFlow.from_client_secrets_file(
-        str(CREDENTIALS_PATH), SCOPES, redirect_uri=redirect_uri
+    flow = Flow.from_client_secrets_file(
+        str(CREDENTIALS_PATH), scopes=SCOPES, redirect_uri=redirect_uri
     )
-    auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
+    auth_url, state = flow.authorization_url(
+        prompt='consent', 
+        access_type='offline',
+        include_granted_scopes='true'
+    )
+    
+    # PKCE の code_verifier と state をファイルに一時保存
+    with open(SECRETS_DIR / 'oauth_state.json', 'w') as f:
+        json.dump({
+            'state': state,
+            'code_verifier': flow.code_verifier
+        }, f)
+        
     return auth_url
 
 
-def save_credentials_from_code(code: str, redirect_uri: str):
+def save_credentials_from_code(code: str, redirect_uri: str, state: str = None):
     """認可コードからトークンを取得して保存（redirect_uri は呼び出し元が動的に構築する）"""
-    flow = InstalledAppFlow.from_client_secrets_file(
-        str(CREDENTIALS_PATH), SCOPES, redirect_uri=redirect_uri
+    flow = Flow.from_client_secrets_file(
+        str(CREDENTIALS_PATH), scopes=SCOPES, redirect_uri=redirect_uri
     )
+    
+    state_file = SECRETS_DIR / 'oauth_state.json'
+    if state_file.exists():
+        with open(state_file, 'r') as f:
+            data = json.load(f)
+            flow.code_verifier = data.get('code_verifier')
+            if not state:
+                state = data.get('state')
+                
+    # fetch_token exchanges the code for tokens and uses the code_verifier
     flow.fetch_token(code=code)
     creds = flow.credentials
     
     with open(TOKEN_PATH, 'wb') as token:
         pickle.dump(creds, token)
+        
+    if state_file.exists():
+        state_file.unlink() # Cleanup
     
     logger.info("Google Drive credentials saved successfully")
     return creds

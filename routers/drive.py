@@ -46,7 +46,7 @@ def drive_auth(request: Request):
         raise HTTPException(status_code=500, detail=f"{str(e)}\n{traceback.format_exc()}")
 
 @router.get("/api/drive/callback")
-def drive_callback(request: Request, code: str):
+def drive_callback(request: Request, code: str, state: str = None):
     """Googleからのリダイレクトを受け取り認証完了"""
     try:
         from drive_sync import save_credentials_from_code
@@ -56,7 +56,7 @@ def drive_callback(request: Request, code: str):
         origin = f"{scheme}://{host}"
         
         redirect_uri = f"{origin}/api/drive/callback"
-        save_credentials_from_code(code, redirect_uri=redirect_uri)
+        save_credentials_from_code(code, redirect_uri=redirect_uri, state=state)
         
         return RedirectResponse(url=f"{origin}/?auth=success")
     except Exception as e:

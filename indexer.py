@@ -434,8 +434,7 @@ def chunk_for_indexing(
             missing.append("category")
         if not metadata["doc_type"]:
             missing.append("doc_type")
-        if not metadata.get("drive_file_id"):
-            missing.append("drive_file_id")
+        # drive_file_id はオプション（Google Drive未接続環境でも動作させるため）
 
         if missing:
             logger.error(

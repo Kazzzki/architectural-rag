@@ -40,6 +40,12 @@ export default function ResearchTab({ node, onUpdate }: ResearchTabProps) {
     const [injectStatus, setInjectStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
     const [injectMessage, setInjectMessage] = useState<string>('');
 
+    // --- 3-Stage AI Progress State ---
+    const [currentPhase, setCurrentPhase] = useState<number>(0);
+    const [phaseMessage, setPhaseMessage] = useState<string>('');
+    const [gapsPreview, setGapsPreview] = useState<any[]>([]);
+    const [completedSearches, setCompletedSearches] = useState<string[]>([]);
+
     // Auto-scroll ref
     const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -124,6 +130,11 @@ export default function ResearchTab({ node, onUpdate }: ResearchTabProps) {
         setInjectStatus('idle');
         setInjectMessage('');
 
+        setCurrentPhase(0);
+        setPhaseMessage('');
+        setGapsPreview([]);
+        setCompletedSearches([]);
+
         const reqBody: ResearchGenerateRequest = {
             node_id: node.id,
             node_label: node.label,
@@ -165,9 +176,24 @@ export default function ResearchTab({ node, onUpdate }: ResearchTabProps) {
                             }
                             try {
                                 const dataObj = JSON.parse(dataStr);
-                                if (dataObj.type === 'chunk') {
+                                if (dataObj.type === 'phase_start') {
+                                    setCurrentPhase(dataObj.phase);
+                                    setPhaseMessage(dataObj.message);
+                                } else if (dataObj.type === 'commander_done') {
+                                    setGapsPreview(dataObj.data.gaps);
+                                } else if (dataObj.type === 'search_done') {
+                                    setCompletedSearches(prev => [...prev, dataObj.data.gap_id]);
+                                    setGapsPreview(prev =>
+                                        prev.map(g => g.id === dataObj.data.gap_id
+                                            ? { ...g, findings: dataObj.data.findings }
+                                            : g
+                                        )
+                                    );
+                                } else if (dataObj.type === 'chunk') {
                                     accumulatedData += dataObj.data;
                                     setRawStreamData(accumulatedData);
+                                } else if (dataObj.type === 'error') {
+                                    setRawStreamData(`生成中にエラーが発生しました: ${dataObj.data}`);
                                 } else if (dataObj.type === 'parsed') {
                                     const parsed = parseResponseText(dataObj.data);
                                     setParsedData(parsed);
@@ -298,6 +324,35 @@ export default function ResearchTab({ node, onUpdate }: ResearchTabProps) {
                     )}
                     {isGenerating && !parsedData ? '生成中...' : 'リサーチ計画を生成'}
                 </button>
+
+                {/* --- 3-Stage Progress UI --- */}
+                {(isGenerating || parsedData) && currentPhase > 0 && (
+                    <div className="mt-4 border border-[var(--border)] bg-slate-50 p-3 rounded-lg">
+                        <div className="flex justify-between items-center mb-2">
+                            <span className="text-xs font-bold text-slate-700">生成ステータス</span>
+                            <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                                Phase {currentPhase}/3
+                            </span>
+                        </div>
+
+                        <div className="flex gap-1 mb-3">
+                            {[1, 2, 3].map(step => (
+                                <div key={step} className={`h-1.5 flex-1 rounded-full ${currentPhase > step ? 'bg-blue-600' : currentPhase === step ? 'bg-blue-400 animate-pulse' : 'bg-slate-200'}`} />
+                            ))}
+                        </div>
+
+                        <div className="text-xs font-medium text-slate-600 flex items-center gap-2">
+                            {isGenerating && <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-500" />}
+                            {!isGenerating && parsedData ? '生成完了' : phaseMessage}
+                        </div>
+
+                        {currentPhase === 2 && gapsPreview.length > 0 && (
+                            <div className="mt-2 text-[10px] text-slate-500 flex justify-end font-medium">
+                                調査完了 {completedSearches.length}/{gapsPreview.length}
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Results Output */}
@@ -337,14 +392,62 @@ export default function ResearchTab({ node, onUpdate }: ResearchTabProps) {
                     {/* Tab Content */}
                     <div className="p-4 bg-white max-h-96 overflow-y-auto">
                         {activeSubTab === 'gaps' && (
-                            <ul className="space-y-3">
-                                {parsedData.gaps.map((gap, i) => (
-                                    <li key={i} className="flex gap-2 text-sm text-[var(--foreground)]">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0 mt-1.5" />
-                                        <span className="leading-relaxed">{gap}</span>
-                                    </li>
-                                ))}
-                                {parsedData.gaps.length === 0 && <p className="text-xs text-slate-500">抽出されたギャップ項目がありません。</p>}
+                            <ul className="space-y-4">
+                                {parsedData ? (
+                                    // Finished parsed gaps 
+                                    parsedData.gaps.map((gap, i) => {
+                                        // Try to match with gapsPreview if any to show findings
+                                        const previewData = gapsPreview.length > i ? gapsPreview[i] : null;
+                                        return (
+                                            <li key={i} className="bg-slate-50 p-3 rounded-lg border border-[var(--border)]">
+                                                <div className="flex gap-2 text-sm text-[var(--foreground)] font-bold mb-2">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 flex-shrink-0 mt-1" />
+                                                    <span className="leading-relaxed">{gap}</span>
+                                                </div>
+                                                {previewData && previewData.findings && (
+                                                    <details className="mt-2 group">
+                                                        <summary className="text-xs text-slate-500 cursor-pointer hover:text-blue-600 font-medium list-none flex items-center gap-1">
+                                                            <span className="group-open:rotate-90 transition-transform">▶</span> 調査結果を見る
+                                                        </summary>
+                                                        <div className="mt-2 text-xs text-slate-600 bg-white border border-slate-200 p-2 rounded whitespace-pre-wrap leading-relaxed">
+                                                            {previewData.findings}
+                                                        </div>
+                                                    </details>
+                                                )}
+                                            </li>
+                                        );
+                                    })
+                                ) : (
+                                    // Gaps preview during generation
+                                    gapsPreview.map((gap, i) => (
+                                        <li key={i} className="bg-slate-50 p-3 rounded-lg border border-[var(--border)]">
+                                            <div className="flex gap-2 text-sm text-[var(--foreground)] font-bold mb-1 items-start justify-between">
+                                                <div className="flex gap-2 items-start flex-1">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0 mt-1.5" />
+                                                    <span className="leading-relaxed">{gap.title}</span>
+                                                </div>
+                                                {completedSearches.includes(gap.id) ? (
+                                                    <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full flex items-center gap-1 whitespace-nowrap"><Check className="w-3 h-3" />完了</span>
+                                                ) : (
+                                                    <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full flex items-center gap-1 whitespace-nowrap"><RefreshCw className="w-3 h-3 animate-spin" />調査中</span>
+                                                )}
+                                            </div>
+                                            <div className="text-xs text-slate-600 mt-1 ml-3.5 mb-2">{gap.description}</div>
+                                            {gap.findings && (
+                                                <details className="mt-2 ml-3.5 group" open>
+                                                    <summary className="text-xs text-slate-500 cursor-pointer hover:text-blue-600 font-medium list-none flex items-center gap-1">
+                                                        <span className="group-open:rotate-90 transition-transform">▶</span> 調査結果
+                                                    </summary>
+                                                    <div className="mt-2 text-xs text-slate-600 bg-white border border-slate-200 p-2 rounded whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
+                                                        {gap.findings}
+                                                    </div>
+                                                </details>
+                                            )}
+                                        </li>
+                                    ))
+                                )}
+                                {parsedData?.gaps.length === 0 && <p className="text-xs text-slate-500">抽出されたギャップ項目がありません。</p>}
+                                {!parsedData && currentPhase > 0 && gapsPreview.length === 0 && <p className="text-xs text-slate-500">司令塔AIがギャップを抽出中...</p>}
                             </ul>
                         )}
 
@@ -399,8 +502,8 @@ export default function ResearchTab({ node, onUpdate }: ResearchTabProps) {
 
                                         {injectMessage && (
                                             <div className={`mt-3 text-xs p-2 rounded flex items-center gap-1.5 ${injectStatus === 'success' ? 'bg-green-50 text-green-700 border border-green-200' :
-                                                    injectStatus === 'error' ? 'bg-red-50 text-red-700 border border-red-200' :
-                                                        'bg-slate-50 text-slate-600'
+                                                injectStatus === 'error' ? 'bg-red-50 text-red-700 border border-red-200' :
+                                                    'bg-slate-50 text-slate-600'
                                                 }`}>
                                                 {injectStatus === 'success' && <Check className="w-3.5 h-3.5" />}
                                                 {injectStatus === 'error' && <AlertCircle className="w-3.5 h-3.5" />}

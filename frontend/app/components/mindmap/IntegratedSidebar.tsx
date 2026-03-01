@@ -45,6 +45,7 @@ interface IntegratedSidebarProps {
     categoryColors: Record<string, string>;
     phases: string[];
     categories: string[];
+    forceChatTab?: boolean;
 }
 
 type SidebarTab = 'detail' | 'knowledge' | 'rag' | 'chat';
@@ -66,7 +67,8 @@ export default function IntegratedSidebar({
     onChecklistToggle,
     categoryColors,
     phases,
-    categories
+    categories,
+    forceChatTab
 }: IntegratedSidebarProps) {
     const [prompt, setPrompt] = useState("");
     const [activeTab, setActiveTab] = useState<SidebarTab>('detail');
@@ -76,6 +78,11 @@ export default function IntegratedSidebar({
     useEffect(() => {
         if (selectedNode) setActiveTab('detail');
     }, [selectedNode?.id]);
+
+    // Force switch to chat tab if requested (e.g., via AI action)
+    useEffect(() => {
+        if (forceChatTab) setActiveTab('chat');
+    }, [forceChatTab]);
 
     // Auto-scroll chat
     useEffect(() => {
