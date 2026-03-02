@@ -6,6 +6,9 @@ from pathlib import Path
 from logging import getLogger
 import sqlite3
 
+# Add the parent directory to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 logger = getLogger(__name__)
 
 # Replace with the actual extraction and indexing logic from the app

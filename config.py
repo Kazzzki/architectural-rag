@@ -75,6 +75,12 @@ VISION_ANALYSIS_MODEL = GEMINI_MODEL_OCR
 PREVIEW_MODEL = GEMINI_MODEL_RAG
 EMBEDDING_MODEL = GEMINI_MODEL_EMBEDDING
 
+# 利用可能なモデル（フロントエンドのセレクターに使用）
+AVAILABLE_MODELS: dict[str, str] = {
+    "gemini-3-flash-preview": "Gemini 3 Flash（高速・標準）",
+    "gemini-3-pro-preview":   "Gemini 3 Pro（高精度・低速）",
+}
+
 
 # ChromaDBコレクション名
 COLLECTION_NAME = "architectural_knowledge"

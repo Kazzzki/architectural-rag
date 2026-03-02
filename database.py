@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, func, or_, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,43 @@ class Document(Base):
     # --- Google Drive連携用 ---
     drive_file_id = Column(String, nullable=True)
 
+    # --- コンテキストシート ---
+    context_sheet       = Column(Text,     nullable=True)  # 生成されたコンテキストシート本文
+    context_sheet_role  = Column(String,   nullable=True)  # 生成時の役割 (pmcm / designer / cost)
+    context_sheet_model = Column(String,   nullable=True)  # 使用したモデル名
+    context_sheet_at    = Column(DateTime, nullable=True)  # 生成日時
+
+
+class PersonalContext(Base):
+    """パーソナルコンテキスト管理テーブル（個人知見・判断基準などを保持）"""
+    __tablename__ = "personal_contexts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    type = Column(String, nullable=False)   # 'judgement' | 'lesson' | 'insight'
+    content = Column(Text, nullable=False)     # 抽出された知見の要約
+    trigger_keywords = Column(Text, nullable=True)                    # JSON: ["ECI", "早期選定", ...]
+    project_tag = Column(String, nullable=True)                  # プロジェクト名（任意）
+    source_question = Column(Text, nullable=True)                    # 元になったユーザー発言
+    merge_history = Column(Text, nullable=True)                    # JSON: 過去にマージされた内容のログ
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    is_active = Column(Boolean, default=True)   # 無効化フラグ
+
+
+class ContextSheet(Base):
+    """複数MDファイルを結合・分析して生成したコンテキストシートの管理テーブル"""
+    __tablename__ = 'context_sheets'
+
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    title      = Column(String, nullable=True)       # ユーザーが付ける任意の名前
+    role       = Column(String, nullable=False)      # pmcm / designer / cost
+    model      = Column(String, nullable=False)      # 使用モデル名
+    file_paths = Column(Text, nullable=False)        # JSON配列: 結合元ファイルパス一覧
+    char_limit = Column(Integer, default=80000)      # 使用した文字数上限
+    truncated  = Column(Boolean, default=False)      # 圧縮が発生したか
+    content    = Column(Text, nullable=True)         # 生成されたシート本文
+    created_at = Column(DateTime, default=datetime.now)
+
 
 # DB接続設定
 engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
@@ -90,6 +127,31 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     logger.info(f"Database initialized at {db_file_path}")
 
+    # ===== スキーママイグレーション（既存DB向け） =====
+    # SQLAlchemy の create_all は既存テーブルへの列追加を行わないため、
+    # 不足列を ALTER TABLE で安全に追加する。
+    _run_migrations()
+
+
+def _run_migrations():
+    """既存テーブルへの列追加マイグレーション（べき等・エラー無視）"""
+    migrations = [
+        # documents テーブルへの context_sheet 列追加（前バージョンからの移行）
+        "ALTER TABLE documents ADD COLUMN context_sheet TEXT",
+        "ALTER TABLE documents ADD COLUMN context_sheet_role VARCHAR",
+        "ALTER TABLE documents ADD COLUMN context_sheet_model VARCHAR",
+        "ALTER TABLE documents ADD COLUMN context_sheet_at DATETIME",
+    ]
+    with engine.connect() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                logger.info(f"Migration applied: {sql[:60]}")
+            except Exception:
+                # 列がすでに存在する場合は "duplicate column name" エラーが出るので無視
+                pass
+
 
 def get_db():
     """FastAPI Depends 用のDBセッションジェネレータ"""
@@ -103,6 +165,86 @@ def get_db():
 def get_session():
     """通常のコードからDBセッションを取得"""
     return SessionLocal()
+
+
+# ========== パーソナルコンテキスト用 CRUD ==========
+
+def find_similar_contexts(keywords: list[str], limit: int = 5) -> list[PersonalContext]:
+    """trigger_keywordsのいずれかにマッチするエントリを取得（LIKE検索）"""
+    session = SessionLocal()
+    try:
+        query = session.query(PersonalContext).filter(PersonalContext.is_active == True)
+        
+        if keywords:
+            conditions = [PersonalContext.trigger_keywords.like(f"%{kw}%") for kw in keywords]
+            if conditions:
+                query = query.filter(or_(*conditions))
+            
+        return query.order_by(PersonalContext.updated_at.desc()).limit(limit).all()
+    finally:
+        session.close()
+
+def insert_context(entry: dict) -> PersonalContext:
+    """新規エントリを挿入"""
+    session = SessionLocal()
+    try:
+        new_ctx = PersonalContext(
+            type=entry.get("type"),
+            content=entry.get("content"),
+            trigger_keywords=json.dumps(entry.get("trigger_keywords", []), ensure_ascii=False),
+            project_tag=entry.get("project_tag"),
+            source_question=entry.get("source_question"),
+            merge_history=json.dumps([])
+        )
+        session.add(new_ctx)
+        session.commit()
+        session.refresh(new_ctx)
+        return new_ctx
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error inserting personal context: {e}")
+        raise
+    finally:
+        session.close()
+
+def merge_context(existing_id: int, new_content: str, merge_log: dict) -> None:
+    """既存エントリのcontentとmerge_historyを更新"""
+    session = SessionLocal()
+    try:
+        ctx = session.query(PersonalContext).filter(PersonalContext.id == existing_id).first()
+        if ctx:
+            ctx.content = new_content
+            
+            history = []
+            if ctx.merge_history:
+                try:
+                    history = json.loads(ctx.merge_history)
+                except json.JSONDecodeError:
+                    pass
+            history.append(merge_log)
+            ctx.merge_history = json.dumps(history, ensure_ascii=False)
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error merging personal context: {e}")
+        raise
+    finally:
+        session.close()
+
+def invalidate_context(existing_id: int) -> None:
+    """is_active=Falseに設定（論理削除）"""
+    session = SessionLocal()
+    try:
+        ctx = session.query(PersonalContext).filter(PersonalContext.id == existing_id).first()
+        if ctx:
+            ctx.is_active = False
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error invalidating personal context: {e}")
+        raise
+    finally:
+        session.close()
 
 
 # ========== マイグレーション ==========

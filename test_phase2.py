@@ -4,6 +4,10 @@ import time
 import chromadb
 import sqlite3
 from pathlib import Path
+
+# Add the parent directory to sys.path so that 'indexer' can be found regardless of run dir
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from indexer import build_index, save_metadata
 from config import PDF_STORAGE_DIR
 

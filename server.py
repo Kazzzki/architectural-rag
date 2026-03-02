@@ -62,8 +62,8 @@ if APP_PASSWORD:
 
     class BasicAuthMiddleware(BaseHTTPMiddleware):
         """APP_PASSWORD設定時に全APIリクエストをBasic認証で保護"""
-        # 認証不要のパス
-        EXEMPT_PATHS = {"/api/health", "/docs", "/openapi.json"}
+        # 認証不要のパス (Google Driveコールバック等は外部から直接リダイレクトされるため除外)
+        EXEMPT_PATHS = {"/api/health", "/docs", "/openapi.json", "/api/drive/callback"}
 
         async def dispatch(self, request, call_next):
             path = request.url.path
@@ -168,7 +168,7 @@ app.add_middleware(
 
 
 # ====== Routers マウント ======
-from routers import system, chat, pdf, drive, tags, files, research
+from routers import system, chat, pdf, drive, tags, files, personal_context, analyze
 
 app.include_router(system.router)
 app.include_router(chat.router)
@@ -176,11 +176,26 @@ app.include_router(pdf.router)
 app.include_router(drive.router)
 app.include_router(tags.router)
 app.include_router(files.router)
-app.include_router(research.router, prefix="/api/research", tags=["research"])
+app.include_router(personal_context.router)
+app.include_router(analyze.router)
 
 @app.get("/")
 async def root():
     return {"message": "建築意匠ナレッジRAG API", "status": "running"}
+
+
+@app.get("/api/models", tags=["Meta"])
+async def list_models():
+    """利用可能なモデル一覧を返す。フロントエンドのセレクター生成に使用。"""
+    from config import AVAILABLE_MODELS
+    return AVAILABLE_MODELS
+
+
+@app.get("/api/roles", tags=["Meta"])
+async def list_roles():
+    """利用可能なロール一覧を返す。フロントエンドのセレクター生成に使用。"""
+    from prompts.context_sheet_roles import AVAILABLE_ROLES
+    return AVAILABLE_ROLES
 
 
 if __name__ == "__main__":

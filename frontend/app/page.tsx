@@ -19,12 +19,14 @@ import {
     UploadCloud,
     Library as LibraryIcon,
     MessageSquare,
-    Map
+    Map,
+    Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
 import Library from './components/Library';
 import FileUpload from './components/FileUpload';
 import StatsPanel from './components/StatsPanel';
+import ContextSheetPanel from './components/ContextSheetPanel';
 import dynamic from 'next/dynamic';
 
 const PDFViewer = dynamic(() => import('./components/PDFViewer'), {
@@ -105,6 +107,15 @@ export default function Home() {
     const [pdfInitialPage, setPdfInitialPage] = useState(1);
     const [isPdfOpen, setIsPdfOpen] = useState(false);
 
+    // --- コンテキストシート機能 ---
+    const [availableModels, setAvailableModels] = useState<Record<string, string>>({});
+    const [availableRoles, setAvailableRoles] = useState<Record<string, string>>({});
+    const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
+    const [activeContextSheet, setActiveContextSheet] = useState<string | null>(null);
+    const [activeSheetTitle, setActiveSheetTitle] = useState<string | null>(null);
+    const [activeContextRole, setActiveContextRole] = useState<string | null>(null);
+    const [isGeneratingSheet, setIsGeneratingSheet] = useState(false);
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -140,6 +151,30 @@ export default function Home() {
         }
     }, []);
 
+    const fetchModels = useCallback(async () => {
+        try {
+            const res = await authFetch(`${API_BASE}/api/models`);
+            if (res.ok) {
+                const data = await res.json();
+                setAvailableModels(data);
+            }
+        } catch (error) {
+            console.error('Models fetch error:', error);
+        }
+    }, []);
+
+    const fetchRoles = useCallback(async () => {
+        try {
+            const res = await authFetch(`${API_BASE}/api/roles`);
+            if (res.ok) {
+                const data = await res.json();
+                setAvailableRoles(data);
+            }
+        } catch (error) {
+            console.error('Roles fetch error:', error);
+        }
+    }, []);
+
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         if (params.get('auth') === 'success') {
@@ -149,8 +184,10 @@ export default function Home() {
 
         fetchStats();
         fetchTags();
+        fetchModels();
+        fetchRoles();
         checkDriveStatus();
-    }, [fetchStats, fetchTags]);
+    }, [fetchStats, fetchTags, fetchModels, fetchRoles]);
 
     const checkDriveStatus = async () => {
         try {
@@ -270,6 +307,8 @@ export default function Home() {
                 selectedTags.length > 0 ? selectedTags : undefined,
                 tagMatchMode,
                 historySnapshot.length > 0 ? historySnapshot : undefined,
+                selectedModel,
+                activeContextSheet,
             )) {
                 if (update.type === 'sources') {
                     setMessages(prev => {
@@ -308,6 +347,31 @@ export default function Home() {
 
     const handleExampleClick = (question: string) => {
         setInput(question);
+    };
+
+    // シート生成中のSSEチャンクをチャット画面にstreamingDisplayするハンドラー
+    const handleSheetStreamStart = () => {
+        setIsGeneratingSheet(true);
+        setMessages(prev => [...prev, { role: 'assistant', content: '', sources: undefined }]);
+    };
+
+    const handleSheetStreamChunk = (chunk: string) => {
+        setMessages(prev => {
+            const msgs = [...prev];
+            const last = msgs[msgs.length - 1];
+            if (last?.role === 'assistant') last.content += chunk;
+            return msgs;
+        });
+    };
+
+    const handleSheetStreamEnd = () => {
+        setIsGeneratingSheet(false);
+    };
+
+    const handleSheetApplied = (content: string, title: string, role: string) => {
+        setActiveContextSheet(content);
+        setActiveSheetTitle(title);
+        setActiveContextRole(role);
     };
 
     // Replaced with FileUpload component, but keeping this for legacy multiple file upload via button if needed
@@ -382,19 +446,20 @@ export default function Home() {
                     {/* Navigation Links */}
                     <div className="flex items-center gap-2">
                         <Link
+                            href="/my-context"
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-teal-500/20 to-emerald-500/20 border border-teal-500/30 text-teal-300 hover:from-teal-500/30 hover:to-emerald-500/30 hover:border-teal-500/50 transition-all text-sm font-medium"
+                        >
+                            <LibraryIcon className="w-4 h-4" />
+                            My Context
+                        </Link>
+                        <Link
                             href="/mindmap"
                             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 border border-violet-500/30 text-violet-300 hover:from-violet-500/30 hover:to-fuchsia-500/30 hover:border-violet-500/50 transition-all text-sm font-medium"
                         >
                             <Map className="w-4 h-4" />
                             プロセスマップ
                         </Link>
-                        <Link
-                            href="/research-planner"
-                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500/20 to-indigo-500/20 border border-blue-500/30 text-blue-300 hover:from-blue-500/30 hover:to-indigo-500/30 hover:border-blue-500/50 transition-all text-sm font-medium"
-                        >
-                            <span className="w-4 h-4 flex items-center justify-center">📋</span>
-                            Research Planner
-                        </Link>
+
                     </div>
 
                     {/* Stats */}
@@ -805,7 +870,23 @@ export default function Home() {
                             </div >
 
                             {/* Input */}
-                            < form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-4" >
+                            <form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-4 space-y-3" >
+                                {/* Context Sheet Panel */}
+                                <ContextSheetPanel
+                                    availableModels={availableModels}
+                                    availableRoles={availableRoles}
+                                    activeContextSheet={activeContextSheet}
+                                    activeSheetTitle={activeSheetTitle}
+                                    activeContextRole={activeContextRole}
+                                    onSheetApplied={handleSheetApplied}
+                                    onSheetCleared={() => { setActiveContextSheet(null); setActiveSheetTitle(null); setActiveContextRole(null); }}
+                                    onStreamStart={handleSheetStreamStart}
+                                    onStreamChunk={handleSheetStreamChunk}
+                                    onStreamEnd={handleSheetStreamEnd}
+                                    isStreaming={isGeneratingSheet}
+                                />
+
+                                {/* Main chat input */}
                                 <div className="flex gap-2">
                                     <input
                                         type="text"
@@ -824,6 +905,7 @@ export default function Home() {
                                     </button>
                                 </div>
                             </form >
+
                         </div >
 
                         {/* Right Pane: PDF Viewer */}
