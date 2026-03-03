@@ -77,8 +77,9 @@ EMBEDDING_MODEL = GEMINI_MODEL_EMBEDDING
 
 # 利用可能なモデル（フロントエンドのセレクターに使用）
 AVAILABLE_MODELS: dict[str, str] = {
-    "gemini-3-flash-preview": "Gemini 3 Flash（高速・標準）",
-    "gemini-3-pro-preview":   "Gemini 3 Pro（高精度・低速）",
+    "gemini-3-flash-preview":  "Gemini 3 Flash（高速・標準）",
+    "gemini-3.1-pro-preview":  "Gemini 3.1 Pro（高精度・低速）",
+    "gemini-2.0-flash":        "Gemini 2.0 Flash（安定板）",
 }
 
 

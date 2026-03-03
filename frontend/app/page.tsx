@@ -203,13 +203,14 @@ export default function Home() {
 
     const handleDriveAuth = async () => {
         try {
-            // Next.js frontend is fetching across the network. Tell the backend what our current hostname is
+            // Next.js proxy (/api/*) 経由でバックエンドに送信 — 相対パスで CORS を回避
             const currentHost = window.location.host;
             const currentProto = window.location.protocol.replace(':', '');
 
-            const res = await authFetch(`${API_BASE}/api/drive/auth`, {
+            const res = await authFetch(`/api/drive/auth`, {
                 method: 'POST',
                 headers: {
+                    'Content-Type': 'application/json',
                     'X-Forwarded-Host': currentHost,
                     'X-Forwarded-Proto': currentProto
                 }
@@ -218,11 +219,17 @@ export default function Home() {
                 const data = await res.json();
                 if (data.auth_url) {
                     window.location.href = data.auth_url;
+                } else {
+                    alert('auth_url が返されませんでした: ' + JSON.stringify(data));
                 }
+            } else {
+                const errText = await res.text();
+                console.error('Drive auth failed:', res.status, errText);
+                alert(`Drive認証エラー (${res.status}): ${errText.slice(0, 200)}`);
             }
         } catch (error) {
             console.error('Drive auth error:', error);
-            alert('接続エラー');
+            alert(`接続エラー: ${error}`);
         }
     };
 
@@ -885,6 +892,38 @@ export default function Home() {
                                     onStreamEnd={handleSheetStreamEnd}
                                     isStreaming={isGeneratingSheet}
                                 />
+
+                                {/* Model selector row */}
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-[var(--muted)] flex-shrink-0">🤖 モデル:</span>
+                                    <div className="relative flex-1 max-w-[260px]">
+                                        <select
+                                            value={selectedModel}
+                                            onChange={(e) => setSelectedModel(e.target.value)}
+                                            className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-2 py-1 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary-500 pr-6"
+                                        >
+                                            {Object.keys(availableModels).length > 0
+                                                ? Object.entries(availableModels).map(([k, v]) => (
+                                                    <option key={k} value={k}>{v}</option>
+                                                ))
+                                                : (
+                                                    <>
+                                                        <option value="gemini-3-flash-preview">Gemini 3 Flash（高速・標準）</option>
+                                                        <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro（高精度）</option>
+                                                        <option value="gemini-2.0-flash">Gemini 2.0 Flash（安定板）</option>
+                                                    </>
+                                                )
+                                            }
+                                        </select>
+                                        <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
+                                    </div>
+                                    {activeContextSheet && (
+                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 border border-violet-500/30 text-violet-300 flex items-center gap-1 flex-shrink-0">
+                                            <Sparkles className="w-2.5 h-2.5" />
+                                            {activeSheetTitle || 'コンテキスト適用中'}
+                                        </span>
+                                    )}
+                                </div>
 
                                 {/* Main chat input */}
                                 <form onSubmit={handleSubmit} className="flex gap-2">

@@ -179,6 +179,7 @@ export default function ContextSheetPanel({
     // ファイルツリー state
     const [tree, setTree] = useState<FileNode | null>(null);
     const [treeLoading, setTreeLoading] = useState(false);
+    const [treeError, setTreeError] = useState<string | null>(null);
 
     // 保存済みシート state
     const [savedSheets, setSavedSheets] = useState<ContextSheetSummary[]>([]);
@@ -205,11 +206,17 @@ export default function ContextSheetPanel({
 
     const fetchTree = useCallback(async () => {
         setTreeLoading(true);
+        setTreeError(null);
         try {
             const res = await authFetch(`${API_BASE}/api/files/tree`);
-            if (res.ok) setTree(await res.json());
-        } catch (e) {
+            if (res.ok) {
+                setTree(await res.json());
+            } else {
+                setTreeError(`ファイル一覧の取得に失敗しました (HTTP ${res.status})`);
+            }
+        } catch (e: any) {
             console.error('tree fetch error', e);
+            setTreeError('ファイル一覧を取得できません。バックエンドに接続できるか確認してください。');
         } finally {
             setTreeLoading(false);
         }
@@ -365,8 +372,8 @@ export default function ContextSheetPanel({
                                 type="button"
                                 onClick={() => setActiveTab(tab)}
                                 className={`px-4 py-2 text-xs font-medium transition-colors ${activeTab === tab
-                                        ? 'border-b-2 border-violet-500 text-violet-300'
-                                        : 'text-[var(--muted)] hover:text-[var(--foreground)]'
+                                    ? 'border-b-2 border-violet-500 text-violet-300'
+                                    : 'text-[var(--muted)] hover:text-[var(--foreground)]'
                                     }`}
                             >
                                 {tab === 'generate' ? '✨ 新規生成' : `📋 保存済み (${savedSheets.length})`}
@@ -485,10 +492,16 @@ export default function ContextSheetPanel({
                                             <Loader2 className="w-4 h-4 animate-spin mr-2" />
                                             <span className="text-xs">読み込み中...</span>
                                         </div>
+                                    ) : treeError ? (
+                                        <div className="py-4 px-3 text-center space-y-1">
+                                            <p className="text-xs text-red-400">{treeError}</p>
+                                            <p className="text-[10px] text-[var(--muted)]">Driveから同期するか、ファイルをアップロードしてください。</p>
+                                            <button type="button" onClick={fetchTree} className="text-[10px] text-violet-400 hover:text-violet-300 underline mt-1">再試行</button>
+                                        </div>
                                     ) : tree ? (
                                         <MdTreeNode node={tree} level={0} selectedPaths={selectedPaths} onToggle={handleToggle} />
                                     ) : (
-                                        <div className="py-6 text-center text-xs text-[var(--muted)]">ファイルが見つかりません</div>
+                                        <div className="py-6 text-center text-xs text-[var(--muted)]">MDファイルが見つかりません。Driveから同期してください。</div>
                                     )}
                                 </div>
                             </div>
