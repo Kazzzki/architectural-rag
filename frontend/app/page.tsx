@@ -869,9 +869,9 @@ export default function Home() {
                                 <div ref={messagesEndRef} />
                             </div >
 
-                            {/* Input */}
-                            <form onSubmit={handleSubmit} className="border-t border-[var(--border)] p-4 space-y-3" >
-                                {/* Context Sheet Panel */}
+                            {/* Input area */}
+                            <div className="border-t border-[var(--border)] p-4 space-y-3">
+                                {/* Context Sheet Panel — outside <form> to avoid accidental submission */}
                                 <ContextSheetPanel
                                     availableModels={availableModels}
                                     availableRoles={availableRoles}
@@ -887,7 +887,7 @@ export default function Home() {
                                 />
 
                                 {/* Main chat input */}
-                                <div className="flex gap-2">
+                                <form onSubmit={handleSubmit} className="flex gap-2">
                                     <input
                                         type="text"
                                         value={input}
@@ -903,8 +903,8 @@ export default function Home() {
                                     >
                                         <Send className="w-5 h-5" />
                                     </button>
-                                </div>
-                            </form >
+                                </form>
+                            </div>
 
                         </div >
 

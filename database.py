@@ -141,6 +141,18 @@ def _run_migrations():
         "ALTER TABLE documents ADD COLUMN context_sheet_role VARCHAR",
         "ALTER TABLE documents ADD COLUMN context_sheet_model VARCHAR",
         "ALTER TABLE documents ADD COLUMN context_sheet_at DATETIME",
+        # context_sheets テーブルの新規作成（存在しない場合のみ）
+        """CREATE TABLE IF NOT EXISTS context_sheets (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            title      VARCHAR,
+            role       VARCHAR NOT NULL,
+            model      VARCHAR NOT NULL,
+            file_paths TEXT    NOT NULL,
+            char_limit INTEGER DEFAULT 80000,
+            truncated  BOOLEAN DEFAULT 0,
+            content    TEXT,
+            created_at DATETIME
+        )""",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -149,7 +161,7 @@ def _run_migrations():
                 conn.commit()
                 logger.info(f"Migration applied: {sql[:60]}")
             except Exception:
-                # 列がすでに存在する場合は "duplicate column name" エラーが出るので無視
+                # 列/テーブルが既存の場合はスキップ
                 pass
 
 
