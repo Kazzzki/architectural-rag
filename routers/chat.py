@@ -18,9 +18,12 @@ class ChatRequest(BaseModel):
     tags: Optional[List[str]] = None
     tag_match_mode: Optional[str] = "any"
     history: Optional[List[dict]] = None
-    # v3: クエリ展開・HyDE・リランクの有効化（デフォルトTrue）
-    # ストリーミングや軽量クライアントでは quick_mode=True を指定するとリランクをスキップ
-    quick_mode: Optional[bool] = False
+    # quick_mode=True : 軽量・高速（クエリ展開・HyDE・リランクをスキップ）
+    # quick_mode=False: 高精度（全パイプライン実行）
+    # quick_mode=None : エンドポイントごとのデフォルトを使用
+    #   - /api/chat        → False（高精度）
+    #   - /api/chat/stream → True （TTFB優先）
+    quick_mode: Optional[bool] = None
     # v4: モデル選択・コンテキストシート注入
     model: str = "gemini-3-flash-preview"
     context_sheet: Optional[str] = None
@@ -55,8 +58,8 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="質問を入力してください")
     
     try:
-        # v3: quick_mode=True の場合はリランク・拡張・HyDEをスキップ
-        use_advanced = not request.quick_mode
+        # v3: デフォルトは高精度モード（quick_mode=None → False 扱い）
+        use_advanced = not (request.quick_mode if request.quick_mode is not None else False)
         search_results = search(
             request.question,
             filter_category=request.category,
@@ -110,7 +113,8 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
     
     try:
         # ストリームではデフォルト quick_mode=True（リランク・拡張スキップでTTFB激減）
-        use_advanced = not bool(request.quick_mode if request.quick_mode is not None else True)
+        effective_quick = request.quick_mode if request.quick_mode is not None else True
+        use_advanced = not effective_quick
         search_results = search(
             request.question,
             filter_category=request.category,

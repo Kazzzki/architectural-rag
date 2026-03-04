@@ -87,7 +87,7 @@ class DocumentClassifier:
 
         except Exception as e:
             logger.error(f"AI分類エラー: {e}")
-            return {"primary_category": UNCATEGORIZED_FOLDER, "tags": [], "page_mapping": {}}
+            return {"primary_category": UNCATEGORIZED_FOLDER, "tags": [], "page_mapping": {}, "confidence": 0.0}
 
     def _validate_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """分類結果をルールに基づいて検証・修正"""

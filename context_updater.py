@@ -1,23 +1,12 @@
-import os
 import json
 import logging
 import datetime
 from typing import List, Dict, Any
-import google.generativeai as genai
+from gemini_client import get_client
+from config import GEMINI_MODEL_RAG
 from database import find_similar_contexts, insert_context, merge_context, invalidate_context
 
 logger = logging.getLogger(__name__)
-
-api_key = os.environ.get("GEMINI_API_KEY")
-if not api_key:
-    try:
-        from config import GEMINI_API_KEY
-        api_key = GEMINI_API_KEY
-    except ImportError:
-        pass
-
-if api_key:
-    genai.configure(api_key=api_key)
 
 def update_contexts_with_dedup(candidates: List[Dict[str, Any]], source_question: str) -> None:
     """
@@ -31,10 +20,10 @@ def update_contexts_with_dedup(candidates: List[Dict[str, Any]], source_question
         return
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        client = get_client()
     except Exception as e:
-        logger.error(f"Cannot initialize Gemini model for dedup: {e}")
-        model = None
+        logger.error(f"Cannot get Gemini client for dedup: {e}")
+        client = None
 
     for candidate in candidates:
         candidate["source_question"] = source_question
@@ -49,11 +38,11 @@ def update_contexts_with_dedup(candidates: List[Dict[str, Any]], source_question
                 logger.error(f"Error finding similar contexts: {e}")
                 
         # 類似エントリが0件 -> 即ADD
-        if not similar_contexts or not model:
+        if not similar_contexts or not client:
             if not similar_contexts:
                 logger.info("No similar contexts found. Adding new context directly.")
             else:
-                logger.info("Gemini model unavailable. Adding new context directly.")
+                logger.info("Gemini client unavailable. Adding new context directly.")
             insert_context(candidate)
             continue
 
@@ -93,7 +82,7 @@ JSONブロック（```json ... ```）のみを出力してください：
         
         decision_data = {"decision": "ADD", "target_id": None, "merged_content": None}
         try:
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(model=GEMINI_MODEL_RAG, contents=prompt)
             text = response.text
             
             if "```json" in text:

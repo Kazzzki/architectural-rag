@@ -117,6 +117,12 @@ def get_drive_service():
                 logger.info("Google Drive token refreshed successfully")
             except Exception as e:
                 logger.error(f"Token refresh failed: {e}", exc_info=True)
+                # 壊れたトークンを削除して次回の再認証フローを有効にする
+                try:
+                    TOKEN_PATH.unlink(missing_ok=True)
+                    logger.info("Corrupted token.pickle deleted. Re-authentication required.")
+                except Exception as del_e:
+                    logger.warning(f"Failed to delete token.pickle: {del_e}")
                 raise Exception("トークンの更新に失敗しました。再認証が必要です。/api/drive/auth で認証してください。")
         else:
             raise Exception("認証が必要です。/api/drive/auth で認証してください。")
@@ -137,11 +143,23 @@ def get_auth_status() -> Dict[str, Any]:
             with open(TOKEN_PATH, 'rb') as token:
                 creds = pickle.load(token)
                 
+                def _calc_expires_hours(c):
+                    """残り有効時間（時間）を計算。取得不可の場合はNone。"""
+                    try:
+                        if c.expiry:
+                            from datetime import timezone
+                            delta = c.expiry.replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)
+                            return max(0.0, round(delta.total_seconds() / 3600, 1))
+                    except Exception:
+                        pass
+                    return None
+
                 # 有効なトークン
                 if creds and creds.valid:
                     return {
                         'authenticated': True,
                         'message': '認証済み',
+                        'expires_in_hours': _calc_expires_hours(creds),
                     }
                 
                 # 期限切れだがリフレッシュ可能
@@ -153,12 +171,20 @@ def get_auth_status() -> Dict[str, Any]:
                         return {
                             'authenticated': True,
                             'message': '認証済み（トークン更新済み）',
+                            'expires_in_hours': _calc_expires_hours(creds),
                         }
                     except Exception as e:
                         logger.warning(f"Token refresh failed in status check: {e}")
+                        # 壊れたトークンを削除して再認証を促す
+                        try:
+                            TOKEN_PATH.unlink(missing_ok=True)
+                            logger.info("Corrupted token.pickle deleted during status check.")
+                        except Exception:
+                            pass
                         return {
                             'authenticated': False,
                             'message': 'トークンの更新に失敗。再認証が必要です',
+                            'expires_in_hours': None,
                         }
         
         return {
@@ -289,8 +315,13 @@ def upload_recursive(service, local_path: Path, parent_id: str = None, stats: Di
             query += f" and '{parent_id}' in parents"
             
         try:
-            results = service.files().list(q=query, fields='files(id)').execute()
+            # fetch id and modifiedTime
+            results = service.files().list(q=query, fields='files(id, modifiedTime)').execute()
             files = results.get('files', [])
+            
+            # stats needs 'skipped' key initialization
+            if 'skipped' not in stats:
+                stats['skipped'] = 0
             
             file_metadata = {'name': local_path.name}
             if parent_id:
@@ -299,9 +330,23 @@ def upload_recursive(service, local_path: Path, parent_id: str = None, stats: Di
             media = MediaFileUpload(str(local_path), resumable=True)
             
             if files:
+                drive_file = files[0]
+                local_mtime = datetime.fromtimestamp(local_path.stat().st_mtime)
+                try:
+                    drive_mtime = datetime.fromisoformat(
+                        drive_file['modifiedTime'].replace('Z', '+00:00')
+                    ).replace(tzinfo=None)
+                    
+                    if local_mtime <= drive_mtime:
+                        logger.info(f"  スキップ(変更なし): {local_path.name}")
+                        stats['skipped'] += 1
+                        return
+                except (KeyError, ValueError):
+                    pass # modifiedTime parsing failed, proceed with update
+                
                 logger.info(f"  更新: {local_path.name}")
                 result = service.files().update(
-                    fileId=files[0]['id'],
+                    fileId=drive_file['id'],
                     media_body=media
                 ).execute()
                 stats['updated'] += 1

@@ -1,28 +1,14 @@
-import os
 import json
 import logging
-import google.generativeai as genai
-from dotenv import load_dotenv
+from gemini_client import get_client
+from config import GEMINI_MODEL_RAG
 
-load_dotenv()
+from typing import Optional, List, Dict
+
 logger = logging.getLogger(__name__)
 
-# Try to get API key from environment or config
-api_key = os.environ.get("GEMINI_API_KEY")
-if not api_key:
-    try:
-        from config import GEMINI_API_KEY
-        api_key = GEMINI_API_KEY
-    except ImportError:
-        pass
 
-if api_key:
-    genai.configure(api_key=api_key)
-else:
-    logger.warning("GEMINI_API_KEY not found. Personal Context Extractor may fail.")
-
-
-def extract_personal_context(user_message: str, assistant_response: str) -> list[dict] | None:
+def extract_personal_context(user_message: str, assistant_response: str) -> Optional[List[dict]]:
     """
     会話ペアを分析し、個人知見が含まれるか判定して構造化して返す。
 
@@ -33,8 +19,8 @@ def extract_personal_context(user_message: str, assistant_response: str) -> list
     ステップ2: 抽出・構造化
     """
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        
+        client = get_client()
+
         # Step 1: 判定
         check_prompt = f"""
 以下のユーザーとAIの会話に、ユーザーの個人的な知見（判断基準、失敗の学び、気づき）が含まれているか判定してください。
@@ -55,7 +41,7 @@ def extract_personal_context(user_message: str, assistant_response: str) -> list
 [ユーザー]: {user_message}
 [AI]: {assistant_response}
 """
-        response_check = model.generate_content(check_prompt)
+        response_check = client.models.generate_content(model=GEMINI_MODEL_RAG, contents=check_prompt)
         check_result = response_check.text.strip().upper()
         if "YES" not in check_result:
             return None
@@ -84,7 +70,7 @@ def extract_personal_context(user_message: str, assistant_response: str) -> list
 
 JSONブロック（```json ... ```）のみを出力してください。
 """
-        response_extract = model.generate_content(extract_prompt)
+        response_extract = client.models.generate_content(model=GEMINI_MODEL_RAG, contents=extract_prompt)
         text = response_extract.text
         
         # Extract JSON from markdown code block

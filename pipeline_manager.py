@@ -45,8 +45,11 @@ class PipelineManager:
                 if file_type in ("Document", "Drawing"):
                     # ドキュメント・図面ともにOCRパイプラインを使用
                     output_path = new_path.with_suffix(".md")
-                    logger.info(f"Starting OCR pipeline for {new_path} -> {output_path} (type={file_type})")
-                    process_pdf_background(str(new_path), str(output_path))
+                    # ルーター分類結果を doc_type に変換（図面OCRプロンプト適用のため）
+                    doc_type_map = {"Drawing": "drawing", "Document": "catalog"}
+                    doc_type = doc_type_map.get(file_type, "catalog")
+                    logger.info(f"Starting OCR pipeline for {new_path} -> {output_path} (file_type={file_type}, doc_type={doc_type})")
+                    process_pdf_background(str(new_path), str(output_path), doc_type=doc_type)
             except Exception as e:
                 # パイプライン実行中のエラー。ファイルはすでに移動済み。
                 # 移動先のファイルパスでエラー処理を行う必要があるが、
@@ -86,9 +89,10 @@ class PipelineManager:
                 except Exception as move_err:
                     logger.error(f"Failed to move processed error file {failed_path}: {move_err}")
 
-def process_file_pipeline(file_path: str):
+def process_file_pipeline(file_path: str, original_filename: str = "", doc_type: str = ""):
     """
-    PipelineManagerを使ってファイルを処理するためのラッパー関数
+    PipelineManagerを使ってファイルを処理するためのラッパー関数。
+    original_filename・doc_type は将来の拡張用で、現在は PipelineManager が内部で判定する。
     """
     manager = PipelineManager()
     manager.process_file(Path(file_path))

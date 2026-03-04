@@ -12,6 +12,9 @@ from config import GEMINI_MODEL_OCR, MAX_TOKENS, PDF_CHUNK_PAGES
 from ocr_utils import retry_gemini_call
 from gemini_client import get_client
 
+import logging
+logger = logging.getLogger(__name__)
+
 # 互換性のため
 GEMINI_MODEL = GEMINI_MODEL_OCR
 
@@ -153,7 +156,7 @@ GENERAL_OCR_PROMPT_TEMPLATE = """
     7. PAGE MARKERS: This chunk contains pages {start_page} to {end_page} of the original document.
        At the very beginning of each page's content, output the marker [[PAGE_N]] on its own line,
        where N is the actual page number in the original document (starting from {start_page}).
-       For example, before the first page's content output [[PAGE_{start_page}]], before the second page output [[PAGE_{start_page + 1}]], and so on.
+       For example, before the first page's content output [[PAGE_{start_page}]], and increment the number for each subsequent page.
     """
 
 
@@ -172,13 +175,6 @@ def _process_chunk(chunk: Dict[str, Any], model_name: str, doc_type: str = "cata
     try:
         text = _call_gemini_with_retry(model_name, chunk['path'], chunk['mime_type'], prompt)
         
-        # Cleanup temp file
-        if chunk.get('is_temp'):
-            try:
-                os.remove(chunk['path'])
-            except OSError:
-                pass
-                
         return {
             "text": text,
             "index": chunk['index'],
@@ -187,15 +183,18 @@ def _process_chunk(chunk: Dict[str, Any], model_name: str, doc_type: str = "cata
         
     except Exception as e:
         logger.error(f"OCR Failed for chunk {chunk['label']}: {e}", exc_info=True)
-        # テンポラリファイルはエラー時も消すべきか？残してデバッグするか？
-        # APIエラーでリトライオーバーした場合は、ファイル自体に問題がある可能性もあるので、いったん残すか、削除するか方針次第。
-        # ここでは元コードに合わせて削除しない（デバッグ用）
-        
         return {
             "text": f"\n> ⚠️ **[OCR Error]** Failed to retrieve content for **{chunk['label']}** after multiple retries.\n> Error: {str(e)}\n",
             "index": chunk['index'],
             "success": False
         }
+    finally:
+        # Cleanup temp file even on error (T10)
+        if chunk.get('is_temp'):
+            try:
+                os.remove(chunk['path'])
+            except OSError:
+                pass
 
 
 def finalize_processing(filepath: str, output_path: str, markdown_text: str, status_mgr=None):
@@ -309,7 +308,7 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
             md_moved = True
             
         if pdf_moved or md_moved:
-            print(f"自動分類: PDFは {PDF_STORAGE_DIR}、MDは {category_path} へ移動しました")
+            logger.info(f"自動分類: PDFは {PDF_STORAGE_DIR}、MDは {category_path} へ移動しました")
             if pdf_moved:
                 status_mgr.rename_status(filepath, str(new_pdf_path))
                 # file_store の current_path を新しいパスに更新
@@ -324,12 +323,12 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
             if md_moved:
                 output_path = str(new_md_path)
         else:
-            print(f"自動分類: 移動不要 ({category_path})")
+            logger.info(f"自動分類: 移動不要 ({category_path})")
         
         # 自動インデックス登録
         try:
             from indexer import index_file
-            print(f"インデックス登録開始: {new_md_path}")
+            logger.info(f"インデックス登録開始: {new_md_path}")
             index_file(str(new_md_path))
         except Exception as e:
             logger.error(f"自動インデックス登録エラー ({new_md_path}): {e}", exc_info=True)
@@ -343,11 +342,12 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
         return filepath, output_path
 
 
-def process_pdf_background(filepath: str, output_path: str):
+def process_pdf_background(filepath: str, output_path: str, doc_type: str = "catalog"):
     """
-    指定されたPDFをOCR処理してMarkdownに変換し、保存する（バックグラウンド実行用）
+    指定されたPDFをOCR処理してMarkdownに変換し、保存する（バックグラウンド実行用）。
+    doc_type: 'catalog' | 'drawing' | 'spec' | 'law' — プロンプト選択に使用
     """
-    print(f"OCR開始: {filepath} -> {output_path}")
+    logger.info(f"OCR開始: {filepath} -> {output_path} (doc_type={doc_type})")
     from status_manager import OCRStatusManager
     status_mgr = OCRStatusManager()
     
@@ -359,13 +359,13 @@ def process_pdf_background(filepath: str, output_path: str):
         # ステータス初期化
         status_mgr.start_processing(filepath, total_chunks)
         
-        # 2. 並列処理でOCR
+        # 2. 並列処理でOCR（doc_type を各チャンクに渡す）
         results = []
         processed_count = 0
         
         with ThreadPoolExecutor(max_workers=4) as executor:
             future_to_chunk = {
-                executor.submit(_process_chunk, chunk, GEMINI_MODEL): chunk 
+                executor.submit(_process_chunk, chunk, GEMINI_MODEL, doc_type): chunk 
                 for chunk in chunks
             }
             
@@ -408,7 +408,7 @@ def process_pdf_background(filepath: str, output_path: str):
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(markdown_text)
             
-        print(f"OCR完了・保存: {output_path}")
+        logger.info(f"OCR完了・保存: {output_path}")
         
         # 5. 仕上げ処理 (分類・移動・インデックス)
         finalize_processing(filepath, output_path, markdown_text, status_mgr)

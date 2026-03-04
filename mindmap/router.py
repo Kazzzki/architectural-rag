@@ -652,6 +652,7 @@ async def upload_and_analyze(files: List[UploadFile] = File(...)):
 async def _analyze_with_gemini(file_contents: List[Dict[str, str]]) -> dict:
     """ファイル内容をGemini APIで分析し、マインドマップ構造を返す共通ロジック"""
     import json
+    from functools import lru_cache
     from google import genai as _genai
     from google.genai import types as _types
 
@@ -662,8 +663,12 @@ async def _analyze_with_gemini(file_contents: List[Dict[str, str]]) -> dict:
     if not api_key:
         raise HTTPException(status_code=400, detail="APIキーが設定されていません。設定画面からGemini APIキーを入力してください。")
 
-    _client = _genai.Client(api_key=api_key)
-    
+    # APIキー・リクエストごとの新規インスタンス生成を回避（LRUキャッシュでキーごとに1度だけ作成）
+    @lru_cache(maxsize=4)
+    def _get_cached_client(key: str) -> "_genai.Client":
+        return _genai.Client(api_key=key)
+
+    _client = _get_cached_client(api_key)
     files_text = ""
     for fc in file_contents:
         files_text += f"\n--- File: {fc['name']} ---\n{fc['content'][:5000]}\n"

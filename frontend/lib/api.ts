@@ -27,7 +27,24 @@ export function getAuthHeaders(): Record<string, string> {
 
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
     const headers = { ...getAuthHeaders(), ...(options.headers || {}) };
-    return fetch(url, { ...options, headers });
+
+    let cleanUrl = url;
+    try {
+        if (url.startsWith('/')) {
+            // Use window.location.origin to strip credentials from the base URL
+            const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+            cleanUrl = baseUrl + url;
+        } else {
+            const parsedUrl = new URL(url);
+            parsedUrl.username = '';
+            parsedUrl.password = '';
+            cleanUrl = parsedUrl.toString();
+        }
+    } catch (e) {
+        // Ignore parsing errors for relative URLs
+    }
+
+    return fetch(cleanUrl, { ...options, headers });
 }
 
 export { API_BASE };
@@ -64,6 +81,7 @@ export async function* chatStream(
     history?: HistoryMessage[],
     model?: string,
     contextSheet?: string | null,
+    quickMode: boolean = true,  // デフォルトは高速モード（ストリーム向けにTTFB優先）
 ): AsyncGenerator<StreamUpdate> {
     const response = await fetch(`${API_BASE}/api/chat/stream`, {
         method: 'POST',
@@ -78,6 +96,7 @@ export async function* chatStream(
             history: history || [],
             model: model || 'gemini-3-flash-preview',
             context_sheet: contextSheet || null,
+            quick_mode: quickMode,
         }),
     });
     if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
@@ -141,10 +160,25 @@ async function* _readSSEStream(response: Response): AsyncGenerator<StreamUpdate>
 
         for (const line of lines) {
             if (line.trim() === '') continue;
+            if (line.startsWith('event: error')) {
+                // Next line should be data: {"error": "..."}
+                continue;
+            }
             if (line.startsWith('data: ')) {
                 const dataStr = line.slice(6);
                 if (dataStr === '[DONE]') { yield { type: 'done' }; return; }
-                try { yield JSON.parse(dataStr); } catch (e) { console.warn('SSE parse error:', e); }
+                try {
+                    const parsed = JSON.parse(dataStr);
+                    if (parsed.error) {
+                        throw new Error(parsed.error);
+                    }
+                    yield parsed;
+                } catch (e) {
+                    if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
+                        throw e; // throw backend errors to be caught in page.tsx
+                    }
+                    console.warn('SSE parse error:', e);
+                }
             }
         }
     }

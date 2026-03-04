@@ -22,7 +22,6 @@ FILE_INDEX_PATH = str(KNOWLEDGE_BASE_DIR / "99_システム" / "file_index.json"
 
 # SQLiteデータベースパス (iCloud同期による I/O Error 回避のためホームディレクトリに配置)
 LOCAL_APP_DIR = Path.home() / ".antigravity"
-LOCAL_APP_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = f"sqlite:///{LOCAL_APP_DIR / 'antigravity.db'}"
 
 # ===== ディレクトリ構成 =====

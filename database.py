@@ -18,9 +18,6 @@ logger = logging.getLogger(__name__)
 
 from config import DB_PATH, BASE_DIR
 
-# DBファイルの保存場所 (移行用)
-OLD_DB_FILE = BASE_DIR / "data" / "antigravity.db"
-
 Base = declarative_base()
 
 

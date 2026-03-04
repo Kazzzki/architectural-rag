@@ -183,18 +183,29 @@ def _rerank_single(query: str, context: str) -> float:
 
 
 def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = 0.5) -> List[Dict[str, Any]]:
-    """Gemini でリランクし、threshold 以上のもの上位5件を返す"""
-    scored = []
-    for hit in hits:
+    """Gemini でリランクし、threshold 以上のもの上位5件を返す。
+    リランク評価は ThreadPoolExecutor で並列化（1序列ループ→約N倍高速化）。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def score_hit(hit: Dict[str, Any]):
         try:
-            score = _rerank_single(query, hit["document"])
+            return _rerank_single(query, hit["document"]), hit
         except Exception as e:
             logger.warning(f"rerank_single failed: {e}")
-            score = 0.5
-        if score >= threshold:
-            hit = dict(hit)
-            hit["rerank_score"] = score
-            scored.append(hit)
+            return 0.5, hit
+
+    scored = []
+    # レートリミット配慮で max_workers=5 に制限
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(score_hit, hit): hit for hit in hits}
+        for future in as_completed(futures):
+            score, hit = future.result()
+            if score >= threshold:
+                hit = dict(hit)
+                hit["rerank_score"] = score
+                scored.append(hit)
+
     scored.sort(key=lambda x: x["rerank_score"], reverse=True)
     return scored[:5]
 

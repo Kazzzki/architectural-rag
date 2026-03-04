@@ -36,5 +36,5 @@ def get_relevant_personal_contexts(question: str, max_items: int = 3) -> List[Di
         return results
         
     except Exception as e:
-        logger.error(f"Error retrieving personal contexts: {e}")
+        logger.warning(f"Error retrieving personal contexts (fallback to empty list): {e}")
         return []

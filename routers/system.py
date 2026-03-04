@@ -29,12 +29,15 @@ class GeminiKeyRequest(BaseModel):
 # ========== エンドポイント ==========
 
 @router.get("/api/health")
-async def health_check():
+def health_check():
     """
     外形監視用ヘルスチェック。
     ChromaDB・SQLite・Gemini API・Google Drive・ファイルストレージの疎通を確認する。
     """
     from datetime import datetime as _dt
+    import sys
+
+    print("HEALTH CHECK STARTING...", file=sys.stderr)
 
     status = {
         "server": "ok",
@@ -48,25 +51,30 @@ async def health_check():
     # 1. ChromaDB確認
     from retriever import get_collection
     try:
+        print("Checking ChromaDB...", file=sys.stderr)
         collection = get_collection()
         count = collection.count()
         status["chromadb"] = f"ok ({count} chunks)"
+        print("ChromaDB OK", file=sys.stderr)
     except Exception as e:
         status["chromadb"] = f"error: {e}"
 
     # 2. SQLite確認
     from database import get_session
     try:
+        print("Checking SQLite...", file=sys.stderr)
         session = get_session()
         from sqlalchemy import text
         session.execute(text("SELECT 1"))
         session.close()
         status["sqlite"] = "ok"
+        print("SQLite OK", file=sys.stderr)
     except Exception as e:
         status["sqlite"] = f"error: {e}"
 
     # 3. Gemini API確認（軽量リクエスト）
     try:
+        print("Checking Gemini API...", file=sys.stderr)
         from gemini_client import get_client
         from config import EMBEDDING_MODEL
         client = get_client()
@@ -75,25 +83,32 @@ async def health_check():
             contents='ping'
         )
         status["gemini_api"] = "ok"
+        print("Gemini API OK", file=sys.stderr)
     except Exception as e:
         status["gemini_api"] = f"error: {e}"
 
     # 4. Google Drive認証確認
     try:
+        print("Checking Google Drive...", file=sys.stderr)
         from drive_sync import get_auth_status
         drive_info = get_auth_status()
         if drive_info.get("authenticated"):
-            status["google_drive"] = "ok"
+            expires_h = drive_info.get("expires_in_hours")
+            expires_str = f", expires_in={expires_h}h" if expires_h is not None else ""
+            status["google_drive"] = f"ok{expires_str}"
         else:
             status["google_drive"] = f"not authenticated: {drive_info.get('message', '')}"
+        print("Google Drive OK", file=sys.stderr)
     except Exception as e:
         status["google_drive"] = f"error: {e}"
 
     # 5. ファイルストレージ確認
     try:
+        print("Checking File Storage...", file=sys.stderr)
         from indexer import scan_files
         files = scan_files()
         status["file_storage"] = f"ok ({len(files)} files)"
+        print("File Storage OK", file=sys.stderr)
     except Exception as e:
         status["file_storage"] = f"error: {e}"
 
@@ -305,7 +320,7 @@ async def test_gemini_key():
         from gemini_client import get_client as _get_client
         _client = _get_client()
         _response = _client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3-flash-preview",
             contents="Hello, this is a connection test.",
         )
         return {"success": True, "message": "接続テスト成功", "response": _response.text[:50]}

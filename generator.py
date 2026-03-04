@@ -187,8 +187,12 @@ def generate_answer_stream(
 {source_files_formatted if source_files_formatted.strip() else "（関連ファイルなし）"}
 """
 
-    from context_retriever import get_relevant_personal_contexts
-    personal_contexts = get_relevant_personal_contexts(question)
+    try:
+        from context_retriever import get_relevant_personal_contexts
+        personal_contexts = get_relevant_personal_contexts(question)
+    except Exception as e:
+        logger.warning(f"Personal context retrieval failed (non-critical): {e}")
+        personal_contexts = []
 
     local_system_prompt = build_system_prompt(context_sheet)
     if personal_contexts:
@@ -203,7 +207,11 @@ def generate_answer_stream(
         max_output_tokens=MAX_TOKENS,
     )
 
-    stream_iter = _call_gemini_stream(client, model, contents, config)
-    for chunk in stream_iter:
-        if chunk.text:
-            yield chunk.text
+    try:
+        stream_iter = _call_gemini_stream(client, model, contents, config)
+        for chunk in stream_iter:
+            if chunk.text:
+                yield chunk.text
+    except Exception as e:
+        logger.error(f"Stream generation failed: {e}", exc_info=True)
+        raise

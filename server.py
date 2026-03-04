@@ -100,31 +100,49 @@ if APP_PASSWORD:
                 headers={"WWW-Authenticate": 'Basic realm="Antigravity RAG"'},
             )
 
-    print("🔒 Basic認証が有効です (APP_PASSWORD設定済)")
+if APP_PASSWORD:
+    logger.info("🔒 Basic認証が有効です (APP_PASSWORD設定済)")
 else:
     logger.warning("⚠️  APP_PASSWORDが未設定——全APIエンドポイントが認証なしで公開状態です。")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI lifespan: 起動・シャットダウン時の処理"""
+    # データベース初期化（モジュールレベル副作用をローカルインポートで回避）
+    from database import init_db, migrate_from_json
+    from status_manager import OCRStatusManager
+    
+    init_db()
+    
+    # クラッシュ等による処理中ステータスの固着をリセット (T12)
+    try:
+        OCRStatusManager().reset_stuck_processing()
+    except Exception as e:
+        logger.warning(f"Resetting stuck processing documents failed: {e}")
+        
+    # 初回起動時に既存JSONデータをDBへ移行
+    try:
+        migrate_from_json()
+    except Exception as e:
+        logger.warning(f"JSON migration skipped or error: {e}")
+    yield
+    # シャットダウン時の処理（将来必要に応じて追加）
 
 
 app = FastAPI(
     title="建築意匠ナレッジRAG API",
     description="建築PM/CM業務向けナレッジ検索・回答生成API",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # 認証ミドルウェアを登録
 if APP_PASSWORD:
     app.add_middleware(BasicAuthMiddleware)
 
-# データベース初期化
-from database import init_db, migrate_from_json
-init_db()
-# 初回起動時に既存JSONデータをDBへ移行
-try:
-    migrate_from_json()
-except Exception as e:
-    print(f"JSON migration skipped or error: {e}")
 
-import threading
 # @app.on_event("startup")
 # def startup_event():
 #     def background_build_index():

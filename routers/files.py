@@ -80,8 +80,10 @@ async def upload_multiple_files(
 
             logger.info(f"File uploaded: {file_path}, Size: {len(content)} bytes, ID: {file_id}")
 
-            if ext == ".pdf":
-                logger.info(f"Saved {file_path} to input folder. Delegating pipeline processing.")
+            if ext in (".pdf", ".png", ".jpg", ".jpeg"):
+                from pipeline_manager import process_file_pipeline
+                background_tasks.add_task(process_file_pipeline, str(file_path))
+                logger.info(f"パイプライン処理をバックグラウンドタスクに登録: {file_path}")
             elif ext in [".md", ".txt"]:
                 from config import KNOWLEDGE_BASE_DIR as _KB, UNCATEGORIZED_FOLDER as _UF
                 final_md_dir = Path(_KB) / _UF

@@ -65,7 +65,7 @@ class OCRStatusManager:
             rel_path = self._get_rel_path(file_path)
             doc = session.query(Document).filter(
                 Document.file_path == rel_path
-            ).first()
+            ).with_for_update().first()
 
             if doc and doc.start_time:
                 doc.processed_pages = processed_count
@@ -93,7 +93,7 @@ class OCRStatusManager:
             rel_path = self._get_rel_path(file_path)
             doc = session.query(Document).filter(
                 Document.file_path == rel_path
-            ).first()
+            ).with_for_update().first()
 
             if doc:
                 doc.status = "completed"
@@ -118,7 +118,7 @@ class OCRStatusManager:
             rel_path = self._get_rel_path(file_path)
             doc = session.query(Document).filter(
                 Document.file_path == rel_path
-            ).first()
+            ).with_for_update().first()
 
             if doc:
                 doc.status = "failed"
@@ -140,7 +140,7 @@ class OCRStatusManager:
             rel_path = self._get_rel_path(file_path)
             doc = session.query(Document).filter(
                 Document.file_path == rel_path
-            ).first()
+            ).with_for_update().first()
 
             if doc:
                 # レコードを削除するのではなくステータスをリセット

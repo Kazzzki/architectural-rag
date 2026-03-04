@@ -4,9 +4,12 @@ import json
 import os
 import tempfile
 import shutil
+import logging
 from ocr_utils import retry_gemini_call
 from config import GEMINI_API_KEY, GEMINI_MODEL
 from gemini_client import get_client
+
+logger = logging.getLogger(__name__)
 
 class ContentRouter:
     def __init__(self, model_name=None):
@@ -65,9 +68,11 @@ class ContentRouter:
                 classification = result.get("type", "Document")  # Default to Document
                 if classification not in ["Drawing", "Document"]:
                     classification = "Document"
+                logger.info(f"AI Classification result for {file_path.name}: {classification}")
                 return classification
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 # JSONパース失敗時はデフォルトとしてDocument
+                logger.warning(f"JSON Decode Error in classification for {file_path.name}: {e}")
                 return "Document"
         finally:
             # 一時ファイルのクリーンアップ
