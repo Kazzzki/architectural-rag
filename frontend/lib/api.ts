@@ -71,6 +71,71 @@ export interface ContextSheetDetail extends ContextSheetSummary {
     content: string | null;
 }
 
+export interface SessionSummary {
+    id: string;
+    title: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface SessionDetail extends SessionSummary {
+    messages: {
+        id: number;
+        role: 'user' | 'assistant';
+        content: string;
+        sources: SourceFile[];
+        model: string;
+        created_at: string;
+    }[];
+}
+
+export interface SaveMessagePayload {
+    user: string;
+    assistant: string;
+    sources: SourceFile[];
+    model: string;
+}
+
+/** セッション一覧取得 */
+export async function fetchSessions(): Promise<SessionSummary[]> {
+    const res = await authFetch(`${API_BASE}/api/chat/sessions`);
+    if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
+    return res.json();
+}
+
+/** 新規セッション作成 */
+export async function createSession(): Promise<{ id: string }> {
+    const res = await authFetch(`${API_BASE}/api/chat/sessions`, { method: 'POST' });
+    if (!res.ok) throw new Error(`Failed to create session: ${res.statusText}`);
+    return res.json();
+}
+
+/** セッション詳細取得 */
+export async function fetchSessionDetail(id: string): Promise<SessionDetail> {
+    const res = await authFetch(`${API_BASE}/api/chat/sessions/${id}`);
+    if (!res.ok) throw new Error(`Failed to get session ${id}: ${res.statusText}`);
+    return res.json();
+}
+
+/** セッション削除 */
+export async function deleteSession(id: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/api/chat/sessions/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Failed to delete session ${id}: ${res.statusText}`);
+}
+
+/** 1ターンのメッセージ保存 */
+export async function saveMessages(sessionId: string, payload: SaveMessagePayload): Promise<void> {
+    const res = await authFetch(`${API_BASE}/api/chat/sessions/${sessionId}/messages`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(typeof getAuthHeaders === 'function' ? getAuthHeaders() : {})
+        },
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`Failed to save messages for session: ${res.statusText}`);
+}
+
 /** チャットストリーム（モデル選択・コンテキストシート注入対応） */
 export async function* chatStream(
     question: string,

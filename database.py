@@ -7,12 +7,13 @@ ocr_progress.json と file_index.json の役割を統合したDB。
 import json
 import os
 import logging
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, func, or_, text
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, func, or_, text, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,33 @@ class ContextSheet(Base):
     truncated  = Column(Boolean, default=False)      # 圧縮が発生したか
     content    = Column(Text, nullable=True)         # 生成されたシート本文
     created_at = Column(DateTime, default=datetime.now)
+
+
+class ChatSession(Base):
+    """チャットセッション管理テーブル"""
+    __tablename__ = 'chat_sessions'
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = Column(String, nullable=True)        # 最初のユーザー発言先頭30文字から自動生成
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
+
+
+class ChatMessage(Base):
+    """チャットメッセージ管理テーブル"""
+    __tablename__ = 'chat_messages'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, ForeignKey('chat_sessions.id', ondelete='CASCADE'), nullable=False)
+    role = Column(String, nullable=False)        # "user" または "assistant"
+    content = Column(Text, nullable=False)       # 発言内容
+    sources = Column(Text, nullable=True)        # JSON文字列 (参照ファイルリスト)
+    model = Column(String, nullable=True)        # 使用モデル名
+    created_at = Column(DateTime, default=datetime.now)
+
+    session = relationship("ChatSession", back_populates="messages")
 
 
 # DB接続設定

@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
 import json
+from datetime import datetime
 from retriever import search, build_context, get_source_files
 from generator import generate_answer, generate_answer_stream
+from database import get_db, ChatSession, ChatMessage
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
@@ -171,3 +174,95 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
     except Exception as e:
         logger.error(f"Stream routing error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Stream initialization failed")
+
+
+# --- Chat History Endpoints ---
+
+class SaveMessagesRequest(BaseModel):
+    user: str
+    assistant: str
+    sources: List[dict]
+    model: str
+
+@router.get("/api/chat/sessions")
+def get_sessions(db: Session = Depends(get_db)):
+    sessions = db.query(ChatSession).order_by(ChatSession.updated_at.desc()).limit(100).all()
+    return [{"id": s.id, "title": s.title, "created_at": s.created_at, "updated_at": s.updated_at} for s in sessions]
+
+@router.post("/api/chat/sessions")
+def create_session(db: Session = Depends(get_db)):
+    new_session = ChatSession()
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+    return {"id": new_session.id}
+
+@router.get("/api/chat/sessions/{session_id}")
+def get_session_detail(session_id: str, db: Session = Depends(get_db)):
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc()).all()
+    
+    msg_list = []
+    for m in messages:
+        msg_list.append({
+            "id": m.id,
+            "role": m.role,
+            "content": m.content,
+            "sources": json.loads(m.sources) if m.sources else [],
+            "model": m.model,
+            "created_at": m.created_at
+        })
+        
+    return {
+        "id": session.id,
+        "title": session.title,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "messages": msg_list
+    }
+
+@router.delete("/api/chat/sessions/{session_id}")
+def delete_session(session_id: str, db: Session = Depends(get_db)):
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    db.delete(session)
+    db.commit()
+    return {"status": "success"}
+
+@router.post("/api/chat/sessions/{session_id}/messages")
+def save_messages(session_id: str, request: SaveMessagesRequest, db: Session = Depends(get_db)):
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if not session.title:
+        session.title = request.user[:30]
+
+    session.updated_at = datetime.now()
+    
+    user_msg = ChatMessage(
+        session_id=session_id,
+        role="user",
+        content=request.user,
+        sources=json.dumps([]),
+        model=request.model
+    )
+    assistant_msg = ChatMessage(
+        session_id=session_id,
+        role="assistant",
+        content=request.assistant,
+        sources=json.dumps(request.sources, ensure_ascii=False),
+        model=request.model
+    )
+    
+    db.add(user_msg)
+    db.add(assistant_msg)
+    db.commit()
+    
+    return {"status": "success"}
+

@@ -1,5 +1,5 @@
 'use client';
-import { authFetch } from '@/lib/api';
+import { authFetch, fetchSessions, createSession, fetchSessionDetail, deleteSession, saveMessages, SessionSummary } from '@/lib/api';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -85,6 +85,11 @@ export default function Home() {
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
+    // Session Management State
+    const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+    const [sessions, setSessions] = useState<SessionSummary[]>([]);
+    const [showSessionList, setShowSessionList] = useState(true);
+
     // Filters
     const [category, setCategory] = useState('');
     const [fileType, setFileType] = useState('');
@@ -126,6 +131,31 @@ export default function Home() {
     useEffect(() => {
         scrollToBottom();
     }, [messages]);
+
+    useEffect(() => {
+        const loadInitialSession = async () => {
+            try {
+                const fetchedSessions = await fetchSessions();
+                setSessions(fetchedSessions);
+                if (fetchedSessions.length > 0) {
+                    const latestSession = fetchedSessions[0];
+                    const detail = await fetchSessionDetail(latestSession.id);
+                    setActiveSessionId(detail.id);
+                    setMessages(detail.messages.map(m => ({
+                        role: m.role as 'user' | 'assistant',
+                        content: m.content,
+                        sources: m.sources
+                    })));
+                } else {
+                    const newSession = await createSession();
+                    setActiveSessionId(newSession.id);
+                }
+            } catch (err) {
+                console.error('Failed to load sessions', err);
+            }
+        };
+        loadInitialSession();
+    }, []);
 
     const fetchStats = useCallback(async () => {
         try {
@@ -305,6 +335,7 @@ export default function Home() {
         try {
             const { chatStream } = await import('../lib/api');
             let accumulatedAnswer = '';
+            let currentSources: SourceFile[] = [];
 
             for await (const update of chatStream(
                 userMessage,
@@ -318,6 +349,7 @@ export default function Home() {
                 activeContextSheet,
             )) {
                 if (update.type === 'sources') {
+                    currentSources = update.data;
                     setMessages(prev => {
                         const newMessages = [...prev];
                         const lastMsg = newMessages[newMessages.length - 1];
@@ -338,6 +370,27 @@ export default function Home() {
                     });
                 }
             }
+
+            // Stream complete. Save to DB.
+            let sessionIdToSave = activeSessionId;
+            if (!sessionIdToSave) {
+                const newSession = await createSession();
+                sessionIdToSave = newSession.id;
+                setActiveSessionId(newSession.id);
+            }
+            try {
+                await saveMessages(sessionIdToSave, {
+                    user: userMessage,
+                    assistant: accumulatedAnswer,
+                    sources: currentSources,
+                    model: selectedModel
+                });
+                const fetchedSessions = await fetchSessions();
+                setSessions(fetchedSessions);
+            } catch (saveErr) {
+                console.error('Failed to save message:', saveErr);
+            }
+
         } catch (error) {
             setMessages(prev => {
                 const newMessages = [...prev];
@@ -486,6 +539,64 @@ export default function Home() {
             <div className="flex-1 max-w-6xl mx-auto w-full flex flex-col md:flex-row gap-4 p-4">
                 {/* Sidebar */}
                 <aside className="md:w-64 space-y-4">
+
+                    {/* Session List */}
+                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] shadow-sm">
+                        <div className="flex items-center justify-between mb-3">
+                            <label className="block text-sm font-medium flex items-center gap-2">
+                                <MessageSquare className="w-4 h-4" />
+                                チャット履歴
+                            </label>
+                            <button
+                                onClick={() => setShowSessionList(!showSessionList)}
+                                className="text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
+                            >
+                                <ChevronDown className={`w-4 h-4 transition-transform ${showSessionList ? 'rotate-180' : ''}`} />
+                            </button>
+                        </div>
+
+                        {showSessionList && (
+                            <div className="space-y-1 max-h-48 overflow-y-auto pr-1 animate-fade-in custom-scrollbar">
+                                {sessions.length === 0 ? (
+                                    <div className="text-xs text-[var(--muted)] text-center py-4 bg-[var(--background)] rounded-lg border border-[var(--border)] border-dashed">履歴がありません</div>
+                                ) : (
+                                    sessions.map(s => (
+                                        <div key={s.id} className={`group flex items-center justify-between p-2 rounded-lg text-xs cursor-pointer transition-all border border-transparent ${activeSessionId === s.id ? 'bg-primary-500/10 text-primary-600 border-primary-500/20 shadow-sm' : 'hover:bg-[var(--card-hover)] text-[var(--foreground)] hover:border-[var(--border)]'}`} onClick={async () => {
+                                            try {
+                                                const detail = await fetchSessionDetail(s.id);
+                                                setActiveSessionId(s.id);
+                                                setMessages(detail.messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, sources: m.sources })));
+                                            } catch (e) { console.error('Failed to load session', e); }
+                                        }}>
+                                            <div className="flex-1 overflow-hidden">
+                                                <div className="truncate font-medium">{s.title || '新規チャット'}</div>
+                                                <div className="text-[10px] text-[var(--muted)] mt-0.5">{new Date(s.updated_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                                            </div>
+                                            <button
+                                                onClick={async (e) => {
+                                                    e.stopPropagation();
+                                                    if (confirm('この履歴を削除しますか？')) {
+                                                        try {
+                                                            await deleteSession(s.id);
+                                                            if (activeSessionId === s.id) {
+                                                                setMessages([]);
+                                                                setActiveSessionId(null);
+                                                            }
+                                                            fetchSessions().then(setSessions);
+                                                        } catch (err) { console.error(err); }
+                                                    }
+                                                }}
+                                                className="text-[var(--muted)] hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all p-1.5 rounded-md hover:bg-red-500/10"
+                                                title="削除"
+                                            >
+                                                <X className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        )}
+                    </div>
 
                     {/* Stats Dashboard (Phase 4-1) */}
                     <div className="md:hidden">
@@ -894,35 +1005,54 @@ export default function Home() {
                                 />
 
                                 {/* Model selector row */}
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xs text-[var(--muted)] flex-shrink-0">🤖 モデル:</span>
-                                    <div className="relative flex-1 max-w-[260px]">
-                                        <select
-                                            value={selectedModel}
-                                            onChange={(e) => setSelectedModel(e.target.value)}
-                                            className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-2 py-1 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary-500 pr-6"
-                                        >
-                                            {Object.keys(availableModels).length > 0
-                                                ? Object.entries(availableModels).map(([k, v]) => (
-                                                    <option key={k} value={k}>{v}</option>
-                                                ))
-                                                : (
-                                                    <>
-                                                        <option value="gemini-3-flash-preview">Gemini 3 Flash（高速・標準）</option>
-                                                        <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro（高精度）</option>
-                                                        <option value="gemini-2.0-flash">Gemini 2.0 Flash（安定板）</option>
-                                                    </>
-                                                )
-                                            }
-                                        </select>
-                                        <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2 flex-1">
+                                        <span className="text-xs text-[var(--muted)] flex-shrink-0">🤖 モデル:</span>
+                                        <div className="relative flex-1 max-w-[260px]">
+                                            <select
+                                                value={selectedModel}
+                                                onChange={(e) => setSelectedModel(e.target.value)}
+                                                className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-2 py-1 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary-500 pr-6"
+                                            >
+                                                {Object.keys(availableModels).length > 0
+                                                    ? Object.entries(availableModels).map(([k, v]) => (
+                                                        <option key={k} value={k}>{v}</option>
+                                                    ))
+                                                    : (
+                                                        <>
+                                                            <option value="gemini-3-flash-preview">Gemini 3 Flash（高速・標準）</option>
+                                                            <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro（高精度）</option>
+                                                            <option value="gemini-2.0-flash">Gemini 2.0 Flash（安定板）</option>
+                                                        </>
+                                                    )
+                                                }
+                                            </select>
+                                            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
+                                        </div>
+                                        {activeContextSheet && (
+                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 border border-violet-500/30 text-violet-300 flex items-center gap-1 flex-shrink-0">
+                                                <Sparkles className="w-2.5 h-2.5" />
+                                                {activeSheetTitle || 'コンテキスト適用中'}
+                                            </span>
+                                        )}
                                     </div>
-                                    {activeContextSheet && (
-                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 border border-violet-500/30 text-violet-300 flex items-center gap-1 flex-shrink-0">
-                                            <Sparkles className="w-2.5 h-2.5" />
-                                            {activeSheetTitle || 'コンテキスト適用中'}
-                                        </span>
-                                    )}
+                                    <button
+                                        onClick={async () => {
+                                            try {
+                                                const newSession = await createSession();
+                                                setActiveSessionId(newSession.id);
+                                                setMessages([]);
+                                                fetchSessions().then(setSessions);
+                                            } catch (err) {
+                                                console.error(err);
+                                            }
+                                        }}
+                                        className="text-xs px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-sm hover:bg-primary-50 flex items-center gap-1.5 text-primary-600 font-medium transition-all"
+                                        title="新しい会話を始める"
+                                    >
+                                        <MessageSquare className="w-4 h-4" />
+                                        新規チャット
+                                    </button>
                                 </div>
 
                                 {/* Main chat input */}

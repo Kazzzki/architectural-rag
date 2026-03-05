@@ -149,7 +149,8 @@ def _merge_hits(hits_list: List[List[Dict[str, Any]]], top_k: int = 15) -> List[
     for hits in hits_list:
         for hit in hits:
             # rel_path + chunk_index でユニーク化（parent_chunk_id でも可）
-            key = (hit["metadata"].get("rel_path", ""), hit["metadata"].get("chunk_index", 0))
+            meta = hit.get("metadata") or {}
+            key = (meta.get("rel_path", ""), meta.get("chunk_index", 0))
             key_str = f"{key[0]}::{key[1]}"
             if key_str not in dedup or hit["score"] > dedup[key_str]["score"]:
                 dedup[key_str] = hit
@@ -219,7 +220,8 @@ def _resolve_parent_chunks(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     resolved = []
     for hit in hits:
-        pid = hit["metadata"].get("parent_chunk_id", "")
+        meta = hit.get("metadata") or {}
+        pid = meta.get("parent_chunk_id", "")
         parent_text = load_parent_chunk(pid) if pid else None
         hit = dict(hit)
         hit["context_text"] = parent_text if parent_text else hit["document"]

@@ -12,7 +12,7 @@ if command -v conda &> /dev/null; then
 fi
 
 # Work dir
-SCRIPT_DIR="/Users/kkk/Library/Mobile Documents/com~apple~CloudDocs/antigravity/architectural_rag"
+SCRIPT_DIR="/Users/kaz/Library/Mobile Documents/com~apple~CloudDocs/antigravity/architectural_rag"
 cd "$SCRIPT_DIR"
 
 # Kill any stale processes
