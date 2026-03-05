@@ -14,7 +14,8 @@ export type StreamUpdate =
     | { type: 'saved'; id: number }
     | { type: 'done' };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+// APIのベースURL (環境変数がない場合はNext.jsの同ドメインリライトに任せる)
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 const API_PASSWORD = process.env.NEXT_PUBLIC_API_PASSWORD || '';
 
 export function getAuthHeaders(): Record<string, string> {
