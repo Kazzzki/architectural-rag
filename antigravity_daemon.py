@@ -1,3 +1,10 @@
+import os
+import sys
+
+# システム全体のデフォルトエンコーディングをUTF-8に強制（日本語ファイル名判定不具合などへの予防）
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+os.environ.setdefault("PYTHONUTF8", "1")
+
 import time
 import shutil
 import logging

@@ -1,6 +1,11 @@
 import patch_importlib  # 最優先で実行
 import os
 import sys
+
+# システム全体のデフォルトエンコーディングをUTF-8に強制（日本語ファイル名/パスのセーフティネット）
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+os.environ.setdefault("PYTHONUTF8", "1")
+
 # 以前のパッチは patch_importlib.py に移動したので削除
 # (重複しても問題ないがキレイにする)
 
