@@ -1,5 +1,6 @@
 import os
 import time
+import tempfile, shutil
 import traceback
 import pypdf
 from google.genai import types
@@ -71,11 +72,22 @@ def _call_gemini_with_retry(model_name: str, file_path: str, mime_type: str, pro
     """Gemini APIを呼び出す（リトライ付き）"""
     client = get_client()
 
-    # Upload
-    uploaded_file = client.files.upload(
-        file=file_path,
-        config=types.UploadFileConfig(mime_type=mime_type)
-    )
+    upload_path = file_path
+    temp_dir = None
+    try:
+        if not Path(file_path).name.isascii():
+            temp_dir = tempfile.mkdtemp(prefix="ocr_upload_")
+            upload_path = str(Path(temp_dir) / f"upload{Path(file_path).suffix}")
+            shutil.copy2(file_path, upload_path)
+
+        # Upload
+        uploaded_file = client.files.upload(
+            file=upload_path,
+            config=types.UploadFileConfig(mime_type=mime_type)
+        )
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     wait_count = 0
     while uploaded_file.state.name == "PROCESSING":
