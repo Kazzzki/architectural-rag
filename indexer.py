@@ -910,13 +910,13 @@ def delete_file_completely(file_path: str) -> dict:
         results["errors"].append(f"Document削除エラー: {e}")
         logger.warning(f"[Delete] Document削除エラー（続行）: {e}")
 
-    # --- 7. OCR ステータス削除 ---
+    # --- 7. Status cleanup (Status management is now unified in MetadataRepository) ---
     try:
-        from status_manager import OCRStatusManager
-        OCRStatusManager().remove_status(str(pdf_path))
-        OCRStatusManager().remove_status(file_path)
+        # OCRStatusManager is deprecated and removed. 
+        # Document deletion in step 6 already handles indexing status.
+        pass
     except Exception as e:
-        logger.warning(f"[Delete] OCRステータス削除エラー（続行）: {e}")
+        logger.warning(f"[Delete] Status cleanup error: {e}")
 
     # --- 8. 物理ファイル削除（knowledge_base内） ---
     for target in [pdf_path, md_path]:

@@ -221,34 +221,76 @@ def _split_chunk(
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 + 4: Gemini API呼び出しを3関数に分解
+# Phase 5: ASCII-safe upload helpers
+# ---------------------------------------------------------------------------
+
+def make_chunk_upload_name(version_id: str, chunk_index: int, ext: str) -> str:
+    """外部送信用の安全なファイル名 (ASCII) を生成する。"""
+    # version_id から、ASCIIの英数字、ハイフン、アンダースコア以外を除去（または置換）
+    # isalnum() は日本語文字もTrueになるため、isascii() と組み合わせてチェックする
+    safe_id = "".join([c if (c.isascii() and (c.isalnum() or c in "-_")) else "_" for c in version_id])
+    if not safe_id or safe_id.strip("_") == "":
+        safe_id = "unknown_version"
+    
+    # ext が . で始まらない場合（かつ空でない場合）は付与
+    if ext and not ext.startswith("."):
+        ext = "." + ext
+        
+    return f"ver_{safe_id}_chunk_{chunk_index:04d}{ext}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 + 4 + 5: Gemini API呼び出しを3関数に分解
 # ---------------------------------------------------------------------------
 
 @retry_gemini_call(max_attempts=3)
-def _upload_chunk(file_path: str, mime_type: str):
+def _upload_chunk(
+    file_path: str, 
+    mime_type: str,
+    version_id: str = "unknown",
+    chunk_index: int = 0,
+    original_filename: str | None = None
+):
     """
-    Phase 3: ファイルをGemini File APIにアップロードしてfile_refを返す。
-    Semaphoreでレートリミット制御（Phase 2）。
+    Phase 3 + 5: ファイルをGemini File APIにアップロードしてfile_refを返す。
+    原本名 (non-ASCII) による UnicodeEncodeError を避けるため、内部IDベースの
+    ASCIIファイル名にリネームして一時ファイル経由でアップロードする。
     """
+    ext = Path(file_path).suffix
+    safe_name = make_chunk_upload_name(version_id, chunk_index, ext)
+    orig_name = original_filename or Path(file_path).name
+
     with _api_semaphore:
         client = get_client()
-        upload_path = file_path
-        temp_dir = None
-        try:
-            if not Path(file_path).name.isascii():
-                temp_dir = tempfile.mkdtemp(prefix="ocr_upload_")
-                upload_path = str(Path(temp_dir) / f"upload{Path(file_path).suffix}")
-                shutil.copy2(file_path, upload_path)
-
-            uploaded_file = client.files.upload(
-                file=upload_path,
-                config=types.UploadFileConfig(mime_type=mime_type)
+        with tempfile.TemporaryDirectory(prefix="ag_ocr_upload_") as tmp_dir:
+            tmp_path = Path(tmp_dir) / safe_name
+            shutil.copy2(file_path, tmp_path)
+            
+            logger.info(
+                f"Uploading chunk to Gemini: {orig_name} -> {safe_name}",
+                extra={
+                    "version_id": version_id,
+                    "chunk_index": chunk_index,
+                    "original_filename": orig_name,
+                    "outbound_filename": safe_name,
+                    "mime_type": mime_type
+                }
             )
-        finally:
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
 
-    return uploaded_file
+            try:
+                uploaded_file = client.files.upload(
+                    file=str(tmp_path),
+                    config=types.UploadFileConfig(
+                        mime_type=mime_type,
+                        display_name=safe_name  # 原本名は渡さない
+                    )
+                )
+                return uploaded_file
+            except Exception as e:
+                # UnicodeEncodeError がここで発生した場合は non-retryable として扱う（本来出ないはずだが）
+                if "ascii" in str(e).lower() and "encode" in str(e).lower():
+                    logger.error(f"CRITICAL: UnicodeEncodeError during upload for {orig_name} despite ASCII safe name: {e}")
+                raise
 
 
 def _wait_for_processing(file_ref, timeout: float = 120.0):
@@ -383,6 +425,8 @@ def _ocr_with_adaptive_fallback(
     chunk: Dict[str, Any],
     file_ref,
     doc_type: str,
+    version_id: str = "unknown",
+    original_filename: str | None = None
 ) -> List[Dict[str, Any]]:
     """
     Phase 1-B: アップロード済みfile_refでOCRを実行する。
@@ -432,9 +476,21 @@ def _ocr_with_adaptive_fallback(
         results = []
         for sc in sub_chunks:
             try:
-                sc_file_ref = _upload_chunk(sc["path"], sc["mime_type"])
+                sc_file_ref = _upload_chunk(
+                    sc["path"], 
+                    sc["mime_type"], 
+                    version_id=version_id, 
+                    chunk_index=sc["index"],
+                    original_filename=original_filename
+                )
                 sc_file_ref = _wait_for_processing(sc_file_ref)
-                sub_results = _ocr_with_adaptive_fallback(sc, sc_file_ref, doc_type)
+                sub_results = _ocr_with_adaptive_fallback(
+                    sc, 
+                    sc_file_ref, 
+                    doc_type, 
+                    version_id=version_id,
+                    original_filename=original_filename
+                )
                 results.extend(sub_results)
             except Exception as e:
                 logger.error(f"Sub-chunk OCR failed for {sc['label']}: {e}", exc_info=True)
@@ -469,9 +525,19 @@ def _process_chunk(chunk: Dict[str, Any], model_name: str, doc_type: str = "cata
     単一のチャンクを処理し、最初の結果のみを返す（旧インターフェース互換）。
     """
     try:
-        file_ref = _upload_chunk(chunk["path"], chunk["mime_type"])
+        file_ref = _upload_chunk(
+            chunk["path"], 
+            chunk["mime_type"],
+            version_id="legacy",
+            chunk_index=chunk["index"]
+        )
         file_ref = _wait_for_processing(file_ref)
-        results = _ocr_with_adaptive_fallback(chunk, file_ref, doc_type)
+        results = _ocr_with_adaptive_fallback(
+            chunk, 
+            file_ref, 
+            doc_type,
+            version_id="legacy"
+        )
         return results[0] if results else {
             "text": "", "index": chunk["index"], "success": False
         }
@@ -498,8 +564,9 @@ async def _process_all_chunks_pipelined(
     chunks: List[Dict[str, Any]],
     doc_type: str,
     executor: ThreadPoolExecutor,
-    status_mgr,
+    repo,
     filepath: str,
+    version_id: str = "unknown",
 ) -> List[Dict[str, Any]]:
     """
     Phase 3: 真のストリーミングパイプライン(streaming pipeline)。
@@ -523,13 +590,26 @@ async def _process_all_chunks_pipelined(
             }]
         else:
             try:
+                orig_filename = Path(filepath).name
                 file_ref = await loop.run_in_executor(
-                    executor, _upload_chunk, chunk["path"], chunk["mime_type"]
+                    executor, 
+                    _upload_chunk, 
+                    chunk["path"], 
+                    chunk["mime_type"],
+                    version_id,
+                    chunk["index"],
+                    orig_filename
                 )
                 file_ref = await _wait_for_processing_async(file_ref)
                 
                 result = await loop.run_in_executor(
-                    executor, _ocr_with_adaptive_fallback, chunk, file_ref, doc_type
+                    executor, 
+                    _ocr_with_adaptive_fallback, 
+                    chunk, 
+                    file_ref, 
+                    doc_type,
+                    version_id,
+                    orig_filename
                 )
             except Exception as e:
                 logger.error(f"Processing failed for chunk {chunk['label']}: {e}", exc_info=True)
@@ -549,7 +629,7 @@ async def _process_all_chunks_pipelined(
                         
         async with lock:
             progress["pages"] += chunk.get("page_count", 1)
-            status_mgr.update_progress(filepath, progress["pages"])
+            repo.update_processed_pages(filepath, progress["pages"])
             
         return result
 
@@ -578,7 +658,6 @@ def finalize_processing(
     filepath: str, 
     output_path: str, 
     markdown_text: str, 
-    status_mgr=None, 
     source_pdf_hash: str = "",
     version_id: str = ""
 ):
@@ -586,6 +665,8 @@ def finalize_processing(
     生成されたMarkdownテキストを元に、分類・Frontmatter付与・フォルダ移動・インデックス登録を行う
     """
     try:
+        from metadata_repository import MetadataRepository
+        repo = MetadataRepository()
         from classifier import DocumentClassifier
         # import here to avoid circular dependency if possible
         from config import KNOWLEDGE_BASE_DIR
@@ -594,9 +675,6 @@ def finalize_processing(
         import traceback
         import time
 
-        if status_mgr is None:
-             from status_manager import OCRStatusManager
-             status_mgr = OCRStatusManager()
 
         # 分類実行
         classifier = DocumentClassifier()
@@ -685,7 +763,8 @@ def finalize_processing(
         if pdf_moved or md_moved:
             logger.info(f"自動分類: PDFは {PDF_STORAGE_DIR}、MDは {category_path} へ移動しました")
             if pdf_moved:
-                status_mgr.rename_status(filepath, str(new_pdf_path))
+                # status_mgr は廃止し、repo を使用
+                repo.update_ingest_stage(filepath, "completed") # 暫定
                 # file_store の current_path を新しいパスに更新
                 try:
                     import file_store as fs
@@ -709,16 +788,13 @@ def finalize_processing(
             logger.error(f"自動インデックス登録エラー ({new_md_path}): {e}", exc_info=True)
 
         if version_id:
-            from metadata_repository import MetadataRepository
-            MetadataRepository().update_ingest_stage(filepath, "indexing_completed")
-            MetadataRepository().mark_as_searchable(filepath)
+            repo.update_ingest_stage(filepath, "indexing_completed")
+            repo.mark_as_searchable(filepath)
         
-        status_mgr.complete_processing(filepath)
         return filepath, output_path
 
     except Exception as e:
         logger.error(f"自動分類・メタデータ付与エラー ({filepath}): {e}", exc_info=True)
-        status_mgr.complete_processing(filepath)
         return filepath, output_path
 
 
@@ -740,8 +816,8 @@ def process_pdf_background(
     Phase 3: asyncioパイプラインで全チャンクの並列アップロード＋OCRを実行する。
     """
     logger.info(f"OCR開始: {filepath} -> {output_path} (doc_type={doc_type}, hash={source_pdf_hash}, version={version_id})")
-    from status_manager import OCRStatusManager
-    status_mgr = OCRStatusManager()
+    from metadata_repository import MetadataRepository
+    repo = MetadataRepository()
 
     try:
         # 1. PDF分割（Phase 1 + 2: text extraction fast path + chunking）
@@ -752,22 +828,22 @@ def process_pdf_background(
         logger.info(f"[OCR Fast Path] {fast_path_pages} text pages extracted without API / Sent {total_pages - fast_path_pages} pages to OCR.")
 
         # ステータス初期化 (総ページ数ベース)
-        status_mgr.start_processing(filepath, total_pages)
+        repo.update_ingest_stage(filepath, "processing", total_pages=total_pages)
 
         # 2. asyncioパイプラインで並列OCR（Phase 2: max_workers=EXECUTOR_WORKERS）
         with ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS) as executor:
             try:
                 results = asyncio.run(
                     asyncio.wait_for(
-                        _process_all_chunks_pipelined(
-                            chunks, doc_type, executor, status_mgr, filepath
-                        ),
-                        timeout=1800  # 全体上限30分
+                    _process_all_chunks_pipelined(
+                        chunks, doc_type, executor, repo, filepath, version_id
+                    ),
+                    timeout=1800  # 全体上限30分
                     )
                 )
             except asyncio.TimeoutError:
                 logger.error(f"OCR全体タイムアウト（1800秒）: {filepath}")
-                status_mgr.fail_processing(filepath, "OCR overall timeout: exceeded 1800 seconds")
+                repo.fail_processing(filepath, "OCR overall timeout: exceeded 1800 seconds")
                 return
 
         # 3. 結合（index順にソートして全結果をMarkdown化）
@@ -796,7 +872,7 @@ def process_pdf_background(
         logger.info(f"OCR完了・保存: {output_path}")
 
         # 5. 次のステージへディスパッチ (Phase 3)
-        status_mgr.update_status(filepath, "ocr_completed")
+        repo.update_ingest_stage(filepath, "ocr_completed")
         
         from ingestion_orchestrator import IngestionOrchestrator
         orchestrator = IngestionOrchestrator()
@@ -816,4 +892,4 @@ def process_pdf_background(
 
     except Exception as e:
         logger.error(f"OCRプロセス全体でエラー ({filepath}): {e}", exc_info=True)
-        status_mgr.fail_processing(filepath, str(e))
+        repo.fail_processing(filepath, str(e))

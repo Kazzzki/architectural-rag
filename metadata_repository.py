@@ -162,6 +162,23 @@ class MetadataRepository:
         finally:
             session.close()
 
+    def update_processed_pages(self, filepath: str, processed_pages: int) -> None:
+        """
+        OCRの進捗ページ数を更新する
+        """
+        session = get_session()
+        try:
+            doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == filepath).first()
+            if doc:
+                doc.processed_pages = processed_pages
+                doc.updated_at = datetime.now()
+                session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
     def mark_as_searchable(self, filepath: str) -> None:
         """
         Index構築が完全に成功した場合のみ呼び出され、searchable (completed) にする。
