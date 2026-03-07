@@ -32,3 +32,8 @@ data/
 
 # Runtime info
 current_url.txt
+
+# File assets and inputs
+*.pdf
+input/
+knowledge_base/

@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, func, or_, text, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, func, or_, text, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 logger = logging.getLogger(__name__)
@@ -124,6 +124,189 @@ class ChatMessage(Base):
     session = relationship("ChatSession", back_populates="messages")
 
 
+# ========== Layer A Memory v2 Models ==========
+
+class MemoryItem(Base):
+    __tablename__ = 'memory_items'
+    
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    memory_type = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    key_norm = Column(String, nullable=True)
+    title = Column(String, nullable=True)
+    canonical_text = Column(Text, nullable=False)
+    value_json = Column(Text, nullable=True)
+    tags_json = Column(Text, nullable=True)
+    entities_json = Column(Text, nullable=True)
+    confidence = Column(Float, nullable=False, default=0.0)
+    salience = Column(Float, nullable=False, default=0.0)
+    utility_score = Column(Float, nullable=False, default=0.0)
+    support_count = Column(Integer, nullable=False, default=1)
+    contradiction_count = Column(Integer, nullable=False, default=0)
+    first_seen_at = Column(DateTime, nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
+    last_confirmed_at = Column(DateTime, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    valid_from = Column(DateTime, nullable=True)
+    valid_to = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    supersedes_id = Column(String, nullable=True)
+    source_hash = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+    
+    __table_args__ = (
+        Index('idx_memory_items_user_type_status', 'user_id', 'memory_type', 'status'),
+        Index('idx_memory_items_user_key', 'user_id', 'key_norm'),
+        Index('idx_memory_items_user_last_used', 'user_id', 'last_used_at'),
+    )
+
+
+class MemoryEvidence(Base):
+    __tablename__ = 'memory_evidence'
+    
+    id = Column(String, primary_key=True)
+    memory_item_id = Column(String, ForeignKey('memory_items.id'), nullable=False)
+    user_id = Column(String, nullable=False)
+    conversation_id = Column(String, nullable=False)
+    message_index_start = Column(Integer, nullable=True)
+    message_index_end = Column(Integer, nullable=True)
+    quote_text = Column(Text, nullable=True)
+    evidence_strength = Column(Float, nullable=False, default=0.0)
+    occurred_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+    __table_args__ = (
+        Index('idx_memory_evidence_memory', 'memory_item_id'),
+        Index('idx_memory_evidence_user_conversation', 'user_id', 'conversation_id'),
+    )
+
+
+class MemoryView(Base):
+    __tablename__ = 'memory_views'
+    
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    view_name = Column(String, nullable=False)
+    content_text = Column(Text, nullable=False)
+    token_estimate = Column(Integer, nullable=False, default=0)
+    source_version_hash = Column(String, nullable=False)
+    generated_at = Column(DateTime, nullable=False)
+    
+    __table_args__ = (
+        UniqueConstraint('user_id', 'view_name', name='uq_memory_views_user_view'),
+    )
+
+
+class MemoryHistory(Base):
+    __tablename__ = 'memory_history'
+    
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    memory_item_id = Column(String, nullable=False)
+    action = Column(String, nullable=False)
+    before_json = Column(Text, nullable=True)
+    after_json = Column(Text, nullable=True)
+    reason = Column(Text, nullable=True)
+    actor = Column(String, nullable=False, default='system')
+    prompt_version = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+    __table_args__ = (
+        Index('idx_memory_history_item', 'memory_item_id'),
+    )
+
+
+class MemoryCompactionRun(Base):
+    __tablename__ = 'memory_compaction_runs'
+    
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    granularity = Column(String, nullable=False)
+    period_start = Column(DateTime, nullable=False)
+    period_end = Column(DateTime, nullable=False)
+    source_count = Column(Integer, nullable=False, default=0)
+    output_memory_item_id = Column(String, nullable=True)
+    status = Column(String, nullable=False)
+    error_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class MemoryIngestionRun(Base):
+    __tablename__ = 'memory_ingestion_runs'
+    
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    conversation_id = Column(String, nullable=False)
+    source_hash = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    extracted_count = Column(Integer, nullable=False, default=0)
+    saved_count = Column(Integer, nullable=False, default=0)
+    error_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'conversation_id', 'source_hash', name='uq_memory_ingestion_runs_user_conv_hash'),
+    )
+
+# ========== Layer B Scope Engine Models ==========
+
+class Settings(Base):
+    __tablename__ = 'settings'
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+
+class ProjectProfile(Base):
+    __tablename__ = 'project_profiles'
+    project_id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    phase = Column(String, default='')
+    order_type = Column(String, default='')
+    client = Column(String, default='')
+    objective = Column(String, default='')
+    key_constraints = Column(String, default='')
+    current_priority = Column(String, default='')
+    current_issues = Column(String, default='')
+    rag_notes = Column(String, default='')
+    source_json = Column(Text, default='{}')
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+    __table_args__ = (
+        Index('idx_project_profiles_user', 'user_id'),
+    )
+
+class ProjectView(Base):
+    __tablename__ = 'project_views'
+    project_id = Column(String, primary_key=True)
+    user_id = Column(String, primary_key=True)
+    view_name = Column(String, primary_key=True)
+    content_text = Column(String, nullable=False)
+    token_estimate = Column(Integer, nullable=False, default=0)
+    source_version_hash = Column(String, nullable=False)
+    generated_at = Column(DateTime, nullable=False, default=datetime.now)
+
+class MemoryScopeLink(Base):
+    __tablename__ = 'memory_scope_links'
+    id = Column(String, primary_key=True)
+    memory_item_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    scope_type = Column(String, nullable=False)
+    scope_id = Column(String, nullable=False)
+    relation_type = Column(String, nullable=False, default='primary')
+    weight = Column(Float, nullable=False, default=1.0)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+    __table_args__ = (
+        Index('idx_memory_scope_links_scope', 'user_id', 'scope_type', 'scope_id'),
+        Index('idx_memory_scope_links_memory', 'memory_item_id'),
+    )
+
+
 # DB接続設定
 engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -221,21 +404,62 @@ def find_similar_contexts(keywords: list[str], limit: int = 5) -> list[PersonalC
     finally:
         session.close()
 
+def get_project_memories(project_tag: str, limit: int = 20) -> list[PersonalContext]:
+    """特定のプロジェクトに関連するアクティブなコンテキストを取得"""
+    session = SessionLocal()
+    try:
+        return session.query(PersonalContext).filter(
+            PersonalContext.is_active == True,
+            PersonalContext.project_tag == project_tag
+        ).order_by(PersonalContext.updated_at.desc()).limit(limit).all()
+    finally:
+        session.close()
+
+def get_global_lessons(exclude_project_tag: str = None, limit: int = 20) -> list[PersonalContext]:
+    """他プロジェクトの教訓などを取得"""
+    session = SessionLocal()
+    try:
+        query = session.query(PersonalContext).filter(
+            PersonalContext.is_active == True,
+            PersonalContext.type == 'lesson'
+        )
+        if exclude_project_tag:
+            query = query.filter(PersonalContext.project_tag != exclude_project_tag)
+        return query.order_by(PersonalContext.updated_at.desc()).limit(limit).all()
+    finally:
+        session.close()
+
 def insert_context(entry: dict) -> PersonalContext:
     """新規エントリを挿入"""
     session = SessionLocal()
     try:
+        project_tag = entry.get("project_id") or entry.get("project_tag")
         new_ctx = PersonalContext(
             type=entry.get("type"),
             content=entry.get("content"),
             trigger_keywords=json.dumps(entry.get("trigger_keywords", []), ensure_ascii=False),
-            project_tag=entry.get("project_tag"),
+            project_tag=project_tag,
             source_question=entry.get("source_question"),
             merge_history=json.dumps([])
         )
         session.add(new_ctx)
         session.commit()
         session.refresh(new_ctx)
+        
+        # Dual-write to MemoryScopeLink if project_id is available
+        if project_tag:
+            link = MemoryScopeLink(
+                id=str(uuid.uuid4()),
+                memory_item_id=f"pc_{new_ctx.id}", # mark as legacy PC
+                user_id="mock_user",
+                scope_type="project",
+                scope_id=project_tag,
+                relation_type="primary",
+                weight=1.0
+            )
+            session.add(link)
+            session.commit()
+            
         return new_ctx
     except Exception as e:
         session.rollback()

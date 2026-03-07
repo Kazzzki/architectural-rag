@@ -102,6 +102,41 @@ export interface SaveMessagePayload {
     model: string;
 }
 
+export interface ProjectInfo {
+    id: string;
+    name: string;
+    status: string;
+    building_type: string;
+}
+
+export interface ActiveScope {
+    project_id: string | null;
+    scope_mode: string;
+    project_name?: string | null;
+}
+
+export async function fetchProjects(): Promise<ProjectInfo[]> {
+    const res = await authFetch(`${API_BASE}/api/mindmap/projects`);
+    if (!res.ok) throw new Error(`Failed to fetch projects: ${res.statusText}`);
+    const data = await res.json();
+    return data.projects || [];
+}
+
+export async function fetchActiveScope(): Promise<ActiveScope> {
+    const res = await authFetch(`${API_BASE}/api/system/active-scope`);
+    if (!res.ok) throw new Error(`Failed to fetch active scope: ${res.statusText}`);
+    return res.json();
+}
+
+export async function updateActiveScope(project_id: string | null, scope_mode: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/api/system/active-scope`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id, scope_mode })
+    });
+    if (!res.ok) throw new Error(`Failed to update active scope: ${res.statusText}`);
+}
+
 /** セッション一覧取得 */
 export async function fetchSessions(): Promise<SessionSummary[]> {
     const res = await authFetch(`${API_BASE}/api/chat/sessions`);
@@ -154,6 +189,9 @@ export async function* chatStream(
     model?: string,
     contextSheet?: string | null,
     quickMode: boolean = true,  // デフォルトは高速モード（ストリーム向けにTTFB優先）
+    projectId?: string | null,
+    scopeMode?: string,
+    useRag: boolean = true,
 ): AsyncGenerator<StreamUpdate> {
     const response = await fetch(`${API_BASE}/api/chat/stream`, {
         method: 'POST',
@@ -169,6 +207,9 @@ export async function* chatStream(
             model: model || 'gemini-3-flash-preview',
             context_sheet: contextSheet || null,
             quick_mode: quickMode,
+            project_id: projectId || null,
+            scope_mode: scopeMode || 'auto',
+            use_rag: useRag,
         }),
     });
     if (!response.ok) throw new Error(`API Error: ${response.statusText}`);

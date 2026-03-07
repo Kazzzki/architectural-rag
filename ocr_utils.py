@@ -23,7 +23,7 @@ RETRYABLE_EXCEPTIONS = (
     exceptions.DeadlineExceeded,
 )
 
-def retry_gemini_call(max_attempts: int = 5, min_wait: int = 1, max_wait: int = 16):
+def retry_gemini_call(max_attempts: int = 3, min_wait: int = 1, max_wait: int = 16):
     """
     Gemini API呼び出し用のリトライデコレータ
     - 指数バックオフ (1s, 2s, 4s, 8s, 16s...)

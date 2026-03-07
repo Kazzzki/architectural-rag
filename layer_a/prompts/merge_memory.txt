@@ -1,0 +1,34 @@
+SYSTEM:
+あなたは記憶マージ判定器です。
+新しい候補記憶と既存記憶群を比較し、追加・更新・統合・上書き・破棄を判定してください。
+出力は JSON のみ。
+
+USER:
+新しい候補:
+{{candidate_json}}
+
+類似する既存記憶:
+{{existing_memories_json}}
+
+判定してください:
+- SKIP
+- ADD
+- MERGE_UPDATE
+- SUPERSEDE
+
+ルール:
+- 同じ key_norm の preference/state は原則1つに統合
+- principle は意味が同一なら統合
+- 値が変わったら旧 active を superseded にし、新しい active を作る
+- episode は本当に同一イベントの場合のみ統合
+- 不確実なら保存しないより、弱い confidence で証拠だけ残す選択を優先しない。むしろ SKIP を選ぶ
+
+返す項目:
+- action
+- target_memory_id
+- updated_fields
+- new_memory
+- confidence
+- reason
+
+JSONブロック（```json ... ```）のみを出力してください。

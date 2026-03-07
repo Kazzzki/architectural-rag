@@ -229,5 +229,14 @@ def get_sync_stats() -> Dict[str, Any]:
         }
 
 
+def delete_file(file_id: str) -> bool:
+    """IDでファイルレコードを削除"""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM files WHERE id = ?", (file_id,)
+        )
+        return cursor.rowcount > 0
+
+
 # 起動時にDB初期化
 init_db()

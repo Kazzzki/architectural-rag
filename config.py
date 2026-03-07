@@ -55,14 +55,22 @@ CHUNK_OVERLAP = 200  # オーバーラップ文字数
 
 # 検索設定
 TOP_K_RESULTS = 8  # 検索で返すチャンク数
+RERANK_THRESHOLD: float = float(os.getenv("RERANK_THRESHOLD", "0.5"))
+RERANK_CANDIDATE_COUNT: int = int(os.getenv("RERANK_CANDIDATE_COUNT", "15"))
 
 # Gemini API設定
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise EnvironmentError("GEMINI_API_KEY が未設定です。.env ファイルを確認してください。")
 MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "65536"))
-PDF_CHUNK_PAGES = int(os.environ.get("PDF_CHUNK_PAGES", "10"))
-OCR_MAX_WORKERS = int(os.environ.get("OCR_MAX_WORKERS", "8"))
+PDF_CHUNK_PAGES = int(os.environ.get("PDF_CHUNK_PAGES", "2"))  # 互換性維持のため残す
+PDF_CHUNK_PAGES_GENERAL = int(os.environ.get("PDF_CHUNK_PAGES_GENERAL", "6"))
+PDF_CHUNK_PAGES_DRAWING = int(os.environ.get("PDF_CHUNK_PAGES_DRAWING", "2"))
+OCR_TEXT_FASTPATH_MIN_CHARS = int(os.environ.get("OCR_TEXT_FASTPATH_MIN_CHARS", "80"))
+OCR_GARBLED_MAX_COMBINING_RATIO = float(os.environ.get("OCR_GARBLED_MAX_COMBINING_RATIO", "0.08"))
+OCR_MAX_WORKERS = int(os.environ.get("OCR_MAX_WORKERS", "8"))  # 互換性
+EXECUTOR_WORKERS = int(os.environ.get("EXECUTOR_WORKERS", "12"))
+API_CONCURRENCY = int(os.environ.get("API_CONCURRENCY", "5"))
 TEMPERATURE = 0.2  # 技術的正確性を重視
 
 GEMINI_MODEL_RAG = "gemini-3-flash-preview"  # RAG用
@@ -81,6 +89,18 @@ AVAILABLE_MODELS: dict[str, str] = {
     "gemini-3.1-pro-preview":  "Gemini 3.1 Pro（高精度・低速）",
     "gemini-2.0-flash":        "Gemini 2.0 Flash（安定板）",
 }
+
+# ===== Layer A Memory v2 Feature Flags =====
+MEMORY_V2_ENABLED = os.environ.get("MEMORY_V2_ENABLED", "true").lower() == "true"
+MEMORY_V2_WRITE_ENABLED = os.environ.get("MEMORY_V2_WRITE_ENABLED", "true").lower() == "true"
+MEMORY_V2_READ_ENABLED = os.environ.get("MEMORY_V2_READ_ENABLED", "true").lower() == "true"
+MEMORY_MAX_INJECTION_TOKENS = int(os.environ.get("MEMORY_MAX_INJECTION_TOKENS", "900"))
+MEMORY_RAW_TRANSCRIPT_TTL_DAYS = int(os.environ.get("MEMORY_RAW_TRANSCRIPT_TTL_DAYS", "30"))
+MEMORY_STATE_DEFAULT_TTL_DAYS = int(os.environ.get("MEMORY_STATE_DEFAULT_TTL_DAYS", "30"))
+MEMORY_DAILY_RETENTION_DAYS = int(os.environ.get("MEMORY_DAILY_RETENTION_DAYS", "14"))
+MEMORY_WEEKLY_RETENTION_WEEKS = int(os.environ.get("MEMORY_WEEKLY_RETENTION_WEEKS", "12"))
+MEMORY_MONTHLY_RETENTION_MONTHS = int(os.environ.get("MEMORY_MONTHLY_RETENTION_MONTHS", "24"))
+
 
 
 # ChromaDBコレクション名

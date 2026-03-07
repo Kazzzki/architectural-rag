@@ -85,6 +85,26 @@ class OCRStatusManager:
         finally:
             session.close()
 
+    def update_status(self, file_path: str, new_status: str):
+        """ステータス文字列のみを更新（ページ数はリセットしない）"""
+        from database import Document
+        session = self._get_session()
+        try:
+            rel_path = self._get_rel_path(file_path)
+            doc = session.query(Document).filter(
+                Document.file_path == rel_path
+            ).with_for_update().first()
+
+            if doc:
+                doc.status = new_status
+                doc.updated_at = datetime.now()
+                session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"update_status error ({rel_path}): {e}", exc_info=True)
+        finally:
+            session.close()
+
     def complete_processing(self, file_path: str):
         """処理完了"""
         from database import Document

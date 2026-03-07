@@ -6,7 +6,7 @@ import logging
 import json
 from datetime import datetime
 from retriever import search, build_context, get_source_files
-from generator import generate_answer, generate_answer_stream
+from generator import generate_answer, generate_answer_stream, generate_answer_direct, generate_answer_stream_direct
 from database import get_db, ChatSession, ChatMessage
 from sqlalchemy.orm import Session
 
@@ -30,12 +30,16 @@ class ChatRequest(BaseModel):
     # v4: モデル選択・コンテキストシート注入
     model: str = "gemini-3-flash-preview"
     context_sheet: Optional[str] = None
+    # RAGの使用可否（True: 知識ベース参照、False: LLM直接回答）
+    use_rag: bool = True
+    project_id: Optional[str] = None
+    scope_mode: Optional[str] = "auto"
 
 class ChatResponse(BaseModel):
     answer: str
     sources: List[dict]
 
-def run_memory_pipeline(user_message: str, assistant_response: str):
+def run_memory_pipeline(user_message: str, assistant_response: str, project_id: Optional[str] = None):
     """Phase1 → Phase2 を順次実行。全体をtry/exceptで包む。"""
     try:
         from context_extractor import extract_personal_context
@@ -48,7 +52,7 @@ def run_memory_pipeline(user_message: str, assistant_response: str):
             return
 
         # Phase 2: 重複解消付き更新
-        update_contexts_with_dedup(candidates, source_question=user_message)
+        update_contexts_with_dedup(candidates, source_question=user_message, project_id=project_id)
         logger.info(f"Memory pipeline completed: {len(candidates)} candidates processed.")
 
     except Exception as e:
@@ -61,42 +65,50 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="質問を入力してください")
     
     try:
-        # v3: デフォルトは高精度モード（quick_mode=None → False 扱い）
-        use_advanced = not (request.quick_mode if request.quick_mode is not None else False)
-        search_results = search(
-            request.question,
-            filter_category=request.category,
-            filter_file_type=request.file_type,
-            filter_date_range=request.date_range,
-            filter_tags=request.tags,
-            tag_match_mode=request.tag_match_mode or "any",
-            use_query_expansion=use_advanced,
-            use_hyde=use_advanced,
-            use_rerank=use_advanced,
-        )
-
-        logger.info(f"Query: {request.question}, Results: {len(search_results.get('documents', []))}")
-
-        # コンテキスト構築
-        context = build_context(search_results)
-
-        # ソースファイル取得
-        source_files = get_source_files(search_results)
-
-        # 回答生成（会話履歴を渡す）
-        answer = generate_answer(
-            request.question, context, source_files,
-            history=request.history,
-            model=request.model,
-            context_sheet=request.context_sheet,
-        )
+        if request.use_rag:
+            # --- RAGあり（従来の動作） ---
+            # v3: デフォルトは高精度モード（quick_mode=None → False 扱い）
+            use_advanced = not (request.quick_mode if request.quick_mode is not None else False)
+            search_results = search(
+                request.question,
+                filter_category=request.category,
+                filter_file_type=request.file_type,
+                filter_date_range=request.date_range,
+                filter_tags=request.tags,
+                tag_match_mode=request.tag_match_mode or "any",
+                use_query_expansion=use_advanced,
+                use_hyde=use_advanced,
+                use_rerank=use_advanced,
+            )
+            logger.info(f"Query: {request.question}, Results: {len(search_results.get('documents', []))}")
+            context = build_context(search_results)
+            source_files = get_source_files(search_results)
+            answer = generate_answer(
+                request.question, context, source_files,
+                history=request.history,
+                model=request.model,
+                context_sheet=request.context_sheet,
+                project_id=request.project_id,
+                scope_mode=request.scope_mode,
+            )
+        else:
+            # --- RAGなし（LLM直接回答） ---
+            logger.info(f"Direct query (no RAG): {request.question}")
+            source_files = []
+            answer = generate_answer_direct(
+                request.question,
+                history=request.history,
+                model=request.model,
+                context_sheet=request.context_sheet,
+            )
 
         logger.info(f"Answer generated ({len(answer)} chars)")
         
         background_tasks.add_task(
             run_memory_pipeline,
             user_message=request.question,
-            assistant_response=answer
+            assistant_response=answer,
+            project_id=request.project_id
         )
 
         return ChatResponse(answer=answer, sources=source_files)
@@ -115,37 +127,56 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="質問を入力してください")
     
     try:
-        # ストリームではデフォルト quick_mode=True（リランク・拡張スキップでTTFB激減）
-        effective_quick = request.quick_mode if request.quick_mode is not None else True
-        use_advanced = not effective_quick
-        search_results = search(
-            request.question,
-            filter_category=request.category,
-            filter_file_type=request.file_type,
-            filter_date_range=request.date_range,
-            filter_tags=request.tags,
-            tag_match_mode=request.tag_match_mode or "any",
-            use_query_expansion=use_advanced,
-            use_hyde=use_advanced,
-            use_rerank=use_advanced,
-        )
-        context = build_context(search_results)
-        source_files = get_source_files(search_results)
+        if request.use_rag:
+            # --- RAGあり（従来の動作） ---
+            # ストリームではデフォルト quick_mode=True（リランク・拡張スキップでTTFB激減）
+            effective_quick = request.quick_mode if request.quick_mode is not None else True
+            use_advanced = not effective_quick
+            search_results = search(
+                request.question,
+                filter_category=request.category,
+                filter_file_type=request.file_type,
+                filter_date_range=request.date_range,
+                filter_tags=request.tags,
+                tag_match_mode=request.tag_match_mode or "any",
+                use_query_expansion=use_advanced,
+                use_hyde=use_advanced,
+                use_rerank=use_advanced,
+            )
+            context = build_context(search_results)
+            source_files = get_source_files(search_results)
+        else:
+            # --- RAGなし（LLM直接回答） ---
+            logger.info(f"Direct stream query (no RAG): {request.question}")
+            context = ""
+            source_files = []
+
         history = request.history
 
         def generate():
             full_answer = ""
-            # 1. ソース情報を先に送信
             yield f"data: {json.dumps({'type': 'sources', 'data': source_files}, ensure_ascii=False)}\n\n"
 
             try:
+                if request.use_rag:
+                    stream_gen = generate_answer_stream(
+                        request.question, context, source_files,
+                        history=history,
+                        model=request.model,
+                        context_sheet=request.context_sheet,
+                        project_id=request.project_id,
+                        scope_mode=request.scope_mode,
+                    )
+                else:
+                    stream_gen = generate_answer_stream_direct(
+                        request.question,
+                        history=history,
+                        model=request.model,
+                        context_sheet=request.context_sheet,
+                    )
+                
                 # 2. 回答をストリーミング
-                for chunk in generate_answer_stream(
-                    request.question, context, source_files,
-                    history=history,
-                    model=request.model,
-                    context_sheet=request.context_sheet,
-                ):
+                for chunk in stream_gen:
                     full_answer += chunk
                     yield f"data: {json.dumps({'type': 'answer', 'data': chunk}, ensure_ascii=False)}\n\n"
             except Exception as e:
@@ -156,7 +187,8 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
             background_tasks.add_task(
                 run_memory_pipeline,
                 user_message=request.question,
-                assistant_response=full_answer
+                assistant_response=full_answer,
+                project_id=request.project_id
             )
 
             # 3. 完了シグナル

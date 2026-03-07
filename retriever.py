@@ -13,13 +13,13 @@ from collections import Counter
 
 logger = logging.getLogger(__name__)
 
-import chromadb
-
 from config import (
     CHROMA_DB_DIR,
     FILE_INDEX_PATH,
     TOP_K_RESULTS,
     COLLECTION_NAME,
+    RERANK_THRESHOLD,
+    RERANK_CANDIDATE_COUNT,
 )
 from indexer import GeminiEmbeddingFunction, get_query_embedding, get_chroma_client, load_parent_chunk
 from gemini_client import get_client
@@ -143,7 +143,7 @@ def _search_single(
     return hits
 
 
-def _merge_hits(hits_list: List[List[Dict[str, Any]]], top_k: int = 15) -> List[Dict[str, Any]]:
+def _merge_hits(hits_list: List[List[Dict[str, Any]]], top_k: int = RERANK_CANDIDATE_COUNT) -> List[Dict[str, Any]]:
     """複数検索結果をマージし、スコアが高い上位 top_k 件を返す（重複除去）"""
     dedup: Dict[str, Dict[str, Any]] = {}
     for hits in hits_list:
@@ -180,10 +180,10 @@ def _rerank_single(query: str, context: str) -> float:
     try:
         return float(response.text.strip())
     except ValueError:
-        return 0.5
+        return RERANK_THRESHOLD
 
 
-def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = 0.5) -> List[Dict[str, Any]]:
+def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = RERANK_THRESHOLD) -> List[Dict[str, Any]]:
     """Gemini でリランクし、threshold 以上のもの上位5件を返す。
     リランク評価は ThreadPoolExecutor で並列化（1序列ループ→約N倍高速化）。
     """
@@ -194,7 +194,7 @@ def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = 0.5) 
             return _rerank_single(query, hit["document"]), hit
         except Exception as e:
             logger.warning(f"rerank_single failed: {e}")
-            return 0.5, hit
+            return RERANK_THRESHOLD, hit
 
     scored = []
     # レートリミット配慮で max_workers=5 に制限
@@ -314,12 +314,12 @@ def search(
         all_hits_lists.append(_search_single(hypo_doc, collection, n=n_results, where=where))
 
     # ─── Step 3: マージ ─────────────────────────────────────────────────────
-    merged_hits = _merge_hits(all_hits_lists, top_k=15)
+    merged_hits = _merge_hits(all_hits_lists, top_k=RERANK_CANDIDATE_COUNT)
 
     # ─── Step 4: Gemini リランク ─────────────────────────────────────────────
     if use_rerank and merged_hits:
         try:
-            final_hits = rerank_hits(query, merged_hits, threshold=0.5)
+            final_hits = rerank_hits(query, merged_hits, threshold=RERANK_THRESHOLD)
             if not final_hits:
                 # リランクで全件除外された場合はリランクなし上位5件にフォールバック
                 logger.warning("All hits filtered by rerank, using top-5 fallback")

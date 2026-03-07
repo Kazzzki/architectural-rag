@@ -563,14 +563,16 @@ def _index_single_file_info(
     if file_info["file_type"] == "md":
         frontmatter = parse_frontmatter(full_path)
 
-    # source_pdf_hash 解決: frontmatter > ファイル名ハッシュ
+    # source_pdf_hash 解決
     source_pdf_hash = (
         frontmatter.get("source_pdf")
         or file_info.get("source_pdf_rel", "")
+        or file_info.get("source_pdf_hash", "")
     )
-    if not source_pdf_hash:
-        # ファイル内容からハッシュを生成（フォールバック）
+    if not source_pdf_hash and file_info.get("file_type") == "pdf":
         source_pdf_hash = hashlib.sha256(Path(full_path).read_bytes()).hexdigest()[:16]
+    elif not source_pdf_hash:
+        source_pdf_hash = ""
 
     source_pdf_name = (
         frontmatter.get("pdf_filename")
@@ -780,6 +782,160 @@ def delete_from_index(rel_path: str) -> bool:
     except Exception as e:
         logger.error(f"DBインデックス削除エラー ({rel_path}): {e}", exc_info=True)
         return False
+
+
+def delete_file_completely(file_path: str) -> dict:
+    """
+    ファイルに紐づく全データを完全削除する。
+    - ChromaDB チャンク（rel_path & source_pdf_hash の両方で削除）
+    - data/parent_chunks/ の JSON ファイル
+    - data/pdfs/ のハッシュ名 PDF
+    - files テーブル（file_store）
+    - Document テーブル（SQLite）
+    - knowledge_base 内の物理ファイル（PDF/MD）
+
+    Args:
+        file_path: knowledge_base からの相対パス（例: "06_設計/hoge.pdf"）
+
+    Returns:
+        dict: 削除結果サマリー
+    """
+    from pathlib import Path
+    from config import KNOWLEDGE_BASE_DIR, PARENT_CHUNKS_DIR, PDF_STORAGE_DIR, COLLECTION_NAME
+    import hashlib
+
+    results = {
+        "chroma_chunks": 0,
+        "parent_chunks": 0,
+        "pdf_storage": False,
+        "file_store": False,
+        "doc_index": False,
+        "physical_files": [],
+        "errors": [],
+    }
+
+    abs_path = Path(KNOWLEDGE_BASE_DIR) / file_path
+    # PDF/MDどちらのパスが来ても両方を対象にする
+    pdf_path = abs_path.with_suffix(".pdf") if abs_path.suffix.lower() == ".md" else abs_path
+    md_path  = abs_path.with_suffix(".md")  if abs_path.suffix.lower() == ".pdf" else abs_path
+
+    # --- 1. ChromaDB: rel_path で削除 ---
+    try:
+        client = get_chroma_client()
+        col = client.get_or_create_collection(name=COLLECTION_NAME)
+
+        # MDのrel_pathで削除（インデックスはMDで登録）
+        md_rel = str(md_path.relative_to(Path(KNOWLEDGE_BASE_DIR)))
+        existing = col.get(where={"rel_path": md_rel}, include=[])
+        if existing["ids"]:
+            col.delete(ids=existing["ids"])
+            results["chroma_chunks"] += len(existing["ids"])
+            logger.info(f"[Delete] ChromaDB rel_path削除: {len(existing['ids'])}件")
+    except Exception as e:
+        results["errors"].append(f"ChromaDB rel_path削除エラー: {e}")
+        logger.warning(f"[Delete] ChromaDB rel_path削除エラー（続行）: {e}")
+
+    # --- 2. ChromaDB: source_pdf_hash で削除（漏れチャンク対策） ---
+    try:
+        if pdf_path.exists():
+            with open(pdf_path, "rb") as f:
+                pdf_hash = hashlib.sha256(f.read()).hexdigest()
+            existing = col.get(where={"source_pdf_hash": pdf_hash}, include=[])
+            if existing["ids"]:
+                col.delete(ids=existing["ids"])
+                results["chroma_chunks"] += len(existing["ids"])
+                logger.info(f"[Delete] ChromaDB hash削除: {len(existing['ids'])}件 (hash={pdf_hash[:8]}...)")
+    except Exception as e:
+        results["errors"].append(f"ChromaDB hash削除エラー: {e}")
+        logger.warning(f"[Delete] ChromaDB hash削除エラー（続行）: {e}")
+
+    # --- 3. parent_chunks JSON 削除 ---
+    try:
+        parent_dir = Path(PARENT_CHUNKS_DIR)
+        if parent_dir.exists():
+            # source_pdf_hash に基づくJSONを検索・削除
+            if pdf_path.exists():
+                deleted = 0
+                for json_file in parent_dir.glob(f"{pdf_hash[:16]}*.json"):
+                    json_file.unlink()
+                    deleted += 1
+                # ファイル名ベースでも検索（ハッシュが取れない場合のフォールバック）
+                stem = pdf_path.stem
+                for json_file in parent_dir.glob(f"*{stem}*.json"):
+                    if json_file.exists():
+                        json_file.unlink()
+                        deleted += 1
+                results["parent_chunks"] = deleted
+                if deleted:
+                    logger.info(f"[Delete] parent_chunks JSON削除: {deleted}件")
+    except Exception as e:
+        results["errors"].append(f"parent_chunks削除エラー: {e}")
+        logger.warning(f"[Delete] parent_chunks削除エラー（続行）: {e}")
+
+    # --- 4. data/pdfs/ のハッシュ名PDF削除 ---
+    try:
+        if pdf_path.exists():
+            pdf_storage_dir = Path(PDF_STORAGE_DIR)
+            hash_pdf = pdf_storage_dir / f"{pdf_hash}{pdf_path.suffix}"
+            if hash_pdf.exists():
+                hash_pdf.unlink()
+                results["pdf_storage"] = True
+                logger.info(f"[Delete] data/pdfs/ ハッシュPDF削除: {hash_pdf.name}")
+    except Exception as e:
+        results["errors"].append(f"data/pdfs/削除エラー: {e}")
+        logger.warning(f"[Delete] data/pdfs/削除エラー（続行）: {e}")
+
+    # --- 5. file_store (files テーブル) 削除 ---
+    try:
+        import file_store as fs
+        # current_path で検索（PDF・MD両方試みる）
+        for target_path in [str(pdf_path), str(md_path)]:
+            rec = fs.get_file_by_path(target_path)
+            if rec:
+                fs.delete_file(rec["id"])
+                results["file_store"] = True
+                logger.info(f"[Delete] file_store削除: {rec['id']}")
+                break
+    except Exception as e:
+        results["errors"].append(f"file_store削除エラー: {e}")
+        logger.warning(f"[Delete] file_store削除エラー（続行）: {e}")
+
+    # --- 6. Document テーブル（SQLite）削除 ---
+    try:
+        result = _delete_doc_index(str(md_path.relative_to(Path(KNOWLEDGE_BASE_DIR))))
+        if not result:
+            _delete_doc_index(file_path)  # 元のパスでも試みる
+        results["doc_index"] = True
+    except Exception as e:
+        results["errors"].append(f"Document削除エラー: {e}")
+        logger.warning(f"[Delete] Document削除エラー（続行）: {e}")
+
+    # --- 7. OCR ステータス削除 ---
+    try:
+        from status_manager import OCRStatusManager
+        OCRStatusManager().remove_status(str(pdf_path))
+        OCRStatusManager().remove_status(file_path)
+    except Exception as e:
+        logger.warning(f"[Delete] OCRステータス削除エラー（続行）: {e}")
+
+    # --- 8. 物理ファイル削除（knowledge_base内） ---
+    for target in [pdf_path, md_path]:
+        if target.exists():
+            try:
+                target.unlink()
+                results["physical_files"].append(target.name)
+                logger.info(f"[Delete] 物理ファイル削除: {target}")
+            except Exception as e:
+                results["errors"].append(f"物理ファイル削除エラー ({target.name}): {e}")
+                logger.error(f"[Delete] 物理ファイル削除エラー: {target}: {e}")
+
+    logger.info(
+        f"[Delete] 完全削除完了: {file_path} | "
+        f"chunks={results['chroma_chunks']}, "
+        f"parent_chunks={results['parent_chunks']}, "
+        f"files={results['physical_files']}"
+    )
+    return results
 
 
 # ─── 後方互換 ────────────────────────────────────────────────────────────────────

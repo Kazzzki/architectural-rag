@@ -191,7 +191,7 @@ app.add_middleware(
 
 
 # ====== Routers マウント ======
-from routers import system, chat, pdf, drive, tags, files, personal_context, analyze
+from routers import system, chat, pdf, drive, tags, files, personal_context, analyze, projects
 
 app.include_router(system.router)
 app.include_router(chat.router)
@@ -201,6 +201,7 @@ app.include_router(tags.router)
 app.include_router(files.router)
 app.include_router(personal_context.router)
 app.include_router(analyze.router)
+app.include_router(projects.router)
 
 @app.get("/")
 async def root():

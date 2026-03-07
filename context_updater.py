@@ -8,7 +8,7 @@ from database import find_similar_contexts, insert_context, merge_context, inval
 
 logger = logging.getLogger(__name__)
 
-def update_contexts_with_dedup(candidates: List[Dict[str, Any]], source_question: str) -> None:
+def update_contexts_with_dedup(candidates: List[Dict[str, Any]], source_question: str, project_id: str = None) -> None:
     """
     Mem0のPhase 2に準拠した更新処理。
     各候補に対して以下を実行：
@@ -27,6 +27,7 @@ def update_contexts_with_dedup(candidates: List[Dict[str, Any]], source_question
 
     for candidate in candidates:
         candidate["source_question"] = source_question
+        candidate["project_id"] = project_id
         keywords = candidate.get("trigger_keywords", [])
         
         # Step 1: 類似エントリ検索

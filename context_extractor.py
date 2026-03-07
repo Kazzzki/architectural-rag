@@ -18,6 +18,27 @@ def extract_personal_context(user_message: str, assistant_response: str) -> Opti
 
     ステップ2: 抽出・構造化
     """
+    import hashlib
+    from config import MEMORY_V2_ENABLED, MEMORY_V2_WRITE_ENABLED
+    
+    if MEMORY_V2_ENABLED and MEMORY_V2_WRITE_ENABLED:
+        try:
+            from layer_a.memory_ingest import ingest_conversation
+            # 連携IDがないため簡易ハッシュを利用
+            conv_id_hash = hashlib.md5(f"{user_message}{assistant_response}".encode()).hexdigest()[:10]
+            messages = [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": assistant_response}
+            ]
+            # async task/thread safeなので実行
+            ingest_conversation(
+                user_id="default",
+                conversation_id=f"conv_{conv_id_hash}",
+                messages=messages
+            )
+        except Exception as e:
+            logger.error(f"Error calling Memory V2 ingest_conversation: {e}")
+
     try:
         client = get_client()
 

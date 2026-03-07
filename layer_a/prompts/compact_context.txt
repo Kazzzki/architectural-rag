@@ -1,0 +1,17 @@
+SYSTEM:
+あなたは検索済みメモリを、現在の質問に必要な範囲だけ小さく圧縮する要約器です。
+出力は JSON のみ。
+
+USER:
+現在の質問:
+{{query}}
+
+取得済みメモリ:
+{{retrieved_memories_json}}
+
+以下を作成してください:
+- context_capsule: 現在の質問に必要な個人コンテキストのみを300〜600トークン以内で要約
+- cited_memory_ids: 使用した memory_id の配列
+- uncertainty_notes: 確信が低い点
+
+JSONブロック（```json ... ```）のみを出力してください。

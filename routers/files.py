@@ -170,32 +170,19 @@ async def delete_file(request: DeleteFileRequest):
         if not target_path.exists():
              raise HTTPException(status_code=404, detail="File not found")
         
-        from indexer import delete_from_index
-        delete_from_index(str(request.file_path))
-        
-        from status_manager import OCRStatusManager
-        OCRStatusManager().remove_status(str(request.file_path))
-        
-        files_to_delete = [target_path]
-        
-        if target_path.suffix.lower() == '.md':
-            pdf_path = target_path.with_suffix('.pdf')
-            if pdf_path.exists():
-                files_to_delete.append(pdf_path)
-        elif target_path.suffix.lower() == '.pdf':
-            md_path = target_path.with_suffix('.md')
-            if md_path.exists():
-                files_to_delete.append(md_path)
-                
-        deleted_files = []
-        for f in files_to_delete:
-            try:
-                os.remove(f)
-                deleted_files.append(f.name)
-            except Exception as e:
-                logger.warning(f"Failed to delete {f.name}: {e}")
-                
-        return {"success": True, "deleted": deleted_files}
+        from indexer import delete_file_completely
+        result = delete_file_completely(str(request.file_path))
+
+        if result["errors"]:
+            logger.warning(f"Delete completed with errors: {result['errors']}")
+
+        return {
+            "success": True,
+            "deleted": result["physical_files"],
+            "chroma_chunks_deleted": result["chroma_chunks"],
+            "parent_chunks_deleted": result["parent_chunks"],
+            "errors": result["errors"],
+        }
         
     except HTTPException:
         raise
@@ -238,8 +225,10 @@ async def bulk_delete_files(request: BulkDeleteRequest):
                         if f.exists():
                             f.unlink()
                 
-                delete_from_index(str(file_path))
-                status_mgr.remove_status(str(file_path))
+                from indexer import delete_file_completely
+                result = delete_file_completely(str(file_path))
+                if result["errors"]:
+                    logger.warning(f"Delete errors for {file_path}: {result['errors']}")
                 deleted_count += 1
                 
             except Exception as e:
@@ -347,3 +336,62 @@ def get_file_info(file_id: str):
     except Exception as e:
         logger.error(f"Failed to retrieve file info: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="File info retrieval failed")
+
+
+# ===== OCR 進捗ポーリング =====
+
+@router.get("/api/ocr/jobs")
+def get_ocr_job_by_path(file_path: str):
+    """
+    file_path（knowledge_base からの相対パス）で OCR 進捗を1件取得する。
+    
+    使用例:
+      GET /api/ocr/jobs?file_path=uploads/sample.pdf
+    
+    レスポンス:
+      {
+        "file_path": "uploads/sample.pdf",
+        "filename": "sample.pdf",
+        "status": "processing",          # unprocessed | processing | completed | failed
+        "processed_pages": 12,
+        "total_pages": 50,
+        "estimated_remaining": 38.5,     # 残り秒数（予測値）
+        "duration": null,                # 完了時のみ設定（秒）
+        "error_message": null            # failed 時のみ設定
+      }
+    """
+    try:
+        from database import get_session, Document
+
+        session = get_session()
+        try:
+            doc = session.query(Document).filter(
+                Document.file_path == file_path
+            ).first()
+
+            if doc is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"指定されたファイルのジョブが見つかりません: {file_path}"
+                )
+
+            return {
+                "file_path": doc.file_path,
+                "filename": doc.filename,
+                "status": doc.status,
+                "processed_pages": doc.processed_pages or 0,
+                "total_pages": doc.total_pages or 0,
+                "estimated_remaining": doc.estimated_remaining,
+                "duration": doc.duration,
+                "error_message": doc.error_message,
+                "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
+            }
+        finally:
+            session.close()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"get_ocr_job_by_path error ({file_path}): {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="OCR ジョブ取得に失敗しました")
+

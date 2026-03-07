@@ -14,9 +14,10 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from tenacity import RetryError
 
-from config import GEMINI_MODEL_OCR, MAX_TOKENS, PDF_CHUNK_PAGES, OCR_MAX_WORKERS
+from config import GEMINI_MODEL_OCR, MAX_TOKENS, EXECUTOR_WORKERS, API_CONCURRENCY, PDF_CHUNK_PAGES_GENERAL, PDF_CHUNK_PAGES_DRAWING, OCR_TEXT_FASTPATH_MIN_CHARS
 from ocr_utils import retry_gemini_call
 from gemini_client import get_client
+from text_sanitizer import is_text_extraction_usable, detect_garble_reason, normalize_unicode_text
 
 import logging
 logger = logging.getLogger(__name__)
@@ -26,15 +27,20 @@ GEMINI_MODEL = GEMINI_MODEL_OCR
 
 # Phase 2: API同時呼び出し上限（Semaphore）
 # max_workersはスレッドプール全体のサイズ。実際のAPI呼び出しはSemaphoreで絞る。
-_api_semaphore = threading.Semaphore(OCR_MAX_WORKERS)
+_api_semaphore = threading.Semaphore(API_CONCURRENCY)
 
 
 # ---------------------------------------------------------------------------
 # Phase 1-A: PDF分割ヘルパー
 # ---------------------------------------------------------------------------
 
-def _split_pdf(filepath: str, chunk_size: int = PDF_CHUNK_PAGES) -> List[Dict[str, Any]]:
-    """PDFをchunk_sizeページごとに分割して一時ファイルを作成する。"""
+def _split_pdf(filepath: str, doc_type: str = "general") -> List[Dict[str, Any]]:
+    """PDFを分割し、テキスト抽出可能なページはfast path、そうでないものは画像ベースOCR用にチャンク化する。"""
+    if doc_type == "drawing":
+        chunk_size = PDF_CHUNK_PAGES_DRAWING
+    else:
+        chunk_size = PDF_CHUNK_PAGES_GENERAL
+
     chunks = []
     reader = pypdf.PdfReader(filepath)
     total_pages = len(reader.pages)
@@ -42,39 +48,96 @@ def _split_pdf(filepath: str, chunk_size: int = PDF_CHUNK_PAGES) -> List[Dict[st
     from config import TEMP_CHUNK_DIR
     base_dir = Path(TEMP_CHUNK_DIR)
     os.makedirs(base_dir, exist_ok=True)
-
-    if total_pages > chunk_size:
-        for i in range(0, total_pages, chunk_size):
+    
+    current_pdf_pages = []
+    
+    # 統計・ログ用
+    stats_usable = 0
+    stats_fallback = 0
+    stats_reasons = {}
+    
+    def flush_pdf_pages():
+        if not current_pdf_pages:
+            return
+        
+        for i in range(0, len(current_pdf_pages), chunk_size):
+            chunk_indices = current_pdf_pages[i:i+chunk_size]
             writer = pypdf.PdfWriter()
-            end_page = min(i + chunk_size, total_pages)
-            for p in range(i, end_page):
+            for p in chunk_indices:
                 writer.add_page(reader.pages[p])
-
-            chunk_filename = f".chunk_{i}_{uuid.uuid4().hex[:8]}.pdf"
+            
+            start_p = chunk_indices[0] + 1
+            end_p = chunk_indices[-1] + 1
+            chunk_filename = f".chunk_{chunk_indices[0]}_{uuid.uuid4().hex[:8]}.pdf"
             chunk_path = base_dir / chunk_filename
-
+            
             with open(chunk_path, "wb") as f_out:
                 writer.write(f_out)
-
+                
             chunks.append({
                 "path": str(chunk_path),
                 "mime_type": "application/pdf",
-                "label": f"Pages {i+1}-{end_page}",
-                "index": i,
-                "start_page": i + 1,       # 原本PDF内の開始ページ（1-based）
-                "end_page": end_page,       # 原本PDF内の終了ページ（1-based）
-                "page_count": end_page - i,
-                "is_temp": True
+                "label": f"Pages {start_p}-{end_p}",
+                "index": chunk_indices[0],
+                "start_page": start_p,
+                "end_page": end_p,
+                "page_count": len(chunk_indices),
+                "is_temp": True,
+                "type": "pdf"
             })
-    else:
-        chunks.append({
+        current_pdf_pages.clear()
+
+    for p in range(total_pages):
+        page = reader.pages[p]
+        text = ""
+        try:
+            text = page.extract_text()
+        except Exception:
+            pass
+            
+        reason = detect_garble_reason(text) if text else "too_short"
+        usable = not bool(reason)
+            
+        if usable:
+            stats_usable += 1
+            text = normalize_unicode_text(text)
+            flush_pdf_pages()
+            start_p = p + 1
+            end_p = p + 1
+            formatted_text = f"[[PAGE_{start_p}]]\n{text.strip()}"
+            chunks.append({
+                "path": None,
+                "mime_type": "text/plain",
+                "label": f"Page {start_p} (Text Extraction)",
+                "index": p,
+                "start_page": start_p,
+                "end_page": end_p,
+                "page_count": 1,
+                "is_temp": False,
+                "type": "text",
+                "extracted_text": formatted_text
+            })
+        else:
+            stats_fallback += 1
+            stats_reasons[reason] = stats_reasons.get(reason, 0) + 1
+            logger.info(f"[OCR FastPath] page={p+1} rejected reason={reason}")
+            current_pdf_pages.append(p)
+            
+    flush_pdf_pages()
+    
+    logger.info(f"[OCR FastPath] usable_pages={stats_usable} fallback_pages={stats_fallback} (Fallback reasons: {stats_reasons})")
+    
+    chunks.sort(key=lambda x: x["index"])
+    
+    if len(chunks) == 1 and chunks[0].get("type") == "pdf" and chunks[0]["page_count"] == total_pages:
+        if chunks[0]["is_temp"]:
+            try:
+                os.remove(chunks[0]["path"])
+            except OSError:
+                pass
+        chunks[0].update({
             "path": filepath,
-            "mime_type": "application/pdf",
             "label": "Full Doc",
-            "index": 0,
-            "start_page": 1,
-            "end_page": total_pages,
-            "page_count": total_pages,
             "is_temp": False
         })
 
@@ -183,7 +246,31 @@ def _wait_for_processing(file_ref, timeout: float = 120.0):
     return file_ref
 
 
-@retry_gemini_call(max_attempts=5)
+async def _wait_for_processing_async(file_ref, timeout: float = 120.0):
+    """
+    Phase 4: 非同期で file_ref が ACTIVE になるまで待機する。
+    """
+    loop = asyncio.get_running_loop()
+    client = get_client()
+    wait = 0.3
+    elapsed = 0.0
+
+    while file_ref.state.name == "PROCESSING":
+        if elapsed >= timeout:
+            raise Exception(f"File processing timeout ({timeout}s): {file_ref.name}")
+        await asyncio.sleep(wait)
+        elapsed += wait
+        wait = min(wait * 1.5, 3.0)
+        # client.files.get は同期APIなので executor で実行
+        file_ref = await loop.run_in_executor(None, lambda name=file_ref.name: client.files.get(name=name))
+
+    if file_ref.state.name == "FAILED":
+        raise Exception("Google AI File processing failed")
+
+    return file_ref
+
+
+@retry_gemini_call(max_attempts=3)
 def _generate_content(file_ref, model_name: str, prompt: str):
     """
     Phase 3: アップロード済みfile_refを使ってgenerate_contentを実行する。
@@ -213,28 +300,21 @@ def _generate_content(file_ref, model_name: str, prompt: str):
 
 DRAWING_OCR_PROMPT_TEMPLATE = """
 あなたは建築設計の専門家です。
-この図面を以下の形式で詳細に説明してください：
+この図面を以下の形式で正確にテキスト化・抽出してください。不確かな推論はなるべく避け、図面に記載されている文字・数値を忠実に抽出してください：
 
 ## 図面種別
-（平面図/立面図/断面図/詳細図/設備図 等）
+（記載がある場合）
 
 ## スケール・方位
 （記載がある場合）
 
-## 主要寸法
-（全ての寸法値を列挙）
-
-## 材料・仕様
-（凡例・材料記号・仕上げ材を全て列挙）
-
-## 注記・特記事項
-（図面内の文字情報を全て抽出）
-
-## 図面の概要説明
-（設計意図・納まりのポイントを200文字で説明）
+## 寸法・注記・仕様
+（図面内の文字情報、寸法値、材料、特記事項を忠実に全て抽出・列挙）
 
 PAGE MARKERS: This chunk contains pages {start_page} to {end_page} of the original document.
-At the beginning of each page's content, output the marker [[PAGE_N]] on its own line.
+At the very beginning of each page's content, output the marker [[PAGE_N]] on its own line,
+where N is the actual page number in the original document (starting from {start_page}).
+For example, before the first page's content output [[PAGE_{start_page}]], and increment the number for subsequent pages.
 """
 
 GENERAL_OCR_PROMPT_TEMPLATE = """
@@ -308,7 +388,7 @@ def _ocr_with_adaptive_fallback(
                 f"1ページでMAX_TOKENS到達: {chunk['label']} — 結果が不完全な可能性あり"
             )
             return [{
-                "text": response.text,
+                "text": normalize_unicode_text(response.text),
                 "index": chunk["index"],
                 "label": chunk["label"],
                 "start_page": chunk.get("start_page", chunk["index"] + 1),
@@ -347,7 +427,7 @@ def _ocr_with_adaptive_fallback(
 
     # 正常終了（finish_reason チェック: 警告ログ）
     return [{
-        "text": response.text,
+        "text": normalize_unicode_text(response.text),
         "index": chunk["index"],
         "label": chunk["label"],
         "start_page": chunk.get("start_page", chunk["index"] + 1),
@@ -394,54 +474,37 @@ async def _process_all_chunks_pipelined(
     filepath: str,
 ) -> List[Dict[str, Any]]:
     """
-    Phase 3: アップロードとOCRを2フェーズで並列実行するパイプライン。
-    Phase A: 全チャンクを並列アップロード＋ポーリング待機。
-    Phase B: アップロード済みファイルで並列OCR実行。
+    Phase 3: 真のストリーミングパイプライン(streaming pipeline)。
+    各チャンクを個別の非同期タスクとして upload -> wait -> OCR を直列化し、
+    完了したものからページ単位で進捗を更新する。
     """
     loop = asyncio.get_running_loop()
-
-    # ─── Phase A: 全チャンクを並列アップロード ───────────────────────────
-
-    async def upload_and_wait(chunk: Dict[str, Any]):
-        try:
-            file_ref = await loop.run_in_executor(
-                executor, _upload_chunk, chunk["path"], chunk["mime_type"]
-            )
-            file_ref = await loop.run_in_executor(
-                executor, _wait_for_processing, file_ref
-            )
-            return (chunk, file_ref, None)
-        except Exception as e:
-            logger.error(f"Upload/wait failed for {chunk['label']}: {e}", exc_info=True)
-            return (chunk, None, e)
-
-    logger.info(f"[Pipeline] Phase A: uploading {len(chunks)} chunks...")
-    upload_pairs = await asyncio.gather(*[upload_and_wait(c) for c in chunks])
-
-    # ─── Phase B: OCR実行（アップロード失敗チャンクはエラー扱い）─────────
-
-    processed_count = 0
+    
+    progress = {"pages": 0}
     lock = asyncio.Lock()
-
-    async def run_ocr(pair: Tuple) -> List[Dict[str, Any]]:
-        nonlocal processed_count
-        chunk, file_ref, upload_error = pair
-
-        if upload_error is not None:
+    
+    async def process_single_chunk(chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
+        
+        if chunk.get("type") == "text":
             result = [{
-                "text": f"\n> ⚠️ **[Upload Error]** Upload failed for **{chunk['label']}**.\n> Error: {str(upload_error)}\n",
+                "text": chunk["extracted_text"],
                 "index": chunk["index"],
                 "label": chunk["label"],
                 "start_page": chunk.get("start_page", chunk["index"] + 1),
-                "success": False,
+                "success": True,
             }]
         else:
             try:
+                file_ref = await loop.run_in_executor(
+                    executor, _upload_chunk, chunk["path"], chunk["mime_type"]
+                )
+                file_ref = await _wait_for_processing_async(file_ref)
+                
                 result = await loop.run_in_executor(
                     executor, _ocr_with_adaptive_fallback, chunk, file_ref, doc_type
                 )
             except Exception as e:
-                logger.error(f"OCR failed for {chunk['label']}: {e}", exc_info=True)
+                logger.error(f"Processing failed for chunk {chunk['label']}: {e}", exc_info=True)
                 result = [{
                     "text": f"\n> ⚠️ **[System Error]** Processing failed for **{chunk['label']}**.\n> Error: {str(e)}\n",
                     "index": chunk["index"],
@@ -455,17 +518,23 @@ async def _process_all_chunks_pipelined(
                         os.remove(chunk["path"])
                     except OSError:
                         pass
-
+                        
         async with lock:
-            processed_count += 1
-            status_mgr.update_progress(filepath, processed_count)
-
+            progress["pages"] += chunk.get("page_count", 1)
+            status_mgr.update_progress(filepath, progress["pages"])
+            
         return result
 
-    logger.info(f"[Pipeline] Phase B: running OCR for {len(upload_pairs)} chunks...")
-    ocr_results = await asyncio.gather(*[run_ocr(p) for p in upload_pairs])
+    logger.info(f"[Pipeline] Starting streaming processing for {len(chunks)} chunks...")
+    tasks = [asyncio.create_task(process_single_chunk(c)) for c in chunks]
+    
+    ocr_results = []
+    # 完了したものから回収（順序は後でソートする）
+    for done_task in asyncio.as_completed(tasks):
+        result = await done_task
+        ocr_results.append(result)
 
-    # フラット化（適応的再分割により各チャンクが複数結果を返す場合がある）
+    # フラット化
     flat_results: List[Dict[str, Any]] = []
     for sublist in ocr_results:
         flat_results.extend(sublist)
@@ -638,15 +707,18 @@ def process_pdf_background(filepath: str, output_path: str, doc_type: str = "cat
     status_mgr = OCRStatusManager()
 
     try:
-        # 1. PDF分割（Phase 1: chunk_size=PDF_CHUNK_PAGES、デフォルト10）
-        chunks = _split_pdf(filepath)
-        total_chunks = len(chunks)
+        # 1. PDF分割（Phase 1 + 2: text extraction fast path + chunking）
+        chunks = _split_pdf(filepath, doc_type)
+        
+        total_pages = sum(c.get("page_count", 1) for c in chunks)
+        fast_path_pages = sum(c.get("page_count", 1) for c in chunks if c.get("type") == "text")
+        logger.info(f"[OCR Fast Path] {fast_path_pages} text pages extracted without API / Sent {total_pages - fast_path_pages} pages to OCR.")
 
-        # ステータス初期化
-        status_mgr.start_processing(filepath, total_chunks)
+        # ステータス初期化 (総ページ数ベース)
+        status_mgr.start_processing(filepath, total_pages)
 
-        # 2. asyncioパイプラインで並列OCR（Phase 2: max_workers=OCR_MAX_WORKERS）
-        with ThreadPoolExecutor(max_workers=OCR_MAX_WORKERS) as executor:
+        # 2. asyncioパイプラインで並列OCR（Phase 2: max_workers=EXECUTOR_WORKERS）
+        with ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS) as executor:
             try:
                 results = asyncio.run(
                     asyncio.wait_for(
@@ -667,12 +739,13 @@ def process_pdf_background(filepath: str, output_path: str, doc_type: str = "cat
 
         for r in results:
             label = r.get("label", f"Part {r['index'] + 1}")
-            page_num = r.get("start_page", r["index"] + 1)
-
-            markdown_text += f"\n\n[[PAGE_{page_num}]]\n"
+            
+            # [[PAGE_N]] はプロンプト出力・抽出テキスト自体に含むため重複追加しない
             markdown_text += f"## {label}\n\n"
             markdown_text += r["text"]
             markdown_text += "\n\n---\n"
+            
+        markdown_text = normalize_unicode_text(markdown_text)
 
         # 4. 保存（一旦）
         with open(output_path, "w", encoding="utf-8") as f:
@@ -681,7 +754,15 @@ def process_pdf_background(filepath: str, output_path: str, doc_type: str = "cat
         logger.info(f"OCR完了・保存: {output_path}")
 
         # 5. 仕上げ処理（分類・移動・インデックス）
-        finalize_processing(filepath, output_path, markdown_text, status_mgr)
+        status_mgr.update_status(filepath, "finalizing")
+        
+        # finalize_processing をバックグラウンドスレッドで実行
+        logger.info(f"finalize_processing をバックグラウンドに渡しました。")
+        threading.Thread(
+            target=finalize_processing,
+            args=(filepath, output_path, markdown_text, status_mgr),
+            daemon=True
+        ).start()
 
     except Exception as e:
         logger.error(f"OCRプロセス全体でエラー ({filepath}): {e}", exc_info=True)

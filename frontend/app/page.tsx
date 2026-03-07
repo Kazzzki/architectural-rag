@@ -2,6 +2,7 @@
 import React from 'react';
 
 import { authFetch, fetchSessions, createSession, fetchSessionDetail, deleteSession, saveMessages, SessionSummary } from '@/lib/api';
+import { resolvePdfUrl } from '@/lib/pdf';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -29,6 +30,7 @@ import Library from './components/Library';
 import FileUpload from './components/FileUpload';
 import StatsPanel from './components/StatsPanel';
 import ContextSheetPanel from './components/ContextSheetPanel';
+import ScopeEnginePanel from './components/ScopeEnginePanel';
 import dynamic from 'next/dynamic';
 
 const PDFViewer = dynamic(() => import('./components/PDFViewer'), {
@@ -89,20 +91,9 @@ function SourceCard({
     const badge = DOC_TYPE_BADGE[src.doc_type];
     const relevanceDots = src.hit_count >= 3 ? '●●●' : src.hit_count === 2 ? '●●○' : '●○○';
 
-    // PDF URL を解決する（source_pdf → rel_path フォールバック → なし）
-    const getPdfUrl = (page?: number): string | null => {
-        if (src.source_pdf) {
-            return `${API_BASE}/api/pdf/${src.source_pdf}`;
-        }
-        if (src.rel_path && src.rel_path.toLowerCase().endsWith('.pdf')) {
-            const encoded = encodeURIComponent(src.rel_path);
-            return `${API_BASE}/api/files/view/${encoded}`;
-        }
-        return null;
-    };
-
     const visiblePages = expanded ? src.pages : src.pages.slice(0, PAGE_CHIP_LIMIT);
     const hiddenCount = src.pages.length - PAGE_CHIP_LIMIT;
+    const resolvedUrl = resolvePdfUrl(src);
 
     return (
         <div className="flex flex-col gap-1.5 bg-[var(--card)] border border-[var(--border)] px-3 py-2 rounded-lg text-xs min-w-[180px] max-w-[260px] relative">
@@ -133,11 +124,10 @@ function SourceCard({
             {src.pages.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-0.5">
                     {visiblePages.map((p) => {
-                        const url = getPdfUrl(p);
-                        return url ? (
+                        return resolvedUrl ? (
                             <button
                                 key={p}
-                                onClick={() => onPageClick(url, p)}
+                                onClick={() => onPageClick(resolvedUrl, p)}
                                 className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-colors cursor-pointer"
                             >
                                 p.{p}
@@ -168,9 +158,9 @@ function SourceCard({
             )}
 
             {/* Fallback: no pages, but PDF openable */}
-            {src.pages.length === 0 && getPdfUrl() && (
+            {src.pages.length === 0 && resolvedUrl && (
                 <button
-                    onClick={() => onPageClick(getPdfUrl()!, 1)}
+                    onClick={() => onPageClick(resolvedUrl, 1)}
                     className="text-[10px] text-blue-500 hover:text-blue-600 flex items-center gap-0.5 border border-blue-200 bg-blue-50 dark:border-blue-900/40 dark:bg-blue-900/10 px-1.5 py-0.5 rounded self-start"
                 >
                     <ExternalLink className="w-2.5 h-2.5" />
@@ -202,15 +192,7 @@ function CitationBadge({
         return <span>[{sourceId}:p.{page}]</span>;
     }
 
-    const getPdfUrl = (): string | null => {
-        if (src.source_pdf) return `${API_BASE}/api/pdf/${src.source_pdf}`;
-        if (src.rel_path && src.rel_path.toLowerCase().endsWith('.pdf')) {
-            return `${API_BASE}/api/files/view/${encodeURIComponent(src.rel_path)}`;
-        }
-        return null;
-    };
-
-    const url = getPdfUrl();
+    const url = resolvePdfUrl(src);
 
     if (!url) {
         return (
@@ -316,6 +298,11 @@ export default function Home() {
     const [pdfUrl, setPdfUrl] = useState<string | null>(null);
     const [pdfInitialPage, setPdfInitialPage] = useState(1);
     const [isPdfOpen, setIsPdfOpen] = useState(false);
+
+    // --- Scope Engine ---
+    const [projectId, setProjectId] = useState<string | null>(null);
+    const [scopeMode, setScopeMode] = useState<string>('auto');
+    const [useRag, setUseRag] = useState<boolean>(true);
 
     // --- コンテキストシート機能 ---
     const [availableModels, setAvailableModels] = useState<Record<string, string>>({});
@@ -552,6 +539,10 @@ export default function Home() {
                 historySnapshot.length > 0 ? historySnapshot : undefined,
                 selectedModel,
                 activeContextSheet,
+                true,       // quickMode
+                projectId,
+                scopeMode,
+                useRag
             )) {
                 if (update.type === 'sources') {
                     currentSources = update.data;
@@ -744,6 +735,7 @@ export default function Home() {
             <div className="flex-1 max-w-6xl mx-auto w-full flex flex-col md:flex-row gap-4 p-4">
                 {/* Sidebar */}
                 <aside className="md:w-64 space-y-4">
+                    <ScopeEnginePanel onScopeChange={(pid, sm) => { setProjectId(pid); setScopeMode(sm); }} />
 
                     {/* Session List */}
                     <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] shadow-sm">
@@ -1209,55 +1201,82 @@ export default function Home() {
                                     isStreaming={isGeneratingSheet}
                                 />
 
-                                {/* Model selector row */}
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2 flex-1">
-                                        <span className="text-xs text-[var(--muted)] flex-shrink-0">🤖 モデル:</span>
-                                        <div className="relative flex-1 max-w-[260px]">
-                                            <select
-                                                value={selectedModel}
-                                                onChange={(e) => setSelectedModel(e.target.value)}
-                                                className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-2 py-1 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary-500 pr-6"
-                                            >
-                                                {Object.keys(availableModels).length > 0
-                                                    ? Object.entries(availableModels).map(([k, v]) => (
-                                                        <option key={k} value={k}>{v}</option>
-                                                    ))
-                                                    : (
-                                                        <>
-                                                            <option value="gemini-3-flash-preview">Gemini 3 Flash（高速・標準）</option>
-                                                            <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro（高精度）</option>
-                                                            <option value="gemini-2.0-flash">Gemini 2.0 Flash（安定板）</option>
-                                                        </>
-                                                    )
-                                                }
-                                            </select>
-                                            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
+                                {/* Controls row */}
+                                <div className="flex flex-col gap-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-y-2 gap-x-4">
+                                        <div className="flex flex-wrap items-center gap-2 flex-1">
+                                            {/* Model Selector */}
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="text-xs text-[var(--muted)] flex-shrink-0">🤖 モデル:</span>
+                                                <div className="relative min-w-[150px] max-w-[220px]">
+                                                    <select
+                                                        value={selectedModel}
+                                                        onChange={(e) => setSelectedModel(e.target.value)}
+                                                        className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-2 py-1 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary-500 pr-6"
+                                                    >
+                                                        {Object.keys(availableModels).length > 0
+                                                            ? Object.entries(availableModels).map(([k, v]) => (
+                                                                <option key={k} value={k}>{v}</option>
+                                                            ))
+                                                            : (
+                                                                <>
+                                                                    <option value="gemini-3-flash-preview">Gemini 3 Flash（高速・標準）</option>
+                                                                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro（高精度）</option>
+                                                                    <option value="gemini-2.0-flash">Gemini 2.0 Flash（安定板）</option>
+                                                                </>
+                                                            )
+                                                        }
+                                                    </select>
+                                                    <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
+                                                </div>
+                                            </div>
+
+                                            {/* RAG Toggle */}
+                                            <div className="flex items-center gap-1.5 border-l border-[var(--border)] pl-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setUseRag(prev => !prev)}
+                                                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-all font-medium ${useRag
+                                                        ? 'bg-primary-50 border-primary-300 text-primary-700 hover:bg-primary-100'
+                                                        : 'bg-[var(--card)] border-[var(--border)] text-[var(--muted)] hover:bg-[var(--card-hover)]'
+                                                        }`}
+                                                    title={useRag ? '知識ベース参照中（クリックでOFF）' : '直接回答モード（クリックでON）'}
+                                                >
+                                                    <span>{useRag ? '📚' : '💬'}</span>
+                                                    <span>{useRag ? 'RAG ON' : 'RAG OFF'}</span>
+                                                </button>
+                                                <span className="text-[10px] text-[var(--muted)] hidden sm:inline-block">
+                                                    {useRag ? '参照する' : '参照しない'}
+                                                </span>
+                                            </div>
+
+                                            {activeContextSheet && (
+                                                <span className="text-[10px] px-2 py-1 rounded-full bg-violet-500/15 border border-violet-500/30 text-violet-300 flex items-center gap-1 flex-shrink-0">
+                                                    <Sparkles className="w-2.5 h-2.5" />
+                                                    {activeSheetTitle || 'コンテキスト適用中'}
+                                                </span>
+                                            )}
                                         </div>
-                                        {activeContextSheet && (
-                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 border border-violet-500/30 text-violet-300 flex items-center gap-1 flex-shrink-0">
-                                                <Sparkles className="w-2.5 h-2.5" />
-                                                {activeSheetTitle || 'コンテキスト適用中'}
-                                            </span>
-                                        )}
+
+                                        {/* New Chat Button */}
+                                        <button
+                                            onClick={async () => {
+                                                try {
+                                                    const newSession = await createSession();
+                                                    setActiveSessionId(newSession.id);
+                                                    setMessages([]);
+                                                    fetchSessions().then(setSessions);
+                                                } catch (err) {
+                                                    console.error(err);
+                                                }
+                                            }}
+                                            className="text-xs px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-sm hover:bg-primary-50 flex items-center gap-1.5 text-primary-600 font-medium transition-all flex-shrink-0"
+                                            title="新しい会話を始める"
+                                        >
+                                            <MessageSquare className="w-4 h-4" />
+                                            新規チャット
+                                        </button>
                                     </div>
-                                    <button
-                                        onClick={async () => {
-                                            try {
-                                                const newSession = await createSession();
-                                                setActiveSessionId(newSession.id);
-                                                setMessages([]);
-                                                fetchSessions().then(setSessions);
-                                            } catch (err) {
-                                                console.error(err);
-                                            }
-                                        }}
-                                        className="text-xs px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-sm hover:bg-primary-50 flex items-center gap-1.5 text-primary-600 font-medium transition-all"
-                                        title="新しい会話を始める"
-                                    >
-                                        <MessageSquare className="w-4 h-4" />
-                                        新規チャット
-                                    </button>
                                 </div>
 
                                 {/* Main chat input */}

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 import os
@@ -327,3 +327,68 @@ async def test_gemini_key():
     except Exception as e:
         logger.error(f"Gemini API test failed: {e}", exc_info=True)
         return {"success": False, "message": f"接続テスト失敗: {str(e)}"}
+
+# ========== Layer 0 管理 ==========
+
+@router.get("/api/system/layer0")
+async def get_layer0():
+    """現在のLayer 0プロンプトの内容を返す"""
+    from generator import _LAYER0_PATH, _layer0_cache
+    return {
+        "content": _layer0_cache,
+        "filename": _LAYER0_PATH.name,
+        "filepath": str(_LAYER0_PATH),
+        "file_exists": _LAYER0_PATH.exists(),
+        "char_count": len(_layer0_cache),
+    }
+
+class Layer0TextRequest(BaseModel):
+    content: str
+
+@router.post("/api/system/layer0/text")
+async def update_layer0_text(req: Layer0TextRequest):
+    """テキストをLayer 0ファイルに書き込み、キャッシュを更新する"""
+    from generator import _LAYER0_PATH, reload_layer0
+    if not req.content.strip():
+        raise HTTPException(status_code=400, detail="content が空です")
+    try:
+        _LAYER0_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _LAYER0_PATH.write_text(req.content.strip(), encoding="utf-8")
+        new_content = reload_layer0()
+        logger.info(f"Layer 0 updated via text API. chars={len(new_content)}")
+        return {"message": "Layer 0を更新しました", "char_count": len(new_content)}
+    except Exception as e:
+        logger.error(f"Layer 0 text update failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/api/system/layer0/upload")
+async def upload_layer0_file(file: UploadFile = File(...)):
+    """MDまたはTXTファイルをLayer 0としてアップロードし、キャッシュを更新する"""
+    from generator import _LAYER0_PATH, reload_layer0
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in (".md", ".txt"):
+        raise HTTPException(status_code=400, detail=".md または .txt ファイルのみ対応しています")
+    try:
+        content = (await file.read()).decode("utf-8").strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="ファイルが空です")
+        _LAYER0_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _LAYER0_PATH.write_text(content, encoding="utf-8")
+        new_content = reload_layer0()
+        logger.info(f"Layer 0 uploaded. filename={file.filename}, chars={len(new_content)}")
+        return {"message": f"{file.filename} をLayer 0として適用しました", "char_count": len(new_content)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Layer 0 upload failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/api/system/layer0/reload")
+async def reload_layer0_endpoint():
+    """ディスク上のLayer 0ファイルをキャッシュに再読み込みする"""
+    from generator import reload_layer0
+    try:
+        new_content = reload_layer0()
+        return {"message": "Layer 0を再読み込みしました", "char_count": len(new_content)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
