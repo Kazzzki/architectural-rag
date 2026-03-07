@@ -23,8 +23,75 @@ Base = declarative_base()
 
 
 class Document(Base):
-    """ドキュメント管理テーブル（OCR進捗 + ファイルインデックス統合）"""
+    """
+    RAGシステムの論理的な文書（例：「〇〇仕様書」という概念自体）
+    """
     __tablename__ = 'documents'
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    canonical_id = Column(String, nullable=True, unique=True)
+    title = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+class DocumentVersion(Base):
+    """
+    ドキュメントの特定の版（ファイルアップロードごとのバージョン）
+    """
+    __tablename__ = 'document_versions'
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    document_id = Column(String, ForeignKey('documents.id'), nullable=False)
+    version_hash = Column(String, nullable=False, unique=True)  # source_pdf_hash等に相当
+    ingest_status = Column(String, nullable=False, default="accepted") # accepted, ocr_processing, classified, searchable, etc.
+    searchable = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    error_message = Column(Text, nullable=True)
+
+class Upload(Base):
+    """
+    ユーザーからのアップロード単位
+    """
+    __tablename__ = 'uploads'
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    version_id = Column(String, ForeignKey('document_versions.id'), nullable=True)
+    original_filename = Column(String, nullable=False)
+    mime_type = Column(String, nullable=False)
+    file_size = Column(Integer, nullable=False)
+    source_kind = Column(String, nullable=False) # 'pdf', 'image', 'document'
+    created_at = Column(DateTime, default=datetime.now)
+
+class Artifact(Base):
+    """
+    処理過程で生成されたファイル群 (raw_pdf, ocr_markdown, page_blocks_json, chunks_jsonl)
+    """
+    __tablename__ = 'artifacts'
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    version_id = Column(String, ForeignKey('document_versions.id'), nullable=False)
+    artifact_type = Column(String, nullable=False) # 'raw_pdf', 'ocr_markdown', 'page_blocks_json'
+    storage_path = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+class Job(Base):
+    """
+    非同期処理のジョブトラッキング
+    """
+    __tablename__ = 'jobs'
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    version_id = Column(String, ForeignKey('document_versions.id'), nullable=True)
+    job_type = Column(String, nullable=False) # 'ingest', 'drive_sync', 'reindex'
+    status = Column(String, nullable=False, default="queued") # queued, running, completed, failed
+    created_at = Column(DateTime, default=datetime.now)
+    completed_at = Column(DateTime, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+class LegacyDocument(Base):
+    """旧ドキュメント管理テーブル（OCR進捗 + ファイルインデックス統合）"""
+    __tablename__ = 'legacy_documents'
 
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, index=True)

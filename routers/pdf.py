@@ -30,20 +30,36 @@ async def get_pdf(file_id: str):
     if not re.match(r"^[a-zA-Z0-9_\-]{8,64}$", file_id):
         raise HTTPException(status_code=400, detail="Invalid file_id format")
     
-    # 1. file_storeから取得を試みる
+    # 1. MetadataRepositoryから取得を試みる
     try:
-        import file_store
-        file_info = file_store.get_file(file_id)
-        if file_info:
-            fp = Path(file_info["current_path"])
+        from metadata_repository import MetadataRepository
+        repo = MetadataRepository()
+        artifacts = repo.get_artifacts_by_version_hash(file_id)
+        
+        # RAW_FILE または RAW_PDF タイプを探す
+        target_artifact = next((a for a in artifacts if a.artifact_type in ("raw_file", "raw_pdf")), None)
+        
+        if target_artifact:
+            fp = Path(target_artifact.storage_path)
             if fp.exists():
+                # 元のファイル名を取得するためにVersion情報を取得
+                from database import get_session, DocumentVersion, Upload
+                session = get_session()
+                version = session.query(DocumentVersion).filter(DocumentVersion.version_hash == file_id).first()
+                original_name = fp.name
+                if version:
+                    upload = session.query(Upload).filter(Upload.version_id == version.id).first()
+                    if upload:
+                        original_name = upload.original_filename
+                session.close()
+
                 return FileResponse(
                     fp, 
                     media_type="application/pdf",
-                    filename=file_info.get("original_name", fp.name)
+                    filename=original_name
                 )
     except Exception as e:
-        logger.warning(f"file_store miss for {file_id}: {e}", exc_info=True)
+        logger.warning(f"MetadataRepository miss for {file_id}: {e}")
     
     # 2. PDF_STORAGE_DIR内のID名ファイルにフォールバック
     from config import PDF_STORAGE_DIR

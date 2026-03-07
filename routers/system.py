@@ -188,8 +188,16 @@ def get_ocr_status():
 def dismiss_ocr_status(file_path: str):
     """OCRステータスエントリを削除（非表示化）"""
     try:
-        from status_manager import OCRStatusManager
-        OCRStatusManager().remove_status(file_path)
+        from metadata_repository import MetadataRepository
+        repo = MetadataRepository()
+        # file_path に基づいて版を特定し、非表示（または削除）にする
+        from database import get_session, DocumentVersion
+        session = get_session()
+        version = session.query(DocumentVersion).filter(DocumentVersion.id.like(f"%{file_path}%")).first() # 簡易マッチ
+        if version:
+            # ジョブがあればキャンセル
+            repo.update_ingest_stage_by_version_id(version.id, "dismissed")
+        session.close()
         return {"success": True}
     except Exception as e:
         logger.error(f"Failed to dismiss OCR status for {file_path}: {e}", exc_info=True)

@@ -42,7 +42,35 @@ def _split_pdf(filepath: str, doc_type: str = "general") -> List[Dict[str, Any]]
         chunk_size = PDF_CHUNK_PAGES_GENERAL
 
     chunks = []
-    reader = pypdf.PdfReader(filepath)
+    
+    # 画像ファイルの場合は_split_pdfをバイパスして1ページのチャンクを作成する
+    ext = Path(filepath).suffix.lower()
+    if ext in (".png", ".jpg", ".jpeg"):
+        from config import TEMP_CHUNK_DIR
+        base_dir = Path(TEMP_CHUNK_DIR)
+        os.makedirs(base_dir, exist_ok=True)
+        
+        # shutilを使ってコピーするか、パスをそのまま使う。ここではそのまま使う。
+        chunks.append({
+            "path": filepath,
+            "mime_type": f"image/{ext[1:]}",
+            "label": "Full Image",
+            "index": 0,
+            "start_page": 1,
+            "end_page": 1,
+            "page_count": 1,
+            "is_temp": False,
+            "type": "image"
+        })
+        return chunks
+
+    try:
+        reader = pypdf.PdfReader(filepath)
+    except Exception as e:
+        logger.error(f"Failed to read PDF {filepath}: {e}")
+        # 画像として処理できないかフォールバック（ここは一旦エラーで返す）
+        raise ValueError(f"Not a valid PDF file: {filepath}") from e
+
     total_pages = len(reader.pages)
 
     from config import TEMP_CHUNK_DIR
@@ -546,7 +574,14 @@ async def _process_all_chunks_pipelined(
 # 既存の仕上げ処理（変更なし）
 # ---------------------------------------------------------------------------
 
-def finalize_processing(filepath: str, output_path: str, markdown_text: str, status_mgr=None):
+def finalize_processing(
+    filepath: str, 
+    output_path: str, 
+    markdown_text: str, 
+    status_mgr=None, 
+    source_pdf_hash: str = "",
+    version_id: str = ""
+):
     """
     生成されたMarkdownテキストを元に、分類・Frontmatter付与・フォルダ移動・インデックス登録を行う
     """
@@ -569,26 +604,17 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
         classification_result = classifier.classify(markdown_text[:5000], meta_input)
         
         import hashlib
-        # ハッシュIDを生成
-        with open(filepath, 'rb') as f:
-            pdf_hash = hashlib.sha256(f.read()).hexdigest()
+        # ハッシュIDがない場合は生成 (互換性のため残す)
+        if not source_pdf_hash:
+            with open(filepath, 'rb') as f:
+                source_pdf_hash = hashlib.sha256(f.read()).hexdigest()
 
-        # Google Driveへのアップロード実行とID取得
+        # Google Driveへのアップロードは別ジョブに分離 (ここでは実行しない)
         drive_file_id = ""
-        try:
-            from drive_sync import upload_single_file_to_drive
-            logger.info("Uploading PDF to Google Drive...")
-            # 連携用に元のファイル名でアップロードする
-            uploaded_id = upload_single_file_to_drive(filepath)
-            if uploaded_id:
-                drive_file_id = uploaded_id
-                logger.info(f"Successfully uploaded {filepath} to Drive: {drive_file_id}")
-        except Exception as e:
-            logger.error(f"Failed to upload {filepath} to Google Drive: {e}")
 
         # Frontmatter生成
         extra_meta = {
-            "source_pdf": pdf_hash,
+            "source_pdf": source_pdf_hash,
             "pdf_filename": Path(filepath).name,
             "drive_file_id": drive_file_id
         }
@@ -636,7 +662,7 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
         target_pdf_dir.mkdir(parents=True, exist_ok=True)
         target_md_dir.mkdir(parents=True, exist_ok=True)
         
-        new_pdf_path = target_pdf_dir / f"{pdf_hash}{Path(filepath).suffix}"
+        new_pdf_path = target_pdf_dir / f"{source_pdf_hash}{Path(filepath).suffix}"
         new_md_path = target_md_dir / Path(output_path).name
 
         # 移動実行（同名ファイルは上書き。タイムスタンプ付加はしない）
@@ -682,6 +708,11 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
         except Exception as e:
             logger.error(f"自動インデックス登録エラー ({new_md_path}): {e}", exc_info=True)
 
+        if version_id:
+            from metadata_repository import MetadataRepository
+            MetadataRepository().update_ingest_stage(filepath, "indexing_completed")
+            MetadataRepository().mark_as_searchable(filepath)
+        
         status_mgr.complete_processing(filepath)
         return filepath, output_path
 
@@ -694,15 +725,21 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
 # ---------------------------------------------------------------------------
 # メインエントリーポイント
 # ---------------------------------------------------------------------------
-
-def process_pdf_background(filepath: str, output_path: str, doc_type: str = "catalog"):
+def process_pdf_background(
+    filepath: str, 
+    output_path: str, 
+    doc_type: str = "catalog", 
+    source_pdf_hash: str = "",
+    version_id: str = "",
+    blocks_output_path: str = ""
+):
     """
     指定されたPDFをOCR処理してMarkdownに変換し、保存する（バックグラウンド実行用）。
     doc_type: 'catalog' | 'drawing' | 'spec' | 'law' — プロンプト選択に使用
 
     Phase 3: asyncioパイプラインで全チャンクの並列アップロード＋OCRを実行する。
     """
-    logger.info(f"OCR開始: {filepath} -> {output_path} (doc_type={doc_type})")
+    logger.info(f"OCR開始: {filepath} -> {output_path} (doc_type={doc_type}, hash={source_pdf_hash}, version={version_id})")
     from status_manager import OCRStatusManager
     status_mgr = OCRStatusManager()
 
@@ -742,7 +779,7 @@ def process_pdf_background(filepath: str, output_path: str, doc_type: str = "cat
             
             # [[PAGE_N]] はプロンプト出力・抽出テキスト自体に含むため重複追加しない
             markdown_text += f"## {label}\n\n"
-            markdown_text += r["text"]
+            markdown_text += r.get("text", "")
             markdown_text += "\n\n---\n"
             
         markdown_text = normalize_unicode_text(markdown_text)
@@ -750,17 +787,30 @@ def process_pdf_background(filepath: str, output_path: str, doc_type: str = "cat
         # 4. 保存（一旦）
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(markdown_text)
+            
+        if blocks_output_path:
+            import json
+            with open(blocks_output_path, "w", encoding="utf-8") as bf:
+                json.dump(results, bf, ensure_ascii=False, indent=2)
 
         logger.info(f"OCR完了・保存: {output_path}")
 
-        # 5. 仕上げ処理（分類・移動・インデックス）
-        status_mgr.update_status(filepath, "finalizing")
+        # 5. 次のステージへディスパッチ (Phase 3)
+        status_mgr.update_status(filepath, "ocr_completed")
         
-        # finalize_processing をバックグラウンドスレッドで実行
-        logger.info(f"finalize_processing をバックグラウンドに渡しました。")
+        from ingestion_orchestrator import IngestionOrchestrator
+        orchestrator = IngestionOrchestrator()
+        
+        logger.info(f"Dispatching to Metadata Enrichment stage...")
         threading.Thread(
-            target=finalize_processing,
-            args=(filepath, output_path, markdown_text, status_mgr),
+            target=orchestrator.dispatch_next_stage,
+            args=(version_id, "ocr_completed"),
+            kwargs={
+                "filepath": filepath,
+                "output_md_path": output_path,
+                "output_blocks_path": blocks_output_path,
+                "source_pdf_hash": source_pdf_hash
+            },
             daemon=True
         ).start()
 

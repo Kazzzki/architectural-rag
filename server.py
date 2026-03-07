@@ -116,22 +116,19 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan: 起動・シャットダウン時の処理"""
     # データベース初期化（モジュールレベル副作用をローカルインポートで回避）
-    from database import init_db, migrate_from_json
-    from status_manager import OCRStatusManager
+    from database import init_db
+    from sqlalchemy import text
     
     init_db()
     
-    # クラッシュ等による処理中ステータスの固着をリセット (T12)
+    # クラッシュ等による処理中ステータスの固着をリセット (Jobsテーブル)
     try:
-        OCRStatusManager().reset_stuck_processing()
+        session = get_session()
+        session.execute(text("UPDATE jobs SET status = 'failed', error_message = 'Server restarted' WHERE status = 'running'"))
+        session.commit()
+        session.close()
     except Exception as e:
-        logger.warning(f"Resetting stuck processing documents failed: {e}")
-        
-    # 初回起動時に既存JSONデータをDBへ移行
-    try:
-        migrate_from_json()
-    except Exception as e:
-        logger.warning(f"JSON migration skipped or error: {e}")
+        logger.warning(f"Resetting stuck jobs failed: {e}")
     yield
     # シャットダウン時の処理（将来必要に応じて追加）
 

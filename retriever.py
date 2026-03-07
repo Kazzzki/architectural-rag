@@ -22,6 +22,7 @@ from config import (
     RERANK_CANDIDATE_COUNT,
 )
 from indexer import GeminiEmbeddingFunction, get_query_embedding, get_chroma_client, load_parent_chunk
+from lexical_indexer import LexicalIndexer
 from gemini_client import get_client
 from utils.retry import sync_retry
 from google.genai import types
@@ -139,8 +140,27 @@ def _search_single(
             "metadata":  meta,
             "distance":  dist,
             "score":     1.0 - dist,  # コサイン距離を類似度スコアに変換
+            "search_type": "vector"
         })
     return hits
+
+def _search_lexical(query_text: str, n: int = TOP_K_RESULTS) -> List[Dict[str, Any]]:
+    """SQLite FTS5 による全文検索を実行し、ヒット一覧を返す"""
+    try:
+        indexer = LexicalIndexer()
+        results = indexer.search(query_text, limit=n)
+        hits = []
+        for res in results:
+            hits.append({
+                "document": res["content"],
+                "metadata": res["metadata"],
+                "score": -res["score"],  # SQLite bm25 は低いほど良いため反転させる
+                "search_type": "lexical"
+            })
+        return hits
+    except Exception as e:
+        logger.warning(f"Lexical search failed: {e}")
+        return []
 
 
 def _merge_hits(hits_list: List[List[Dict[str, Any]]], top_k: int = RERANK_CANDIDATE_COUNT) -> List[Dict[str, Any]]:
@@ -148,12 +168,15 @@ def _merge_hits(hits_list: List[List[Dict[str, Any]]], top_k: int = RERANK_CANDI
     dedup: Dict[str, Dict[str, Any]] = {}
     for hits in hits_list:
         for hit in hits:
-            # rel_path + chunk_index でユニーク化（parent_chunk_id でも可）
+            # chunk_id があればそれ、なければ rel_path + chunk_index でユニーク化
             meta = hit.get("metadata") or {}
-            key = (meta.get("rel_path", ""), meta.get("chunk_index", 0))
-            key_str = f"{key[0]}::{key[1]}"
-            if key_str not in dedup or hit["score"] > dedup[key_str]["score"]:
-                dedup[key_str] = hit
+            chunk_id = hit.get("chunk_id") or meta.get("chunk_id")
+            if not chunk_id:
+                key = (meta.get("rel_path", ""), meta.get("chunk_index", 0))
+                chunk_id = f"{key[0]}::{key[1]}"
+            
+            if chunk_id not in dedup or hit["score"] > dedup[chunk_id]["score"]:
+                dedup[chunk_id] = hit
     sorted_hits = sorted(dedup.values(), key=lambda x: x["score"], reverse=True)
     return sorted_hits[:top_k]
 
@@ -243,6 +266,7 @@ def search(
     use_query_expansion: bool = True,
     use_hyde: bool = True,
     use_rerank: bool = True,
+    use_lexical: bool = True,
 ) -> Dict[str, Any]:
     """
     v3 ハイブリッド検索:
@@ -312,6 +336,10 @@ def search(
     # HyDE 検索
     if use_hyde and hypo_doc:
         all_hits_lists.append(_search_single(hypo_doc, collection, n=n_results, where=where))
+
+    # ─── Step 2.5: Full-Text Search (Lexical) ────────────────────────────────
+    if use_lexical:
+        all_hits_lists.append(_search_lexical(query, n=n_results))
 
     # ─── Step 3: マージ ─────────────────────────────────────────────────────
     merged_hits = _merge_hits(all_hits_lists, top_k=RERANK_CANDIDATE_COUNT)

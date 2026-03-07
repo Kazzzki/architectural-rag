@@ -33,7 +33,8 @@ async def upload_multiple_files(
     pdf_dir = Path(KNOWLEDGE_BASE_DIR) / UNCATEGORIZED_FOLDER
     pdf_dir.mkdir(parents=True, exist_ok=True)
 
-    import file_store
+    from metadata_repository import MetadataRepository
+    repo = MetadataRepository()
     
     results = []
     errors = []
@@ -66,14 +67,27 @@ async def upload_multiple_files(
                 errors.append({"filename": filename, "error": f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB"})
                 continue
                 
+            import hashlib
+            source_pdf_hash = hashlib.sha256(content).hexdigest()
+                
             content_type = "application/pdf" if ext == ".pdf" else f"image/{ext[1:]}"
-            reg = file_store.register_file(
-                original_name=filename,
-                current_path=str(file_path),
-                content=content,
-                content_type=content_type
+            source_kind = "pdf" if ext == ".pdf" else ("image" if ext in ['.png', '.jpg', '.jpeg'] else "document")
+
+            # Phase 2: MetadataRepositoryへの登録 (file_storeの代替)
+            from metadata_repository import MetadataRepository
+            repo = MetadataRepository()
+            
+            repo_res = repo.create_document_version(
+                filename=filename,
+                file_path=str(file_path),
+                source_pdf_hash=source_pdf_hash,
+                mime_type=content_type,
+                file_size=len(content),
+                source_kind=source_kind
             )
-            file_id = reg["id"]
+            
+            file_id = repo_res["legacy_id"] # file_storeのidの代わりに一時的に利用
+            version_id = repo_res["version_id"]
             
             with open(file_path, "wb") as buffer:
                 buffer.write(content)
@@ -82,8 +96,8 @@ async def upload_multiple_files(
 
             if ext in (".pdf", ".png", ".jpg", ".jpeg"):
                 from pipeline_manager import process_file_pipeline
-                background_tasks.add_task(process_file_pipeline, str(file_path))
-                logger.info(f"パイプライン処理をバックグラウンドタスクに登録: {file_path}")
+                background_tasks.add_task(process_file_pipeline, str(file_path), source_pdf_hash, version_id)
+                logger.info(f"パイプライン処理をバックグラウンドタスクに登録: {file_path} (hash: {source_pdf_hash}, version: {version_id})")
             elif ext in [".md", ".txt"]:
                 from config import KNOWLEDGE_BASE_DIR as _KB, UNCATEGORIZED_FOLDER as _UF
                 final_md_dir = Path(_KB) / _UF
@@ -96,15 +110,14 @@ async def upload_multiple_files(
                 from indexer import index_file
                 background_tasks.add_task(index_file, str(final_md_path))
                 
-            from drive_sync import sync_upload_to_drive
-            background_tasks.add_task(sync_upload_to_drive)
-                
             results.append({
                 "filename": file_path.name,
-                "status": "uploaded",
+                "status": "queued",
                 "path": str(file_path),
                 "file_id": file_id,
-                "original_name": filename
+                "version_id": version_id,
+                "original_name": filename,
+                "source_pdf_hash": source_pdf_hash
             })
             
         except Exception as e:
@@ -196,15 +209,25 @@ async def bulk_delete_files(request: BulkDeleteRequest):
     """複数ファイルを一括削除"""
     try:
         from config import KNOWLEDGE_BASE_DIR
-        from indexer import delete_from_index
-        from status_manager import OCRStatusManager
-        
-        status_mgr = OCRStatusManager()
+        from metadata_repository import MetadataRepository
+        repo = MetadataRepository()
         deleted_count = 0
         errors = []
         
         for file_path in request.file_paths:
             try:
+                # 実際のパスからversion_idを特定するのは難しいため、
+                # まず原本を探す
+                from database import get_session, Artifact as DbArtifact
+                session = get_session()
+                artifact = session.query(DbArtifact).filter(DbArtifact.storage_path == str(Path(KNOWLEDGE_BASE_DIR) / file_path)).first()
+                if artifact:
+                    from indexer import delete_file_completely
+                    result = delete_file_completely(str(file_path))
+                    if result["errors"]:
+                        logger.warning(f"Delete errors for {file_path}: {result['errors']}")
+                    deleted_count += 1
+                session.close()
                 target_path = Path(KNOWLEDGE_BASE_DIR) / file_path
                 if not target_path.resolve().is_relative_to(Path(KNOWLEDGE_BASE_DIR).resolve()):
                     errors.append(f"{file_path}: Access denied")
@@ -313,9 +336,13 @@ def get_files_tree():
     """ファイルツリーを取得"""
     try:
         from config import KNOWLEDGE_BASE_DIR, SUPPORTED_EXTENSIONS
-        from status_manager import OCRStatusManager
-        status_mgr = OCRStatusManager()
-        progress_data = status_mgr.get_all_status()
+        # 新体系ではファイルツリー構築時にDB状態をマージする
+        from database import get_session, DocumentVersion
+        session = get_session()
+        versions = session.query(DocumentVersion).all()
+        # version_hash をキーにした辞書を作成
+        progress_data = {v.version_hash: {"status": v.ingest_status} for v in versions}
+        session.close()
         
         return build_tree_recursive(Path(KNOWLEDGE_BASE_DIR), Path(KNOWLEDGE_BASE_DIR), progress_data, SUPPORTED_EXTENSIONS)
     except Exception as e:
@@ -326,8 +353,25 @@ def get_files_tree():
 def get_file_info(file_id: str):
     """ファイル情報を取得（ステータス、パス、同期状態等）"""
     try:
-        import file_store
-        info = file_store.get_file(file_id)
+        from database import get_session, DocumentVersion, Document, Upload
+        session = get_session()
+        # file_id = source_pdf_hash / version_hash
+        version = session.query(DocumentVersion).filter(DocumentVersion.version_hash == file_id).first()
+        if not version:
+            session.close()
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        doc = session.query(Document).get(version.document_id)
+        upload = session.query(Upload).filter(Upload.version_id == version.id).first()
+        
+        info = {
+            "id": version.version_hash,
+            "version_id": version.id,
+            "status": version.ingest_status,
+            "original_name": upload.original_filename if upload else doc.title,
+            "created_at": version.created_at.isoformat()
+        }
+        session.close()
         if not info:
             raise HTTPException(status_code=404, detail="File not found")
         return info
