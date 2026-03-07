@@ -6,14 +6,18 @@
 source ~/.zshrc 2>/dev/null || true
 source ~/.zshprofile 2>/dev/null || true
 
-# Activate conda if available
-if command -v conda &> /dev/null; then
-    conda activate antigravity 2>/dev/null || true
-fi
-
 # Work dir
 SCRIPT_DIR="/Users/kaz/Library/Mobile Documents/com~apple~CloudDocs/antigravity/architectural_rag"
 cd "$SCRIPT_DIR"
+
+# Activate venv if available
+if [ -d "$SCRIPT_DIR/.venv" ]; then
+    source "$SCRIPT_DIR/.venv/bin/activate"
+elif command -v conda &> /dev/null; then
+    conda activate antigravity 2>/dev/null || true
+fi
+
+
 
 # Kill any stale processes
 pkill -f server.py 2>/dev/null || true

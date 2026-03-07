@@ -1,10 +1,16 @@
 export interface SourceFile {
+    source_id: string;           // "S1", "S2", ... — LLM引用タグとの対応
     filename: string;
     original_filename?: string;
+    source_pdf_name: string;     // 表示用PDF名
+    source_pdf: string;          // PDFビューア用ID（空の場合あり）
+    source_pdf_hash: string;     // ハッシュルーティング用（空の場合あり）
+    rel_path: string;            // knowledge_base相対パス
     category: string;
-    relevance_count: number;
-    source_pdf?: string;
-    pages?: number[];
+    doc_type: string;            // "drawing" | "law" | "spec" | "catalog" | ""
+    pages: number[];             // 参照ページ番号（全件・昇順）
+    hit_count: number;           // チャンクヒット数（関連度の目安）
+    relevance_count: number;     // hit_countの後方互換エイリアス
 }
 
 export type StreamUpdate =

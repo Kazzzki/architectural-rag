@@ -1,15 +1,20 @@
 import os
 import time
-import tempfile, shutil
+import asyncio
+import threading
+import tempfile
+import shutil
 import traceback
+import uuid
 import pypdf
 from google.genai import types
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 from tenacity import RetryError
 
-from config import GEMINI_MODEL_OCR, MAX_TOKENS, PDF_CHUNK_PAGES
+from config import GEMINI_MODEL_OCR, MAX_TOKENS, PDF_CHUNK_PAGES, OCR_MAX_WORKERS
 from ocr_utils import retry_gemini_call
 from gemini_client import get_client
 
@@ -19,19 +24,25 @@ logger = logging.getLogger(__name__)
 # 互換性のため
 GEMINI_MODEL = GEMINI_MODEL_OCR
 
+# Phase 2: API同時呼び出し上限（Semaphore）
+# max_workersはスレッドプール全体のサイズ。実際のAPI呼び出しはSemaphoreで絞る。
+_api_semaphore = threading.Semaphore(OCR_MAX_WORKERS)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1-A: PDF分割ヘルパー
+# ---------------------------------------------------------------------------
 
 def _split_pdf(filepath: str, chunk_size: int = PDF_CHUNK_PAGES) -> List[Dict[str, Any]]:
-    """PDFを分割して一時ファイルを作成"""
+    """PDFをchunk_sizeページごとに分割して一時ファイルを作成する。"""
     chunks = []
     reader = pypdf.PdfReader(filepath)
     total_pages = len(reader.pages)
-    
+
     from config import TEMP_CHUNK_DIR
     base_dir = Path(TEMP_CHUNK_DIR)
     os.makedirs(base_dir, exist_ok=True)
-    
-    filename = Path(filepath).name
-    
+
     if total_pages > chunk_size:
         for i in range(0, total_pages, chunk_size):
             writer = pypdf.PdfWriter()
@@ -39,7 +50,7 @@ def _split_pdf(filepath: str, chunk_size: int = PDF_CHUNK_PAGES) -> List[Dict[st
             for p in range(i, end_page):
                 writer.add_page(reader.pages[p])
 
-            chunk_filename = f".chunk_{i}_{filename}"
+            chunk_filename = f".chunk_{i}_{uuid.uuid4().hex[:8]}.pdf"
             chunk_path = base_dir / chunk_filename
 
             with open(chunk_path, "wb") as f_out:
@@ -52,6 +63,7 @@ def _split_pdf(filepath: str, chunk_size: int = PDF_CHUNK_PAGES) -> List[Dict[st
                 "index": i,
                 "start_page": i + 1,       # 原本PDF内の開始ページ（1-based）
                 "end_page": end_page,       # 原本PDF内の終了ページ（1-based）
+                "page_count": end_page - i,
                 "is_temp": True
             })
     else:
@@ -62,68 +74,142 @@ def _split_pdf(filepath: str, chunk_size: int = PDF_CHUNK_PAGES) -> List[Dict[st
             "index": 0,
             "start_page": 1,
             "end_page": total_pages,
+            "page_count": total_pages,
             "is_temp": False
         })
-        
+
     return chunks
 
-@retry_gemini_call(max_attempts=5)
-def _call_gemini_with_retry(model_name: str, file_path: str, mime_type: str, prompt: str) -> str:
-    """Gemini APIを呼び出す（リトライ付き）"""
+
+def _split_chunk(
+    source_path: str,
+    original_start_page: int,
+    original_index: int,
+) -> List[Dict[str, Any]]:
+    """
+    既存のチャンクPDFをさらに半分に分割して一時ファイルとして返す。
+    MAX_TOKENSフォールバック時に使用する。インデックスは元のページ位置ベース。
+    """
+    from config import TEMP_CHUNK_DIR
+    base_dir = Path(TEMP_CHUNK_DIR)
+    os.makedirs(base_dir, exist_ok=True)
+
+    reader = pypdf.PdfReader(source_path)
+    actual_pages = len(reader.pages)
+    half = actual_pages // 2
+
+    split_points = [(0, half), (half, actual_pages)]
+    sub_chunks = []
+
+    for idx, (sp, ep) in enumerate(split_points):
+        if sp >= ep:
+            continue
+        writer = pypdf.PdfWriter()
+        for p in range(sp, ep):
+            writer.add_page(reader.pages[p])
+
+        chunk_filename = f".chunk_{original_index}_{idx}_{uuid.uuid4().hex[:8]}.pdf"
+        chunk_path = base_dir / chunk_filename
+        with open(chunk_path, "wb") as f_out:
+            writer.write(f_out)
+
+        actual_start = original_start_page + sp
+        actual_end = original_start_page + ep - 1
+        sub_chunks.append({
+            "path": str(chunk_path),
+            "mime_type": "application/pdf",
+            "label": f"Pages {actual_start}-{actual_end}",
+            "index": original_index + sp,   # ページ位置をindexに使うことでsort可能
+            "start_page": actual_start,
+            "end_page": actual_end,
+            "page_count": ep - sp,
+            "is_temp": True
+        })
+
+    return sub_chunks
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 + 4: Gemini API呼び出しを3関数に分解
+# ---------------------------------------------------------------------------
+
+@retry_gemini_call(max_attempts=3)
+def _upload_chunk(file_path: str, mime_type: str):
+    """
+    Phase 3: ファイルをGemini File APIにアップロードしてfile_refを返す。
+    Semaphoreでレートリミット制御（Phase 2）。
+    """
+    with _api_semaphore:
+        client = get_client()
+        upload_path = file_path
+        temp_dir = None
+        try:
+            if not Path(file_path).name.isascii():
+                temp_dir = tempfile.mkdtemp(prefix="ocr_upload_")
+                upload_path = str(Path(temp_dir) / f"upload{Path(file_path).suffix}")
+                shutil.copy2(file_path, upload_path)
+
+            uploaded_file = client.files.upload(
+                file=upload_path,
+                config=types.UploadFileConfig(mime_type=mime_type)
+            )
+        finally:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return uploaded_file
+
+
+def _wait_for_processing(file_ref, timeout: float = 120.0):
+    """
+    Phase 3 + 4: Geminiファイル処理完了まで待機する。
+    Phase 4: 固定1秒ポーリングから指数バックオフ（0.3s→最大3.0s）に変更。
+    """
     client = get_client()
+    wait = 0.3
+    elapsed = 0.0
 
-    upload_path = file_path
-    temp_dir = None
-    try:
-        if not Path(file_path).name.isascii():
-            temp_dir = tempfile.mkdtemp(prefix="ocr_upload_")
-            upload_path = str(Path(temp_dir) / f"upload{Path(file_path).suffix}")
-            shutil.copy2(file_path, upload_path)
+    while file_ref.state.name == "PROCESSING":
+        if elapsed >= timeout:
+            raise Exception(f"File processing timeout ({timeout}s): {file_ref.name}")
+        time.sleep(wait)
+        elapsed += wait
+        wait = min(wait * 1.5, 3.0)
+        file_ref = client.files.get(name=file_ref.name)
 
-        # Upload
-        uploaded_file = client.files.upload(
-            file=upload_path,
-            config=types.UploadFileConfig(mime_type=mime_type)
-        )
-    finally:
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    wait_count = 0
-    while uploaded_file.state.name == "PROCESSING":
-        time.sleep(1)
-        uploaded_file = client.files.get(name=uploaded_file.name)
-        wait_count += 1
-        if wait_count > 60:
-            raise Exception("File processing timeout")
-
-    if uploaded_file.state.name == "FAILED":
+    if file_ref.state.name == "FAILED":
         raise Exception("Google AI File processing failed")
 
-    response = client.models.generate_content(
-        model=model_name,
-        contents=[prompt, uploaded_file],
-        config=types.GenerateContentConfig(
-            temperature=0.0,
-            max_output_tokens=MAX_TOKENS
+    return file_ref
+
+
+@retry_gemini_call(max_attempts=5)
+def _generate_content(file_ref, model_name: str, prompt: str):
+    """
+    Phase 3: アップロード済みfile_refを使ってgenerate_contentを実行する。
+    Semaphoreでレートリミット制御（Phase 2）。戻り値はresponseオブジェクト。
+    """
+    with _api_semaphore:
+        client = get_client()
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[prompt, file_ref],
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                max_output_tokens=MAX_TOKENS
+            )
         )
-    )
 
     # 空レスポンスガード（コンテンツフィルタ等）
     if not response.candidates or not response.candidates[0].content.parts:
         raise ValueError("Gemini returned empty response (possibly content filtered)")
 
-    # finish_reason チェック: MAX_TOKENS で打ち切られた場合に警告
-    finish_reason = response.candidates[0].finish_reason
-    if str(finish_reason) in ("FinishReason.MAX_TOKENS", "MAX_TOKENS", "2"):
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
-            f"[OCR TRUNCATED] Gemini hit max_output_tokens ({MAX_TOKENS}) for {file_path}. "
-            "Output may be incomplete. Reduce PDF_CHUNK_PAGES in config or .env to fix."
-        )
+    return response
 
-    return response.text
 
+# ---------------------------------------------------------------------------
+# プロンプトテンプレート
+# ---------------------------------------------------------------------------
 
 DRAWING_OCR_PROMPT_TEMPLATE = """
 あなたは建築設計の専門家です。
@@ -172,42 +258,224 @@ GENERAL_OCR_PROMPT_TEMPLATE = """
     """
 
 
-def _process_chunk(chunk: Dict[str, Any], model_name: str, doc_type: str = "catalog") -> Dict[str, Any]:
-    """1つのチャンク（PDF断片）を OCR 処理（doc_type に応じたプロンプトを使用）"""
+# ---------------------------------------------------------------------------
+# Phase 1-B: MAX_TOKENSフォールバック付きOCR
+# ---------------------------------------------------------------------------
+
+def _build_prompt(chunk: Dict[str, Any], doc_type: str) -> str:
+    """チャンク情報からプロンプトを生成する。"""
     start_page = chunk.get("start_page", 1)
     end_page = chunk.get("end_page", start_page)
-
     if doc_type == "drawing":
-        prompt = DRAWING_OCR_PROMPT_TEMPLATE.format(start_page=start_page, end_page=end_page)
-    else:
-        prompt = GENERAL_OCR_PROMPT_TEMPLATE.format(
-            start_page=start_page, end_page=end_page
-        )
+        return DRAWING_OCR_PROMPT_TEMPLATE.format(start_page=start_page, end_page=end_page)
+    return GENERAL_OCR_PROMPT_TEMPLATE.format(start_page=start_page, end_page=end_page)
+
+
+def _ocr_with_adaptive_fallback(
+    chunk: Dict[str, Any],
+    file_ref,
+    doc_type: str,
+) -> List[Dict[str, Any]]:
+    """
+    Phase 1-B: アップロード済みfile_refでOCRを実行する。
+    MAX_TOKENS超過を検知した場合はチャンクを半分に再分割してリトライ（再帰）。
+    1ページでMAX_TOKENSに達した場合は警告ログを出して結果をそのまま返す。
+    戻り値: 結果dictのリスト（再分割時は複数要素。通常時は1要素）。
+    """
+    prompt = _build_prompt(chunk, doc_type)
 
     try:
-        text = _call_gemini_with_retry(model_name, chunk['path'], chunk['mime_type'], prompt)
-        
-        return {
-            "text": text,
-            "index": chunk['index'],
-            "success": True
+        response = _generate_content(file_ref, GEMINI_MODEL, prompt)
+    except Exception as e:
+        logger.error(f"OCR Failed for chunk {chunk['label']}: {e}", exc_info=True)
+        return [{
+            "text": f"\n> ⚠️ **[OCR Error]** Failed to retrieve content for **{chunk['label']}** after multiple retries.\n> Error: {str(e)}\n",
+            "index": chunk["index"],
+            "label": chunk["label"],
+            "start_page": chunk.get("start_page", chunk["index"] + 1),
+            "success": False,
+        }]
+
+    finish_reason = response.candidates[0].finish_reason
+    is_max_tokens = str(finish_reason) in ("FinishReason.MAX_TOKENS", "MAX_TOKENS", "2")
+
+    if is_max_tokens:
+        page_count = chunk.get("page_count", chunk.get("end_page", 1) - chunk.get("start_page", 1) + 1)
+        half = page_count // 2
+
+        if half < 1:
+            logger.error(
+                f"1ページでMAX_TOKENS到達: {chunk['label']} — 結果が不完全な可能性あり"
+            )
+            return [{
+                "text": response.text,
+                "index": chunk["index"],
+                "label": chunk["label"],
+                "start_page": chunk.get("start_page", chunk["index"] + 1),
+                "success": True,
+                "truncated": True,
+            }]
+
+        logger.warning(
+            f"MAX_TOKENS到達: {chunk['label']} ({page_count}ページ) → 半分に再分割してリトライ"
+        )
+        sub_chunks = _split_chunk(chunk["path"], chunk.get("start_page", 1), chunk["index"])
+
+        results = []
+        for sc in sub_chunks:
+            try:
+                sc_file_ref = _upload_chunk(sc["path"], sc["mime_type"])
+                sc_file_ref = _wait_for_processing(sc_file_ref)
+                sub_results = _ocr_with_adaptive_fallback(sc, sc_file_ref, doc_type)
+                results.extend(sub_results)
+            except Exception as e:
+                logger.error(f"Sub-chunk OCR failed for {sc['label']}: {e}", exc_info=True)
+                results.append({
+                    "text": f"\n> ⚠️ **[OCR Error]** Failed for **{sc['label']}**.\n> Error: {str(e)}\n",
+                    "index": sc["index"],
+                    "label": sc["label"],
+                    "start_page": sc.get("start_page", sc["index"] + 1),
+                    "success": False,
+                })
+            finally:
+                if sc.get("is_temp"):
+                    try:
+                        os.remove(sc["path"])
+                    except OSError:
+                        pass
+        return results
+
+    # 正常終了（finish_reason チェック: 警告ログ）
+    return [{
+        "text": response.text,
+        "index": chunk["index"],
+        "label": chunk["label"],
+        "start_page": chunk.get("start_page", chunk["index"] + 1),
+        "success": True,
+    }]
+
+
+def _process_chunk(chunk: Dict[str, Any], model_name: str, doc_type: str = "catalog") -> Dict[str, Any]:
+    """
+    後方互換ラッパー。内部的には_ocr_with_adaptive_fallbackを使用する。
+    単一のチャンクを処理し、最初の結果のみを返す（旧インターフェース互換）。
+    """
+    try:
+        file_ref = _upload_chunk(chunk["path"], chunk["mime_type"])
+        file_ref = _wait_for_processing(file_ref)
+        results = _ocr_with_adaptive_fallback(chunk, file_ref, doc_type)
+        return results[0] if results else {
+            "text": "", "index": chunk["index"], "success": False
         }
-        
     except Exception as e:
         logger.error(f"OCR Failed for chunk {chunk['label']}: {e}", exc_info=True)
         return {
-            "text": f"\n> ⚠️ **[OCR Error]** Failed to retrieve content for **{chunk['label']}** after multiple retries.\n> Error: {str(e)}\n",
-            "index": chunk['index'],
-            "success": False
+            "text": f"\n> ⚠️ **[OCR Error]** Failed for **{chunk['label']}**.\n> Error: {str(e)}\n",
+            "index": chunk["index"],
+            "success": False,
         }
     finally:
-        # Cleanup temp file even on error (T10)
-        if chunk.get('is_temp'):
+        if chunk.get("is_temp"):
             try:
-                os.remove(chunk['path'])
+                os.remove(chunk["path"])
             except OSError:
                 pass
 
+
+# ---------------------------------------------------------------------------
+# Phase 3: asyncio パイプライン処理
+# ---------------------------------------------------------------------------
+
+async def _process_all_chunks_pipelined(
+    chunks: List[Dict[str, Any]],
+    doc_type: str,
+    executor: ThreadPoolExecutor,
+    status_mgr,
+    filepath: str,
+) -> List[Dict[str, Any]]:
+    """
+    Phase 3: アップロードとOCRを2フェーズで並列実行するパイプライン。
+    Phase A: 全チャンクを並列アップロード＋ポーリング待機。
+    Phase B: アップロード済みファイルで並列OCR実行。
+    """
+    loop = asyncio.get_running_loop()
+
+    # ─── Phase A: 全チャンクを並列アップロード ───────────────────────────
+
+    async def upload_and_wait(chunk: Dict[str, Any]):
+        try:
+            file_ref = await loop.run_in_executor(
+                executor, _upload_chunk, chunk["path"], chunk["mime_type"]
+            )
+            file_ref = await loop.run_in_executor(
+                executor, _wait_for_processing, file_ref
+            )
+            return (chunk, file_ref, None)
+        except Exception as e:
+            logger.error(f"Upload/wait failed for {chunk['label']}: {e}", exc_info=True)
+            return (chunk, None, e)
+
+    logger.info(f"[Pipeline] Phase A: uploading {len(chunks)} chunks...")
+    upload_pairs = await asyncio.gather(*[upload_and_wait(c) for c in chunks])
+
+    # ─── Phase B: OCR実行（アップロード失敗チャンクはエラー扱い）─────────
+
+    processed_count = 0
+    lock = asyncio.Lock()
+
+    async def run_ocr(pair: Tuple) -> List[Dict[str, Any]]:
+        nonlocal processed_count
+        chunk, file_ref, upload_error = pair
+
+        if upload_error is not None:
+            result = [{
+                "text": f"\n> ⚠️ **[Upload Error]** Upload failed for **{chunk['label']}**.\n> Error: {str(upload_error)}\n",
+                "index": chunk["index"],
+                "label": chunk["label"],
+                "start_page": chunk.get("start_page", chunk["index"] + 1),
+                "success": False,
+            }]
+        else:
+            try:
+                result = await loop.run_in_executor(
+                    executor, _ocr_with_adaptive_fallback, chunk, file_ref, doc_type
+                )
+            except Exception as e:
+                logger.error(f"OCR failed for {chunk['label']}: {e}", exc_info=True)
+                result = [{
+                    "text": f"\n> ⚠️ **[System Error]** Processing failed for **{chunk['label']}**.\n> Error: {str(e)}\n",
+                    "index": chunk["index"],
+                    "label": chunk["label"],
+                    "start_page": chunk.get("start_page", chunk["index"] + 1),
+                    "success": False,
+                }]
+            finally:
+                if chunk.get("is_temp"):
+                    try:
+                        os.remove(chunk["path"])
+                    except OSError:
+                        pass
+
+        async with lock:
+            processed_count += 1
+            status_mgr.update_progress(filepath, processed_count)
+
+        return result
+
+    logger.info(f"[Pipeline] Phase B: running OCR for {len(upload_pairs)} chunks...")
+    ocr_results = await asyncio.gather(*[run_ocr(p) for p in upload_pairs])
+
+    # フラット化（適応的再分割により各チャンクが複数結果を返す場合がある）
+    flat_results: List[Dict[str, Any]] = []
+    for sublist in ocr_results:
+        flat_results.extend(sublist)
+
+    return flat_results
+
+
+# ---------------------------------------------------------------------------
+# 既存の仕上げ処理（変更なし）
+# ---------------------------------------------------------------------------
 
 def finalize_processing(filepath: str, output_path: str, markdown_text: str, status_mgr=None):
     """
@@ -354,77 +622,67 @@ def finalize_processing(filepath: str, output_path: str, markdown_text: str, sta
         return filepath, output_path
 
 
+# ---------------------------------------------------------------------------
+# メインエントリーポイント
+# ---------------------------------------------------------------------------
+
 def process_pdf_background(filepath: str, output_path: str, doc_type: str = "catalog"):
     """
     指定されたPDFをOCR処理してMarkdownに変換し、保存する（バックグラウンド実行用）。
     doc_type: 'catalog' | 'drawing' | 'spec' | 'law' — プロンプト選択に使用
+
+    Phase 3: asyncioパイプラインで全チャンクの並列アップロード＋OCRを実行する。
     """
     logger.info(f"OCR開始: {filepath} -> {output_path} (doc_type={doc_type})")
     from status_manager import OCRStatusManager
     status_mgr = OCRStatusManager()
-    
+
     try:
-        # 1. PDF分割
+        # 1. PDF分割（Phase 1: chunk_size=PDF_CHUNK_PAGES、デフォルト10）
         chunks = _split_pdf(filepath)
         total_chunks = len(chunks)
-        
+
         # ステータス初期化
         status_mgr.start_processing(filepath, total_chunks)
-        
-        # 2. 並列処理でOCR（doc_type を各チャンクに渡す）
-        results = []
-        processed_count = 0
-        
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_chunk = {
-                executor.submit(_process_chunk, chunk, GEMINI_MODEL, doc_type): chunk 
-                for chunk in chunks
-            }
-            
-            for future in as_completed(future_to_chunk):
-                chunk = future_to_chunk[future]
-                try:
-                    res = future.result()
-                    results.append(res)
-                    processed_count += 1
-                    status_mgr.update_progress(filepath, processed_count)
-                except Exception as e:
-                    logger.error(f"Chunk processing error ({chunk['label']}): {e}", exc_info=True)
-                    results.append({
-                        "index": chunk['index'],
-                        "text": f"\n> ⚠️ **[System Error]** Processing failed for **{chunk['label']}**.\n> Error: {str(e)}\n",
-                        "success": False
-                    })
-                    processed_count += 1
-                    status_mgr.update_progress(filepath, processed_count)
-        
-        # 3. 結合
-        results.sort(key=lambda x: x['index'])
+
+        # 2. asyncioパイプラインで並列OCR（Phase 2: max_workers=OCR_MAX_WORKERS）
+        with ThreadPoolExecutor(max_workers=OCR_MAX_WORKERS) as executor:
+            try:
+                results = asyncio.run(
+                    asyncio.wait_for(
+                        _process_all_chunks_pipelined(
+                            chunks, doc_type, executor, status_mgr, filepath
+                        ),
+                        timeout=1800  # 全体上限30分
+                    )
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"OCR全体タイムアウト（1800秒）: {filepath}")
+                status_mgr.fail_processing(filepath, "OCR overall timeout: exceeded 1800 seconds")
+                return
+
+        # 3. 結合（index順にソートして全結果をMarkdown化）
+        results.sort(key=lambda x: x["index"])
         markdown_text = f"# {Path(filepath).stem}\n\n"
-        
-        chunk_map = {c['index']: c for c in chunks}
 
         for r in results:
-            chunk_info = chunk_map.get(r['index'])
-            label = chunk_info['label'] if chunk_info else f"Part {r['index'] + 1}"
-            # start_page フィールドから正確な開始ページを取得（フォールバック: index+1）
-            page_num = chunk_info['start_page'] if chunk_info else r['index'] + 1
+            label = r.get("label", f"Part {r['index'] + 1}")
+            page_num = r.get("start_page", r["index"] + 1)
 
-            # Geminiが per-page [[PAGE_X]] を出力するが、フォールバックとしてチャンク先頭マーカーも付与
             markdown_text += f"\n\n[[PAGE_{page_num}]]\n"
             markdown_text += f"## {label}\n\n"
-            markdown_text += r['text']
+            markdown_text += r["text"]
             markdown_text += "\n\n---\n"
-        
-        # 4. 保存 (一旦)
-        with open(output_path, 'w', encoding='utf-8') as f:
+
+        # 4. 保存（一旦）
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(markdown_text)
-            
+
         logger.info(f"OCR完了・保存: {output_path}")
-        
-        # 5. 仕上げ処理 (分類・移動・インデックス)
+
+        # 5. 仕上げ処理（分類・移動・インデックス）
         finalize_processing(filepath, output_path, markdown_text, status_mgr)
-        
+
     except Exception as e:
         logger.error(f"OCRプロセス全体でエラー ({filepath}): {e}", exc_info=True)
         status_mgr.fail_processing(filepath, str(e))

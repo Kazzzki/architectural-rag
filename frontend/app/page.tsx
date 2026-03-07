@@ -1,4 +1,6 @@
 'use client';
+import React from 'react';
+
 import { authFetch, fetchSessions, createSession, fetchSessionDetail, deleteSession, saveMessages, SessionSummary } from '@/lib/api';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
@@ -42,13 +44,19 @@ interface Message {
 }
 
 interface SourceFile {
+    source_id: string;
     filename: string;
     original_filename?: string;
+    source_pdf_name: string;
+    source_pdf: string;
+    source_pdf_hash: string;
+    rel_path: string;
     category: string;
+    doc_type: string;
+    pages: number[];
+    hit_count: number;
     relevance_count: number;
-    source_pdf?: string;
     pdf_filename?: string;
-    pages?: number[];
 }
 
 interface Stats {
@@ -58,6 +66,203 @@ interface Stats {
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
+// ─── doc_type バッジ ────────────────────────────────────────────────────────────
+const DOC_TYPE_BADGE: Record<string, { label: string; cls: string }> = {
+    drawing: { label: '📐 図面', cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
+    law: { label: '⚖️ 法規', cls: 'bg-red-500/15 text-red-300 border-red-500/30' },
+    spec: { label: '📋 仕様書', cls: 'bg-green-500/15 text-green-300 border-green-500/30' },
+    catalog: { label: '📦 カタログ', cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30' },
+};
+
+// ─── SourceCard コンポーネント ─────────────────────────────────────────────────
+const PAGE_CHIP_LIMIT = 5;
+
+function SourceCard({
+    src,
+    onPageClick,
+}: {
+    src: SourceFile;
+    onPageClick: (url: string, page: number) => void;
+}) {
+    const [expanded, setExpanded] = useState(false);
+    const badge = DOC_TYPE_BADGE[src.doc_type];
+    const relevanceDots = src.hit_count >= 3 ? '●●●' : src.hit_count === 2 ? '●●○' : '●○○';
+
+    // PDF URL を解決する（source_pdf → rel_path フォールバック → なし）
+    const getPdfUrl = (page?: number): string | null => {
+        if (src.source_pdf) {
+            return `${API_BASE}/api/pdf/${src.source_pdf}`;
+        }
+        if (src.rel_path && src.rel_path.toLowerCase().endsWith('.pdf')) {
+            const encoded = encodeURIComponent(src.rel_path);
+            return `${API_BASE}/api/files/view/${encoded}`;
+        }
+        return null;
+    };
+
+    const visiblePages = expanded ? src.pages : src.pages.slice(0, PAGE_CHIP_LIMIT);
+    const hiddenCount = src.pages.length - PAGE_CHIP_LIMIT;
+
+    return (
+        <div className="flex flex-col gap-1.5 bg-[var(--card)] border border-[var(--border)] px-3 py-2 rounded-lg text-xs min-w-[180px] max-w-[260px] relative">
+            {/* source_id + doc_type badge */}
+            <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-bold text-[var(--muted)] bg-[var(--background)] border border-[var(--border)] px-1.5 py-0.5 rounded">
+                    {src.source_id}
+                </span>
+                {badge && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${badge.cls}`}>
+                        {badge.label}
+                    </span>
+                )}
+                <span className="ml-auto text-[10px] text-[var(--muted)]" title={`ヒット数: ${src.hit_count}`}>
+                    {relevanceDots}
+                </span>
+            </div>
+
+            {/* Filename */}
+            <div className="flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-primary-500 shrink-0" />
+                <span className="font-medium text-[var(--foreground)] truncate">
+                    {src.original_filename || src.source_pdf_name || src.filename}
+                </span>
+            </div>
+
+            {/* Page chips */}
+            {src.pages.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-0.5">
+                    {visiblePages.map((p) => {
+                        const url = getPdfUrl(p);
+                        return url ? (
+                            <button
+                                key={p}
+                                onClick={() => onPageClick(url, p)}
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-colors cursor-pointer"
+                            >
+                                p.{p}
+                            </button>
+                        ) : (
+                            <span key={p} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--background)] text-[var(--muted)] border border-[var(--border)]">
+                                p.{p}
+                            </span>
+                        );
+                    })}
+                    {!expanded && hiddenCount > 0 && (
+                        <button
+                            onClick={() => setExpanded(true)}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--background)] text-[var(--muted)] border border-[var(--border)] hover:bg-[var(--card-hover)] transition-colors"
+                        >
+                            +{hiddenCount}
+                        </button>
+                    )}
+                    {expanded && hiddenCount > 0 && (
+                        <button
+                            onClick={() => setExpanded(false)}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--background)] text-[var(--muted)] border border-[var(--border)] hover:bg-[var(--card-hover)] transition-colors"
+                        >
+                            折りたたむ
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {/* Fallback: no pages, but PDF openable */}
+            {src.pages.length === 0 && getPdfUrl() && (
+                <button
+                    onClick={() => onPageClick(getPdfUrl()!, 1)}
+                    className="text-[10px] text-blue-500 hover:text-blue-600 flex items-center gap-0.5 border border-blue-200 bg-blue-50 dark:border-blue-900/40 dark:bg-blue-900/10 px-1.5 py-0.5 rounded self-start"
+                >
+                    <ExternalLink className="w-2.5 h-2.5" />
+                    📄 PDF表示
+                </button>
+            )}
+        </div>
+    );
+}
+
+// ─── CitationBadge コンポーネント ──────────────────────────────────────────────
+const CITATION_PATTERN = /\[S(\d+):p\.(\d+)\]/g;
+
+function CitationBadge({
+    sourceId,
+    page,
+    sources,
+    onPageClick,
+}: {
+    sourceId: string;
+    page: number;
+    sources: SourceFile[];
+    onPageClick: (url: string, page: number) => void;
+}) {
+    const src = sources.find((s) => s.source_id === sourceId);
+
+    if (!src) {
+        // 対応ソースが見つからない場合はプレーンテキスト
+        return <span>[{sourceId}:p.{page}]</span>;
+    }
+
+    const getPdfUrl = (): string | null => {
+        if (src.source_pdf) return `${API_BASE}/api/pdf/${src.source_pdf}`;
+        if (src.rel_path && src.rel_path.toLowerCase().endsWith('.pdf')) {
+            return `${API_BASE}/api/files/view/${encodeURIComponent(src.rel_path)}`;
+        }
+        return null;
+    };
+
+    const url = getPdfUrl();
+
+    if (!url) {
+        return (
+            <span className="inline-flex items-center text-[11px] px-1.5 py-0.5 mx-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">
+                {sourceId} p.{page}
+            </span>
+        );
+    }
+
+    return (
+        <button
+            onClick={() => onPageClick(url, page)}
+            className="inline-flex items-center text-[11px] px-1.5 py-0.5 mx-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 hover:bg-blue-500/25 hover:text-blue-300 transition-colors cursor-pointer font-mono"
+            title={`${src.source_pdf_name || src.filename} p.${page} を開く`}
+        >
+            {sourceId} p.{page}
+        </button>
+    );
+}
+
+// テキストノード内の [S1:p.12] パターンを CitationBadge に変換
+function transformCitations(
+    text: string,
+    sources: SourceFile[],
+    onPageClick: (url: string, page: number) => void
+): React.ReactNode {
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    const regex = new RegExp(CITATION_PATTERN.source, 'g');
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+            parts.push(text.slice(lastIndex, match.index));
+        }
+        const sourceId = `S${match[1]}`;
+        const page = parseInt(match[2], 10);
+        parts.push(
+            <CitationBadge
+                key={`${sourceId}-${page}-${match.index}`}
+                sourceId={sourceId}
+                page={page}
+                sources={sources}
+                onPageClick={onPageClick}
+            />
+        );
+        lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < text.length) {
+        parts.push(text.slice(lastIndex));
+    }
+    return parts.length === 1 && typeof parts[0] === 'string' ? parts[0] : <>{parts}</>;
+}
 
 const EXAMPLE_QUESTIONS = [
     'ALCとECPの防水性能・コスト・メンテナンス性の違いを比較して',
@@ -923,7 +1128,28 @@ export default function Home() {
                                                     <p>{msg.content}</p>
                                                 ) : (
                                                     <div className="markdown-content">
-                                                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                                        <ReactMarkdown
+                                                            components={{
+                                                                p: ({ children }) => {
+                                                                    const currentSources = msg.sources || [];
+                                                                    const transformed = React.Children.map(children, (child) => {
+                                                                        if (typeof child === 'string') {
+                                                                            return transformCitations(
+                                                                                child,
+                                                                                currentSources,
+                                                                                (url, page) => {
+                                                                                    setPdfUrl(url);
+                                                                                    setPdfInitialPage(page);
+                                                                                    setIsPdfOpen(true);
+                                                                                }
+                                                                            );
+                                                                        }
+                                                                        return child;
+                                                                    });
+                                                                    return <p>{transformed}</p>;
+                                                                },
+                                                            }}
+                                                        >{msg.content}</ReactMarkdown>
                                                     </div>
                                                 )}
 
@@ -932,36 +1158,15 @@ export default function Home() {
                                                         <p className="text-xs text-[var(--muted)] mb-2 font-medium">参照ファイル:</p>
                                                         <div className="flex flex-wrap gap-2">
                                                             {msg.sources.map((src, j) => (
-                                                                <div
+                                                                <SourceCard
                                                                     key={j}
-                                                                    className="flex flex-col gap-1 bg-[var(--card)] border border-[var(--border)] px-3 py-2 rounded-md"
-                                                                >
-                                                                    <div className="flex items-center gap-2">
-                                                                        <span className="text-sm font-medium flex items-center gap-1 text-[var(--foreground)]">
-                                                                            <FileText className="w-3.5 h-3.5 text-primary-500" />
-                                                                            {src.original_filename || src.filename}
-                                                                        </span>
-                                                                        {src.source_pdf && (
-                                                                            <button
-                                                                                onClick={() => {
-                                                                                    setPdfUrl(`${API_BASE}/api/pdf/${src.source_pdf}`);
-                                                                                    setPdfInitialPage(src.pages?.[0] ?? 1);
-                                                                                    setIsPdfOpen(true);
-                                                                                }}
-                                                                                className="text-[10px] text-blue-500 hover:text-blue-600 hover:underline flex items-center gap-0.5 border border-blue-200 bg-blue-50 dark:border-blue-900/40 dark:bg-blue-900/10 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
-                                                                                title={`原本PDFを開く${src.pdf_filename ? ` (${src.pdf_filename})` : ''}${src.pages?.[0] ? ` p.${src.pages[0]}` : ''}`}
-                                                                            >
-                                                                                <ExternalLink className="w-2.5 h-2.5" />
-                                                                                📄 PDF表示{src.pages?.[0] ? ` (p.${src.pages[0]})` : ''}
-                                                                            </button>
-                                                                        )}
-                                                                    </div>
-                                                                    {src.original_filename && src.original_filename !== src.filename && (
-                                                                        <span className="text-[10px] text-[var(--muted)] flex items-center gap-1">
-                                                                            Chunk: {src.filename}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
+                                                                    src={src}
+                                                                    onPageClick={(url, page) => {
+                                                                        setPdfUrl(url);
+                                                                        setPdfInitialPage(page);
+                                                                        setIsPdfOpen(true);
+                                                                    }}
+                                                                />
                                                             ))}
                                                         </div>
                                                     </div>

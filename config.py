@@ -61,7 +61,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise EnvironmentError("GEMINI_API_KEY が未設定です。.env ファイルを確認してください。")
 MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "65536"))
-PDF_CHUNK_PAGES = int(os.environ.get("PDF_CHUNK_PAGES", "1"))
+PDF_CHUNK_PAGES = int(os.environ.get("PDF_CHUNK_PAGES", "10"))
+OCR_MAX_WORKERS = int(os.environ.get("OCR_MAX_WORKERS", "8"))
 TEMPERATURE = 0.2  # 技術的正確性を重視
 
 GEMINI_MODEL_RAG = "gemini-3-flash-preview"  # RAG用

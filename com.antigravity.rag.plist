@@ -9,7 +9,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>python3 "start_remote.py"</string>
+        <string>./launchd_start.sh</string>
     </array>
     
     <key>WorkingDirectory</key>

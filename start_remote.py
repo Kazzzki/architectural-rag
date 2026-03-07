@@ -36,15 +36,24 @@ def log(message: str):
         f.write(f"[{timestamp}] {message}\n")
 
 
+def _build_utf8_env() -> dict:
+    """UTF-8モードを強制した環境変数dictを返す"""
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
 def start_server():
     """FastAPIサーバーを起動"""
     log("Starting FastAPI server...")
-    server_log = open(LOG_DIR / "server.log", "w")
+    server_log = open(LOG_DIR / "server.log", "w", encoding="utf-8")
     process = subprocess.Popen(
         [sys.executable, str(SCRIPT_DIR / "server.py")],
         cwd=SCRIPT_DIR,
         stdout=server_log,
         stderr=subprocess.STDOUT,
+        env=_build_utf8_env(),
     )
     time.sleep(3)  # サーバー起動待ち
     return process
@@ -53,12 +62,13 @@ def start_server():
 def start_daemon():
     """自動分類デーモンを起動"""
     log("Starting classification daemon...")
-    daemon_log = open(LOG_DIR / "daemon.log", "w")
+    daemon_log = open(LOG_DIR / "daemon.log", "w", encoding="utf-8")
     process = subprocess.Popen(
         [sys.executable, str(SCRIPT_DIR / "antigravity_daemon.py")],
         cwd=SCRIPT_DIR,
         stdout=daemon_log,
         stderr=subprocess.STDOUT,
+        env=_build_utf8_env(),
     )
     return process
 

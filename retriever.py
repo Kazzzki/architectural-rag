@@ -364,6 +364,7 @@ def build_context(search_results: Dict[str, Any]) -> str:
             return ""
         context_parts = []
         for doc, meta in zip(documents, metadatas):
+            meta = meta or {}
             source = meta.get("source_pdf_name") or meta.get("filename", "不明")
             page   = meta.get("page_no") or meta.get("page_number", "")
             page_info = f" (p.{page})" if page else ""
@@ -373,7 +374,7 @@ def build_context(search_results: Dict[str, Any]) -> str:
 
     context_parts = []
     for hit in hits:
-        meta = hit.get("metadata", {})
+        meta = hit.get("metadata") or {}
         text = hit.get("context_text") or hit.get("document", "")
 
         source_name = meta.get("source_pdf_name") or meta.get("filename", "不明")
@@ -386,20 +387,38 @@ def build_context(search_results: Dict[str, Any]) -> str:
 
         context_parts.append(
             f"=== {icon}出典: {source_name}{page_info}（{category}）===\n{text}"
+
         )
 
     return "\n\n".join(context_parts)
 
 
-# ─── ソースファイル一覧 ─────────────────────────────────────────────────────────
+# ─── ソースファイル一覧 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 def get_source_files(search_results: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """検索結果からユニークなソースファイル一覧を取得（ページ情報含む）"""
+    """検索結果からユニークなソースファイル一覧を取得（ページ情報含む）
+
+    戻り値スキーマ:
+    {
+      "source_id":       "S1",          # LLMタグとの対応用（S1始まり連番）
+      "filename":        str,            # チャンクのファイル名
+      "source_pdf_name": str,            # 表示用PDF名
+      "source_pdf":      str,            # PDFビューア用ID（空の場合あり）
+      "source_pdf_hash": str,            # ハッシュベースルーティング用（空の場合あり）
+      "rel_path":        str,            # ナレッジベース相対パス
+      "category":        str,
+      "doc_type":        str,            # "drawing" | "law" | "spec" | "catalog" | ""
+      "pages":           List[int],      # 参照ページ番号（全件・昇順）
+      "hit_count":       int,            # チャンクヒット数（関連度の目安）
+      "relevance_count": int,            # hit_countの後方互换エイリアス
+    }
+    """
     metadatas = search_results.get("metadatas", [])
     file_counter: Counter = Counter()
     file_info_map: Dict[str, Dict] = {}
     file_pages_map: Dict[str, set] = {}
 
     for meta in metadatas:
+        meta = meta or {}
         rel_path = meta.get("rel_path", "")
         if not rel_path:
             continue
@@ -414,10 +433,18 @@ def get_source_files(search_results: Dict[str, Any]) -> List[Dict[str, Any]]:
         if rel_path not in file_info_map:
             category = meta.get("category", "")
             doc_type  = meta.get("doc_type", "")
+            # source_pdf: メタデータ値 → rel_path が PDF なら rel_path をフォールバック
+            source_pdf_meta = meta.get("source_pdf", "")
+            source_pdf_hash = meta.get("source_pdf_hash", "")
+            if not source_pdf_meta:
+                if rel_path.lower().endswith(".pdf"):
+                    source_pdf_meta = rel_path
+                # .md の場合は空のまま（フロントがカード表示を切り替える）
             file_info_map[rel_path] = {
                 "filename":        meta.get("filename", "不明"),
                 "source_pdf_name": meta.get("source_pdf_name", meta.get("filename", "不明")),
-                "source_pdf_hash": meta.get("source_pdf_hash", ""),
+                "source_pdf":      source_pdf_meta,
+                "source_pdf_hash": source_pdf_hash,
                 "rel_path":        rel_path,
                 "category":        category,
                 "doc_type":        doc_type,
@@ -425,10 +452,12 @@ def get_source_files(search_results: Dict[str, Any]) -> List[Dict[str, Any]]:
             }
 
     source_files = []
-    for rel_path, count in file_counter.most_common():
+    for i, (rel_path, count) in enumerate(file_counter.most_common()):
         info = file_info_map[rel_path].copy()
-        info["relevance_count"] = count
-        info["pages"] = sorted(file_pages_map.get(rel_path, []))
+        info["source_id"]       = f"S{i + 1}"
+        info["hit_count"]       = count
+        info["relevance_count"] = count  # 後方互換エイリアス
+        info["pages"]           = sorted(list(file_pages_map.get(rel_path, set())))
         source_files.append(info)
 
     return source_files
