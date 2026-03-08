@@ -13,6 +13,11 @@ BASE_DIR = Path(__file__).parent
 # 各種ディレクトリ
 KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
 PDF_STORAGE_DIR    = BASE_DIR / "data" / "pdfs"
+PDF_CACHE_DIR      = BASE_DIR / "data" / "cache" / "pdfs"
+
+# Storage Strategy (drive: Google Drive canonical, local: Local filesystem canonical)
+PDF_STORAGE_MODE = os.environ.get("PDF_STORAGE_MODE", "drive").lower()
+PDF_CACHE_MAX_GB = int(os.environ.get("PDF_CACHE_MAX_GB", "2"))
 
 # ChromaDB保存先
 CHROMA_DB_DIR = str(BASE_DIR / "data" / "chroma")

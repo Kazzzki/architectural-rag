@@ -498,15 +498,15 @@ def get_db_stats() -> Dict[str, Any]:
         collection = get_collection()
         count = collection.count()
 
-        from database import get_session, Document as DbDocument
+        from database import get_session, LegacyDocument as DbLegacyDocument
         from sqlalchemy import func
         session = get_session()
         try:
-            file_count = session.query(DbDocument).filter(
-                DbDocument.file_hash.isnot(None)
-            ).count()
-            latest = session.query(func.max(DbDocument.last_indexed_at)).scalar()
-            last_updated = latest.isoformat() if latest else "未インデックス"
+            # 論理文書数 (LegacyDocument は 1ファイル = 1レコード)
+            file_count = session.query(DbLegacyDocument).count()
+            # 最新のインデックス完了時刻を取得
+            latest = session.query(func.max(DbLegacyDocument.last_indexed_at)).scalar()
+            last_updated = latest.isoformat() if latest else None
         finally:
             session.close()
 
@@ -520,7 +520,7 @@ def get_db_stats() -> Dict[str, Any]:
         return {
             "chunk_count":  0,
             "file_count":   0,
-            "last_updated": "エラー",
+            "last_updated": None,
             "error":        str(e),
         }
 

@@ -94,7 +94,7 @@ class IngestionOrchestrator:
                 self.repo.update_ingest_stage(filepath, "indexing")
                 
                 try:
-                    # 1. Chunking
+                    # 3. チャンク生成 (Hierarchical Chunking)
                     from chunk_builder import ChunkBuilder
                     builder = ChunkBuilder()
                     

@@ -378,6 +378,58 @@ def upload_recursive(service, local_path: Path, parent_id: str = None, stats: Di
             stats['errors'] += 1
 
 
+def upload_rag_pdf_to_drive(local_path: str, source_pdf_hash: str, target_folder_name: str = "建築意匠ナレッジDB", subfolder_name: str = "pdfs") -> Optional[str]:
+    """
+    RAGパイプライン用の、ハッシュ値をキーとしたべき等なアップロード。
+    Driveの 'appProperties' に source_pdf_hash を記録し、重複アップロードを防止する。
+    """
+    service = get_drive_service()
+    try:
+        local_p = Path(local_path)
+        if not local_p.exists() or not local_p.is_file():
+            logger.error(f"Upload source not found: {local_path}")
+            return None
+
+        root_id = create_folder(service, target_folder_name)
+        folder_id = create_folder(service, subfolder_name, root_id) if subfolder_name else root_id
+            
+        # 1. すでに同じハッシュのファイルがあるか appProperties で検索
+        # ※ appProperties はインデックスされるため高速
+        query = f"appProperties has {{ key='source_pdf_hash' and value='{source_pdf_hash}' }} and '{folder_id}' in parents and trashed = false"
+        results = service.files().list(q=query, fields='files(id, name)').execute()
+        files = results.get('files', [])
+        
+        media = MediaFileUpload(str(local_p), resumable=True)
+        
+        if files:
+            drive_file_id = files[0]['id']
+            logger.info(f"Drive RAG upload: Found existing file for hash {source_pdf_hash[:8]} (ID: {drive_file_id}). Skipping/Updating metadata.")
+            # 名前が違う場合は更新しておく（管理用）
+            if files[0]['name'] != local_p.name:
+                service.files().update(fileId=drive_file_id, body={'name': local_p.name}).execute()
+            return drive_file_id
+        else:
+            # 2. 新規アップロード
+            logger.info(f"Drive RAG upload: Creating new file for hash {source_pdf_hash[:8]} ({local_p.name})")
+            file_metadata = {
+                'name': local_p.name, 
+                'parents': [folder_id],
+                'appProperties': {
+                    'source_pdf_hash': source_pdf_hash
+                }
+            }
+            result = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id'
+            ).execute()
+            return result.get('id')
+            
+    except Exception as e:
+        logger.error(f"RAG upload error (hash={source_pdf_hash}): {e}", exc_info=True)
+        return None
+
+
 def upload_single_file_to_drive(local_path: str, target_folder_name: str = "建築意匠ナレッジDB", subfolder_name: str = "pdfs") -> Optional[str]:
     """1つのファイルを指定したDriveフォルダにアップロードまたは更新し、ファイルIDを返す"""
     service = get_drive_service()

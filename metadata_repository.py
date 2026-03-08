@@ -104,9 +104,10 @@ class MetadataRepository:
         finally:
             session.close()
 
-    def save_artifact(self, version_id: str, artifact_type: str, storage_path: str) -> str:
+    def save_artifact(self, version_id: str, artifact_type: str, storage_path: str, drive_file_id: Optional[str] = None, storage_type: str = "local") -> str:
         """
         Phase 3: 中間生成物 (Markdown, JSON等) の保存パスを記録する。
+        Phase 4: Drive ID と ストレージ種別を追加。
         """
         session = get_session()
         try:
@@ -114,6 +115,8 @@ class MetadataRepository:
                 version_id=version_id,
                 artifact_type=artifact_type,
                 storage_path=storage_path,
+                drive_file_id=drive_file_id,
+                storage_type=storage_type,
                 created_at=datetime.now()
             )
             session.add(artifact)

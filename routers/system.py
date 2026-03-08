@@ -142,23 +142,23 @@ def get_stats():
     return StatsResponse(
         file_count=stats["file_count"],
         chunk_count=stats["chunk_count"],
-        last_updated=stats["last_updated"] or "未インデックス",
+        last_updated=stats["last_updated"],  # Optional[str] allows None
     )
 
 @router.get("/api/ocr/status")
 def get_ocr_status():
     """OCR処理中・最近処理したファイルのステータスを返す"""
     try:
-        from database import get_session, Document
+        from database import get_session, LegacyDocument
         session = get_session()
         try:
             from datetime import datetime, timedelta
             recent_cutoff = datetime.now() - timedelta(minutes=30)
-            docs = session.query(Document).filter(
-                (Document.status == "processing") |
-                (Document.status == "failed") |
-                ((Document.status == "completed") & (Document.updated_at >= recent_cutoff))
-            ).order_by(Document.updated_at.desc()).limit(20).all()
+            docs = session.query(LegacyDocument).filter(
+                (LegacyDocument.status == "processing") |
+                (LegacyDocument.status == "failed") |
+                ((LegacyDocument.status == "completed") & (LegacyDocument.updated_at >= recent_cutoff))
+            ).order_by(LegacyDocument.updated_at.desc()).limit(20).all()
             
             jobs = []
             for doc in docs:

@@ -18,12 +18,15 @@ class ChunkBuilder:
         self.leaf_size = leaf_size
         self.leaf_overlap = leaf_overlap
 
-    def build(self, version_id: str, markdown_text: str, ocr_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def build(self, md_text: str, ocr_results: List[Dict[str, Any]], source_metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
-        マークダウンとOCRの結果（ページ単位）から3層のチャンクを生成する。
+        MarkdownテキストとOCR結果からチャンク群を生成する。
+        source_metadata: retriever が必要とする情報 (source_pdf_hash, rel_path, category 等)
         """
+        source_metadata = source_metadata or {}
         all_chunks = []
-        
+        version_id = source_metadata.get("version_id", "unknown") # version_idをsource_metadataから取得
+
         # 1. Page Chunks
         # ocr_results は [{'text': '...', 'index': 0, 'label': 'Page 1', ...}] の形式
         page_chunks = []
@@ -41,6 +44,7 @@ class ChunkBuilder:
                 "metadata": {
                     "page_no": page_no,
                     "label": res.get("label", f"Page {page_no}"),
+                    **source_metadata
                 }
             }
             page_chunks.append(chunk)
@@ -49,7 +53,7 @@ class ChunkBuilder:
         # 2. Section Chunks
         # 見出しで分割する。OCR結果には [[PAGE_N]] や ## Page N が含まれている。
         # ここでは単純に "## " または "# " で分割を試みる。
-        sections = self._split_by_headers(markdown_text)
+        sections = self._split_by_headers(md_text) # Changed markdown_text to md_text
         section_chunks = []
         for i, sec_text in enumerate(sections):
             if len(sec_text.strip()) < 50: # あまりに短いものはスキップ
@@ -62,6 +66,7 @@ class ChunkBuilder:
                 "content": sec_text.strip(),
                 "metadata": {
                     "section_index": i,
+                    **source_metadata
                 }
             }
             section_chunks.append(chunk)
@@ -73,11 +78,12 @@ class ChunkBuilder:
                 leaf_chunk = {
                     "id": f"leaf_{version_id}_{i}_{j}_{uuid.uuid4().hex[:6]}",
                     "version_id": version_id,
-                    "chunk_type": "leaf",
-                    "content": leaf_text.strip(),
+                    "chunk_type": "leaf", # Changed from "type" to "chunk_type" to match existing schema
+                    "content": leaf_text.strip(), # Added .strip() to match existing content field
                     "metadata": {
-                        "section_id": chunk["id"],
-                        "leaf_index": j,
+                        "section_id": chunk["id"], # Kept original section_id
+                        "leaf_index": j, # Kept original leaf_index
+                        **source_metadata
                     }
                 }
                 all_chunks.append(leaf_chunk)

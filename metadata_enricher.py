@@ -94,25 +94,52 @@ class MetadataEnricher:
             target_pdf_dir.mkdir(parents=True, exist_ok=True)
             new_pdf_path = target_pdf_dir / f"{source_pdf_hash}{Path(filepath).suffix}"
             
+            drive_file_id = None
             if new_pdf_path.resolve() != Path(filepath).resolve():
                 if new_pdf_path.exists():
                     new_pdf_path.unlink()
                 if Path(filepath).exists():
                     shutil.move(str(filepath), str(new_pdf_path))
                     logger.info(f"[MetadataEnricher] Moved source PDF to {new_pdf_path}")
-                    
-                    self.repo.save_artifact(version_id, "raw_file", str(new_pdf_path))
-                    
-                    # Legacyのファイルパスも更新
-                    try:
-                        import file_store as fs
-                        file_rec = fs.get_file_by_path(filepath)
-                        if file_rec:
-                            fs.update_path(file_rec["id"], str(new_pdf_path))
-                    except Exception as _e:
-                        pass
                 else:
                     logger.warning(f"[MetadataEnricher] Original file {filepath} not found for moving.")
+            
+            # --- Google Driveへアップロード (Phase 4) ---
+            from config import PDF_STORAGE_MODE
+            if PDF_STORAGE_MODE == "drive" and new_pdf_path.exists():
+                try:
+                    from drive_sync import upload_rag_pdf_to_drive
+                    self.repo.update_ingest_stage_by_version_id(version_id, "uploading_to_drive")
+                    
+                    drive_file_id = upload_rag_pdf_to_drive(
+                        local_path=str(new_pdf_path),
+                        source_pdf_hash=source_pdf_hash
+                    )
+                    
+                    if drive_file_id:
+                        logger.info(f"[MetadataEnricher] Successfully uploaded to Drive: {drive_file_id}")
+                        self.repo.update_ingest_stage_by_version_id(version_id, "drive_synced")
+                except Exception as e:
+                    logger.error(f"[MetadataEnricher] Drive upload failed: {e}")
+                    # 失敗してもパイプラインは続行する（ローカル正本があるため）
+
+            # Artifactとして記録
+            self.repo.save_artifact(
+                version_id=version_id, 
+                artifact_type="raw_file", 
+                storage_path=str(new_pdf_path),
+                drive_file_id=drive_file_id,
+                storage_type="drive" if drive_file_id else "local"
+            )
+
+            # Legacyのファイルパスも更新
+            try:
+                import file_store as fs
+                file_rec = fs.get_file_by_path(filepath)
+                if file_rec:
+                    fs.update_path(file_rec["id"], str(new_pdf_path))
+            except Exception as _e:
+                pass
 
             # DB更新
             self.repo.update_ingest_stage_by_version_id(version_id, "enriched")

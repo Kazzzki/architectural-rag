@@ -148,12 +148,15 @@ def _split_pdf(filepath: str, doc_type: str = "general") -> List[Dict[str, Any]]
         else:
             stats_fallback += 1
             stats_reasons[reason] = stats_reasons.get(reason, 0) + 1
-            logger.info(f"[OCR FastPath] page={p+1} rejected reason={reason}")
+            logger.info(f"[OCR FastPath] page={p+1}/{total_pages} rejected reason={reason}")
             current_pdf_pages.append(p)
+        
+        if (p + 1) % 10 == 0:
+            logger.info(f"[OCR FastPath] Progress: {p+1}/{total_pages} pages scanned...")
             
     flush_pdf_pages()
     
-    logger.info(f"[OCR FastPath] usable_pages={stats_usable} fallback_pages={stats_fallback} (Fallback reasons: {stats_reasons})")
+    logger.info(f"[OCR FastPath] Scan complete. usable_pages={stats_usable} fallback_pages={stats_fallback}. Total chunks: {len(chunks)}")
     
     chunks.sort(key=lambda x: x["index"])
     
@@ -249,7 +252,7 @@ def _upload_chunk(
     mime_type: str,
     version_id: str = "unknown",
     chunk_index: int = 0,
-    original_filename: str | None = None
+    original_filename: Optional[str] = None
 ):
     """
     Phase 3 + 5: ファイルをGemini File APIにアップロードしてfile_refを返す。
@@ -285,11 +288,20 @@ def _upload_chunk(
                         display_name=safe_name  # 原本名は渡さない
                     )
                 )
+                logger.info(f"Successfully uploaded chunk: {safe_name}")
                 return uploaded_file
             except Exception as e:
-                # UnicodeEncodeError がここで発生した場合は non-retryable として扱う（本来出ないはずだが）
-                if "ascii" in str(e).lower() and "encode" in str(e).lower():
-                    logger.error(f"CRITICAL: UnicodeEncodeError during upload for {orig_name} despite ASCII safe name: {e}")
+                err_str = str(e).lower()
+                # UnicodeEncodeError や不正な形式は retry 不要
+                if "ascii" in err_str and "encode" in err_str:
+                    logger.error(f"NON-RETRYABLE: UnicodeEncodeError during upload for {orig_name}: {e}")
+                    raise # tenorcity 等のラップがあれば non-retryable としてマークするのが理想だが、ここでは例外をそのまま投げる
+                elif "unsupported" in err_str or "invalid" in err_str:
+                    logger.error(f"NON-RETRYABLE: Input error for {orig_name}: {e}")
+                    raise
+                
+                # それ以外（Timeout, 429, 5xx）は呼び出し側の @retry_gemini_call がリトライする
+                logger.warning(f"RETRYABLE (maybe): Upload failed for {safe_name}: {e}")
                 raise
 
 
@@ -426,7 +438,7 @@ def _ocr_with_adaptive_fallback(
     file_ref,
     doc_type: str,
     version_id: str = "unknown",
-    original_filename: str | None = None
+    original_filename: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Phase 1-B: アップロード済みfile_refでOCRを実行する。

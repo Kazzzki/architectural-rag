@@ -40,7 +40,9 @@ export default function StatsPanel({ stats, onRefresh, isLoading = false }: Stat
                     <Clock className={`w-4 h-4 text-green-600 dark:text-green-400 ${isLoading ? 'animate-spin' : ''}`} />
                 </div>
                 <span className="text-xs font-medium text-[var(--foreground)] truncate w-full">
-                    {stats.last_updated ? new Date(stats.last_updated).toLocaleDateString() : '-'}
+                    {stats.last_updated && !isNaN(new Date(stats.last_updated).getTime())
+                        ? new Date(stats.last_updated).toLocaleDateString()
+                        : '未インデックス'}
                 </span>
                 <span className="text-[10px] text-[var(--muted)]">Last Updated</span>
             </div>

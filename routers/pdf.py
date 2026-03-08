@@ -30,44 +30,68 @@ async def get_pdf(file_id: str):
     if not re.match(r"^[a-zA-Z0-9_\-]{8,64}$", file_id):
         raise HTTPException(status_code=400, detail="Invalid file_id format")
     
-    # 1. MetadataRepositoryから取得を試みる
+    # 1. MetadataRepositoryから取得を試める
+    from metadata_repository import MetadataRepository
+    repo = MetadataRepository()
+    from database import get_session, Artifact, DocumentVersion
+    
+    session = get_session()
     try:
-        from metadata_repository import MetadataRepository
-        repo = MetadataRepository()
-        artifacts = repo.get_artifacts_by_version_hash(file_id)
-        
-        # RAW_FILE または RAW_PDF タイプを探す
-        target_artifact = next((a for a in artifacts if a.artifact_type in ("raw_file", "raw_pdf")), None)
-        
-        if target_artifact:
-            fp = Path(target_artifact.storage_path)
-            if fp.exists():
-                # 元のファイル名を取得するためにVersion情報を取得
-                from database import get_session, DocumentVersion, Upload
-                session = get_session()
-                version = session.query(DocumentVersion).filter(DocumentVersion.version_hash == file_id).first()
-                original_name = fp.name
-                if version:
-                    upload = session.query(Upload).filter(Upload.version_id == version.id).first()
-                    if upload:
-                        original_name = upload.original_filename
-                session.close()
+        # file_id は source_pdf_hash (version_hash) と想定
+        version = session.query(DocumentVersion).filter(DocumentVersion.version_hash == file_id).first()
+        if not version:
+            # フォールバック: 直接ハッシュ名で検索
+            from config import PDF_STORAGE_DIR
+            legacy_path = Path(PDF_STORAGE_DIR) / f"{file_id}.pdf"
+            if legacy_path.exists():
+                return FileResponse(legacy_path, media_type="application/pdf")
+            raise HTTPException(status_code=404, detail="PDF not found (no version)")
 
-                return FileResponse(
-                    fp, 
-                    media_type="application/pdf",
-                    filename=original_name
-                )
-    except Exception as e:
-        logger.warning(f"MetadataRepository miss for {file_id}: {e}")
-    
-    # 2. PDF_STORAGE_DIR内のID名ファイルにフォールバック
-    from config import PDF_STORAGE_DIR
-    target_path = Path(PDF_STORAGE_DIR) / f"{file_id}.pdf"
-    if target_path.exists():
-        return FileResponse(target_path, media_type="application/pdf")
-    
-    raise HTTPException(status_code=404, detail="PDF not found")
+        # Artifact (raw_file) を探す
+        artifact = session.query(Artifact).filter(
+            Artifact.version_id == version.id,
+            Artifact.artifact_type == "raw_file"
+        ).first()
+        
+        if not artifact:
+            raise HTTPException(status_code=404, detail="PDF artifact not found")
+
+        local_path = Path(artifact.storage_path)
+        drive_id = artifact.drive_file_id
+        
+        # 1. ローカルに実体があるか確認 (Staging / Legacy)
+        if local_path.exists():
+            return FileResponse(local_path, media_type="application/pdf")
+            
+        # 2. キャッシュにあるか確認
+        from config import PDF_CACHE_DIR
+        cache_path = Path(PDF_CACHE_DIR) / f"{file_id}.pdf"
+        if cache_path.exists():
+            return FileResponse(cache_path, media_type="application/pdf")
+            
+        # 3. Google Drive から取得を試みる
+        if drive_id:
+            try:
+                from drive_sync import get_drive_service, download_file
+                service = get_drive_service()
+                logger.info(f"Downloading PDF from Drive to cache: {file_id} (DriveID: {drive_id})")
+                
+                content = download_file(service, drive_id, f"{file_id}.pdf")
+                
+                # キャッシュ保存
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(cache_path, "wb") as f:
+                    f.write(content)
+                    
+                return FileResponse(cache_path, media_type="application/pdf")
+            except Exception as e:
+                logger.error(f"Failed to fetch from Drive: {e}")
+                raise HTTPException(status_code=500, detail="Failed to fetch PDF from remote storage")
+
+        raise HTTPException(status_code=404, detail="PDF source file not found locally or on Drive")
+        
+    finally:
+        session.close()
 
 @router.get("/api/pdf/metadata/{file_id}")
 async def get_pdf_metadata(file_id: str):

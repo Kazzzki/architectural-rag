@@ -44,9 +44,10 @@ class DocumentVersion(Base):
     document_id = Column(String, ForeignKey('documents.id'), nullable=False)
     version_hash = Column(String, nullable=False, unique=True)  # source_pdf_hash等に相当
     ingest_status = Column(String, nullable=False, default="accepted") # accepted, ocr_processing, classified, searchable, etc.
-    searchable = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    drive_status = Column(String, nullable=True) # pending, synced, error
+    searchable = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
     error_message = Column(Text, nullable=True)
 
 class Upload(Base):
@@ -72,8 +73,10 @@ class Artifact(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     version_id = Column(String, ForeignKey('document_versions.id'), nullable=False)
     artifact_type = Column(String, nullable=False) # 'raw_pdf', 'ocr_markdown', 'page_blocks_json'
-    storage_path = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.now)
+    storage_path = Column(Text, nullable=False)
+    drive_file_id = Column(String, nullable=True)
+    storage_type = Column(String, nullable=False, default='local') # local, drive
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
 
 class Job(Base):
     """
@@ -425,9 +428,12 @@ def _run_migrations():
             file_paths TEXT    NOT NULL,
             char_limit INTEGER DEFAULT 80000,
             truncated  BOOLEAN DEFAULT 0,
-            content    TEXT,
-            created_at DATETIME
         )""",
+        # Phase 4 (Drive Transition): Artifacts への Drive ID 追加
+        "ALTER TABLE artifacts ADD COLUMN drive_file_id VARCHAR",
+        "ALTER TABLE artifacts ADD COLUMN storage_type VARCHAR DEFAULT 'local'",
+        # DocumentVersion への同期ステータス追加
+        "ALTER TABLE document_versions ADD COLUMN drive_status VARCHAR",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -435,8 +441,10 @@ def _run_migrations():
                 conn.execute(text(sql))
                 conn.commit()
                 logger.info(f"Migration applied: {sql[:60]}")
-            except Exception:
-                # 列/テーブルが既存の場合はスキップ
+            except Exception as e:
+                # 列/テーブルが既存の場合はスキップするが、それ以外は warning ログに詳細を出す
+                if "already exists" not in str(e) and "Duplicate column name" not in str(e):
+                    logger.warning(f"Migration potential error: {sql[:40]}... -> {e}")
                 pass
 
 
