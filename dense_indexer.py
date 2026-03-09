@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 _chroma_clients = {}
 _chroma_lock = Lock()
 
+def get_chroma_client(path=CHROMA_DB_DIR):
+    """公開エイリアス: indexer.py / retriever.py から import されるパブリック関数"""
+    return _get_chroma_client(path)
+
 def _get_chroma_client(path=CHROMA_DB_DIR):
     """同一プロセス内で同一パスのClientを再利用するためのファクトリ"""
     with _chroma_lock:
