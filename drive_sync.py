@@ -20,12 +20,20 @@ if sys.version_info < (3, 10):
         pass
 
 from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import InstalledAppFlow, Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
-from config import KNOWLEDGE_BASE_DIR, SUPPORTED_EXTENSIONS, BASE_DIR
+from config import (
+    KNOWLEDGE_BASE_DIR, 
+    SUPPORTED_EXTENSIONS, 
+    BASE_DIR,
+    GOOGLE_DRIVE_FOLDER_NAME,
+    GOOGLE_DRIVE_FOLDER_ID,
+    GOOGLE_DRIVE_CREDENTIALS_JSON
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +108,21 @@ def save_credentials_from_code(code: str, redirect_uri: str, state: str = None):
 
 
 def get_drive_service():
-    """Google Drive APIサービスを取得（OAuth認証）"""
+    """Google Drive APIサービスを取得（Service Account または OAuth認証）"""
     creds = None
     
+    # 1. サービスアカウント優先 (GOOGLE_DRIVE_CREDENTIALS_JSON があれば)
+    if GOOGLE_DRIVE_CREDENTIALS_JSON and os.path.exists(GOOGLE_DRIVE_CREDENTIALS_JSON):
+        try:
+            creds = service_account.Credentials.from_service_account_file(
+                GOOGLE_DRIVE_CREDENTIALS_JSON, scopes=SCOPES
+            )
+            logger.info("Using Google Drive Service Account credentials")
+            return build('drive', 'v3', credentials=creds)
+        except Exception as e:
+            logger.warning(f"Failed to load service account: {e}")
+
+    # 2. OAuth 2.0 (token.pickle)
     if TOKEN_PATH.exists():
         with open(TOKEN_PATH, 'rb') as token:
             creds = pickle.load(token)
@@ -238,7 +258,10 @@ def list_drive_folders(service, parent_id: str = 'root') -> List[Dict[str, Any]]
 
 
 def find_folder_by_name(folder_name: str) -> Optional[str]:
-    """フォルダ名からフォルダIDを検索"""
+    """フォルダ名または config の設定からフォルダIDを取得"""
+    if GOOGLE_DRIVE_FOLDER_ID:
+        return GOOGLE_DRIVE_FOLDER_ID
+    
     service = get_drive_service()
     
     query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
@@ -378,7 +401,7 @@ def upload_recursive(service, local_path: Path, parent_id: str = None, stats: Di
             stats['errors'] += 1
 
 
-def upload_rag_pdf_to_drive(local_path: str, source_pdf_hash: str, target_folder_name: str = "建築意匠ナレッジDB", subfolder_name: str = "pdfs") -> Optional[str]:
+def upload_rag_pdf_to_drive(local_path: str, source_pdf_hash: str, target_folder_name: str = GOOGLE_DRIVE_FOLDER_NAME, subfolder_name: str = "pdfs") -> Optional[str]:
     """
     RAGパイプライン用の、ハッシュ値をキーとしたべき等なアップロード。
     Driveの 'appProperties' に source_pdf_hash を記録し、重複アップロードを防止する。
@@ -430,7 +453,7 @@ def upload_rag_pdf_to_drive(local_path: str, source_pdf_hash: str, target_folder
         return None
 
 
-def upload_single_file_to_drive(local_path: str, target_folder_name: str = "建築意匠ナレッジDB", subfolder_name: str = "pdfs") -> Optional[str]:
+def upload_single_file_to_drive(local_path: str, target_folder_name: str = GOOGLE_DRIVE_FOLDER_NAME, subfolder_name: str = "pdfs") -> Optional[str]:
     """1つのファイルを指定したDriveフォルダにアップロードまたは更新し、ファイルIDを返す"""
     service = get_drive_service()
     try:
@@ -491,7 +514,7 @@ def _update_file_store_drive_id(local_path: Path, drive_id: str):
         logger.debug(f"file_store integration skipped: {e}")
 
 
-def sync_upload_to_drive(target_folder_name: str = "建築意匠ナレッジDB"):
+def sync_upload_to_drive(target_folder_name: str = GOOGLE_DRIVE_FOLDER_NAME):
     """ローカルのナレッジベースをGoogle Driveに同期（アップロード）"""
     service = get_drive_service()
     logger.info(f"同期（アップロード）開始: {target_folder_name}")
