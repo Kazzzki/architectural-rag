@@ -43,12 +43,27 @@ const FileUpload = () => {
         } catch (_) { }
     }, []);
 
-    // Poll while any job is processing
+    // Bug fix: 以前は常時3秒ポーリングしていたため、
+    // 処理中でなくても無駄なリクエストが発生し続けていた。
+    // processing ジョブが存在する間のみポーリングし、
+    // なくなったら自動停止する。
     useEffect(() => {
-        fetchOcrStatus();
-        pollRef.current = setInterval(fetchOcrStatus, 3000);
-        return () => { if (pollRef.current) clearInterval(pollRef.current); };
+        fetchOcrStatus(); // 初回即時取得
     }, [fetchOcrStatus]);
+
+    useEffect(() => {
+        if (processingCount > 0) {
+            // processing 中のジョブがある間だけポーリング
+            pollRef.current = setInterval(fetchOcrStatus, 3000);
+        } else {
+            // processing がゼロになったらポーリング停止
+            if (pollRef.current) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
+        }
+        return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    }, [processingCount, fetchOcrStatus]);
 
     const onDrop = useCallback(async (acceptedFiles: File[]) => {
         if (acceptedFiles.length === 0) return;

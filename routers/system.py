@@ -153,10 +153,13 @@ def get_ocr_status():
         session = get_session()
         try:
             from datetime import datetime, timedelta
+            # Bug fix: failed/completed どちらにも30分cutoffを適用。
+            # 修正前は failed が cutoff なしで永続的に返り続け、
+            # フロントエンドにエラーポップアップが消えない問題が発生していた。
             recent_cutoff = datetime.now() - timedelta(minutes=30)
             docs = session.query(LegacyDocument).filter(
                 (LegacyDocument.status == "processing") |
-                (LegacyDocument.status == "failed") |
+                ((LegacyDocument.status == "failed")    & (LegacyDocument.updated_at >= recent_cutoff)) |
                 ((LegacyDocument.status == "completed") & (LegacyDocument.updated_at >= recent_cutoff))
             ).order_by(LegacyDocument.updated_at.desc()).limit(20).all()
             
@@ -188,16 +191,32 @@ def get_ocr_status():
 def dismiss_ocr_status(file_path: str):
     """OCRステータスエントリを削除（非表示化）"""
     try:
-        from metadata_repository import MetadataRepository
-        repo = MetadataRepository()
-        # file_path に基づいて版を特定し、非表示（または削除）にする
-        from database import get_session, DocumentVersion
+        from database import get_session, LegacyDocument, DocumentVersion
         session = get_session()
-        version = session.query(DocumentVersion).filter(DocumentVersion.id.like(f"%{file_path}%")).first() # 簡易マッチ
-        if version:
-            # ジョブがあればキャンセル
-            repo.update_ingest_stage_by_version_id(version.id, "dismissed")
-        session.close()
+        try:
+            # Bug fix: 旧実装は DocumentVersion.id に file_path を LIKE マッチしており
+            # LegacyDocument が更新されなかった。
+            # 正しく LegacyDocument.file_path で直接検索して dismissed に更新する。
+            legacy = session.query(LegacyDocument).filter(
+                LegacyDocument.file_path == file_path
+            ).first()
+            if legacy:
+                legacy.status = "dismissed"
+                from datetime import datetime
+                legacy.updated_at = datetime.now()
+
+                # 新モデル側も合わせて更新
+                if legacy.source_pdf_hash:
+                    doc_ver = session.query(DocumentVersion).filter(
+                        DocumentVersion.version_hash == legacy.source_pdf_hash
+                    ).first()
+                    if doc_ver:
+                        doc_ver.ingest_status = "dismissed"
+                        doc_ver.updated_at = datetime.now()
+
+            session.commit()
+        finally:
+            session.close()
         return {"success": True}
     except Exception as e:
         logger.error(f"Failed to dismiss OCR status for {file_path}: {e}", exc_info=True)
