@@ -37,3 +37,6 @@ current_url.txt
 *.pdf
 input/
 knowledge_base/
+antigravity.db
+app.log*
+*.db
