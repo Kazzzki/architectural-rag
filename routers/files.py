@@ -161,15 +161,28 @@ async def view_file(file_path: str):
             else:
                 raise HTTPException(status_code=404, detail="File not found")
             
+        IMAGE_MIMES = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+        }
         headers = {}
-        if target_path.suffix.lower() == ".pdf":
+        suffix = target_path.suffix.lower()
+        if suffix == ".pdf":
             media_type = "application/pdf"
             from urllib.parse import quote
             safe_name = quote(target_path.name)
             headers["Content-Disposition"] = f"inline; filename*=utf-8''{safe_name}"
-        elif target_path.suffix.lower() == ".md":
+        elif suffix in IMAGE_MIMES:
+            media_type = IMAGE_MIMES[suffix]
+            from urllib.parse import quote
+            safe_name = quote(target_path.name)
+            headers["Content-Disposition"] = f"inline; filename*=utf-8''{safe_name}"
+        elif suffix == ".md":
             media_type = "text/markdown; charset=utf-8"
-        elif target_path.suffix.lower() == ".txt":
+        elif suffix == ".txt":
             media_type = "text/plain; charset=utf-8"
         else:
             media_type = "application/octet-stream"
@@ -305,7 +318,8 @@ def build_tree_recursive(current_path: Path, root_path: Path, ocr_progress_data:
                 node["children"].append(build_tree_recursive(item, root_path, ocr_progress_data, supported_exts))
             else:
                 ext = item.suffix.lower()
-                if ext not in supported_exts and ext != '.md': 
+                IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+                if ext not in supported_exts and ext != '.md' and ext not in IMAGE_EXTS: 
                     continue
                 
                 item_rel_path = str(item.relative_to(root_path))
@@ -316,8 +330,14 @@ def build_tree_recursive(current_path: Path, root_path: Path, ocr_progress_data:
                     md_path = item.with_suffix('.md')
                     if md_path.exists():
                         ocr_status = "completed"
-                    
-                    if item_rel_path in ocr_progress_data:
+                elif ext in IMAGE_EXTS:
+                    # 画像ファイルの場合、同名.mdがあればOCR完了
+                    md_path = item.with_suffix('.md')
+                    if md_path.exists():
+                        ocr_status = "completed"
+                
+                # DB のステータス参照（PDF・画像共通）
+                if item_rel_path in ocr_progress_data:
                         progress_info = ocr_progress_data[item_rel_path]
                         status = progress_info.get("status")
                         if status == "processing":

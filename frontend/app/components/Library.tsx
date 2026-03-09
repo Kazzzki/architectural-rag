@@ -349,6 +349,16 @@ export default function Library() {
                                 />
                             ) : selectedFile.name.toLowerCase().endsWith('.md') ? (
                                 <MarkdownPreview filePath={selectedFile.path} />
+                            ) : /\.(png|jpg|jpeg|gif|webp)$/i.test(selectedFile.name) ? (
+                                <div className="h-full flex items-center justify-center bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 overflow-auto p-2">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                        src={`${API_BASE}/api/files/view/${selectedFile.path.split('/').map(encodeURIComponent).join('/')}`}
+                                        alt={selectedFile.name}
+                                        className="max-w-full max-h-full object-contain rounded shadow-sm"
+                                        style={{ maxHeight: 'calc(100vh - 280px)' }}
+                                    />
+                                </div>
                             ) : (
                                 <div className="h-full flex flex-col items-center justify-center text-slate-400 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 border-dashed">
                                     <File className="w-12 h-12 mb-3 opacity-20" />
