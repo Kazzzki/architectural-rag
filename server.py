@@ -115,20 +115,30 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan: 起動・シャットダウン時の処理"""
-    # データベース初期化（モジュールレベル副作用をローカルインポートで回避）
-    from database import init_db
+    # データベース初期化
+    from database import init_db, get_session, Job, LegacyDocument, DocumentVersion
     from sqlalchemy import text
     
     init_db()
     
-    # クラッシュ等による処理中ステータスの固着をリセット (Jobsテーブル)
+    # クラッシュ等による処理中ステータスの固着をリセット
     try:
         session = get_session()
+        # jobs テーブル
         session.execute(text("UPDATE jobs SET status = 'failed', error_message = 'Server restarted' WHERE status = 'running'"))
+        
+        # LegacyDocument (旧モデル)
+        session.execute(text("UPDATE legacy_documents SET status = 'failed', error_message = 'Server restarted during processing' WHERE status = 'processing'"))
+        
+        # DocumentVersion (新モデル)
+        # indexing や ocr_processing をリセット
+        session.execute(text("UPDATE document_versions SET ingest_status = 'failed', error_message = 'Server restarted during indexing' WHERE ingest_status IN ('ocr_processing', 'indexing')"))
+        
         session.commit()
-        session.close()
     except Exception as e:
         logger.warning(f"Resetting stuck jobs failed: {e}")
+    finally:
+        session.close()
     yield
     # シャットダウン時の処理（将来必要に応じて追加）
 

@@ -21,6 +21,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import AICopilotNode from './AICopilotNode';
+import ViewportControls from './ViewportControls';
 
 interface ProcessNode {
     id: string;
@@ -48,6 +49,7 @@ interface Props {
     edges: EdgeData[];
     selectedNodeId: string | null;
     selectedNodeIds?: Set<string>;
+    selectedEdgeId?: string | null;
     highlightedNodes: Set<string>;
     highlightedEdges: Set<string>;
     onNodeSelect: (id: string) => void;
@@ -59,6 +61,7 @@ interface Props {
     onConnectNodes?: (sourceId: string, targetId: string) => void;
     onEdgeUpdate?: (oldEdge: EdgeData, newConnection: Connection) => void;
     onEdgeClick?: (eventId: string, edge: EdgeData) => void;
+    onEdgeDoubleClick?: (eventId: string, edge: EdgeData) => void;
     onEdgeContextMenu?: (event: React.MouseEvent, edge: EdgeData) => void;
     onEdgesDelete?: (edgeIds: string[]) => void;
     onNodesDelete?: (nodeIds: string[]) => void;
@@ -82,6 +85,7 @@ function MindmapCanvasInner({
     allEdges,
     selectedNodeId,
     selectedNodeIds = EMPTY_SET,
+    selectedEdgeId = null,
     highlightedNodes,
     highlightedEdges,
     onNodeSelect,
@@ -103,6 +107,7 @@ function MindmapCanvasInner({
     onEdgeContextMenu,
     onPaneContextMenu,
     onAiAction,
+    onEdgeDoubleClick,
 }: Props) {
     const hasHighlight = highlightedNodes.size > 0;
     const { screenToFlowPosition } = useReactFlow();
@@ -121,6 +126,8 @@ function MindmapCanvasInner({
     const inlineRef = useRef<HTMLInputElement>(null);
     const inlineContainerRef = useRef<HTMLDivElement>(null);
     const connectingNodeId = useRef<string | null>(null);
+
+    const [showMiniMap, setShowMiniMap] = useState(false);
 
     const cancelInlineInput = useCallback(() => {
         setInlineInput(null);
@@ -248,6 +255,7 @@ function MindmapCanvasInner({
     // Convert to React Flow edges
     const rfEdges: RFEdge[] = useMemo(() => {
         return processEdges.map(pe => {
+            const isSelected = pe.id === selectedEdgeId;
             const isHighlighted = hasHighlight ? highlightedEdges.has(pe.id) : true;
             const isDimmed = hasHighlight && !highlightedEdges.has(pe.id);
             const isHard = pe.type === 'hard';
@@ -257,19 +265,19 @@ function MindmapCanvasInner({
                 source: pe.source,
                 target: pe.target,
                 type: 'smoothstep',
-                animated: isHighlighted && hasHighlight,
+                animated: (isHighlighted && hasHighlight) || isSelected,
                 // hard: solid/thick / soft: dashed/thin
                 style: {
-                    stroke: isDimmed ? '#e2e8f0' : isHighlighted ? (isHard ? '#f43f5e' : '#6366f1') : (isHard ? '#fda4af' : '#cbd5e1'),
-                    strokeWidth: isDimmed ? 1 : (isHard ? 3 : 1.5),
-                    strokeDasharray: isHard ? undefined : '6 4',
-                    opacity: isDimmed ? 0.3 : 1,
+                    stroke: isSelected ? '#7c3aed' : (isDimmed ? '#e2e8f0' : isHighlighted ? (isHard ? '#f43f5e' : '#6366f1') : (isHard ? '#fda4af' : '#cbd5e1')),
+                    strokeWidth: isSelected ? 3 : (isDimmed ? 1 : (isHard ? 3 : 1.5)),
+                    strokeDasharray: (isHard || isSelected) ? undefined : '6 4',
+                    opacity: isDimmed && !isSelected ? 0.3 : 1,
                 },
                 markerEnd: {
                     type: MarkerType.ArrowClosed,
-                    color: isDimmed ? '#e2e8f0' : isHighlighted ? (isHard ? '#f43f5e' : '#6366f1') : (isHard ? '#fda4af' : '#cbd5e1'),
-                    width: isHard ? 10 : 8,
-                    height: isHard ? 10 : 8,
+                    color: isSelected ? '#7c3aed' : (isDimmed ? '#e2e8f0' : isHighlighted ? (isHard ? '#f43f5e' : '#6366f1') : (isHard ? '#fda4af' : '#cbd5e1')),
+                    width: isSelected ? 10 : (isHard ? 10 : 8),
+                    height: isSelected ? 10 : (isHard ? 10 : 8),
                 },
                 label: isHighlighted && hasHighlight ? pe.reason : undefined,
                 labelStyle: {
@@ -483,6 +491,10 @@ function MindmapCanvasInner({
                     const edgeData = processEdges.find(e => e.id === edge.id);
                     if (edgeData) onEdgeClick(edge.id, edgeData);
                 } : undefined}
+                onEdgeDoubleClick={onEdgeDoubleClick ? (event, edge) => {
+                    const edgeData = processEdges.find(e => e.id === edge.id);
+                    if (edgeData) onEdgeDoubleClick(edge.id, edgeData);
+                } : undefined}
                 onEdgeContextMenu={onEdgeContextMenu ? (event, edge) => {
                     event.preventDefault();
                     const edgeData = processEdges.find(e => e.id === edge.id);
@@ -512,6 +524,12 @@ function MindmapCanvasInner({
                 />
                 <Controls
                     showInteractive={false}
+                    className="hidden" // We use our own ViewportControls instead
+                />
+                <ViewportControls
+                    onToggleMiniMap={() => setShowMiniMap(!showMiniMap)}
+                    showMiniMap={showMiniMap}
+                    selectedNodeId={selectedNodeId}
                 />
                 <div className="absolute bottom-4 left-4 z-10 flex flex-col gap-2 bg-white/90 backdrop-blur-md rounded-xl px-4 py-3 text-[10px] text-slate-500 shadow-xl border border-slate-200">
                     <div className="font-bold text-slate-700 mb-1 border-b border-slate-100 pb-1">エッジ凡例</div>
@@ -526,12 +544,14 @@ function MindmapCanvasInner({
                         </span>
                     </div>
                 </div>
-                <MiniMap
-                    nodeColor={(n) => n.data?.color || '#6b7280'}
-                    maskColor="rgba(241, 245, 249, 0.7)"
-                    pannable
-                    zoomable
-                />
+                {showMiniMap && (
+                    <MiniMap
+                        nodeColor={(n) => n.data?.color || '#6b7280'}
+                        maskColor="rgba(241, 245, 249, 0.7)"
+                        pannable
+                        zoomable
+                    />
+                )}
             </ReactFlow>
 
             {/* Double-click overlay zone (only in edit mode) */}

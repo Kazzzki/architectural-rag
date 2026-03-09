@@ -82,10 +82,14 @@ export default function ProjectMapPage() {
     const [pendingConnection, setPendingConnection] = useState<{ source: string, target: string } | null>(null);
     const [undoCount, setUndoCount] = useState(0);
     const [nextActions, setNextActions] = useState<any[]>([]);
-    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'dirty' | 'error'>('idle');
+    const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'node' | 'pane' | 'edge'; targetId?: string } | null>(null);
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
+    const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
     const [forceChatTab, setForceChatTab] = useState<string | null>(null);
+    const [searchResults, setSearchResults] = useState<string[]>([]);
+    const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
 
     // Sidebar state
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -162,11 +166,33 @@ export default function ProjectMapPage() {
     }, [loadProject]);
 
     // Auto-save status display
-    const showSaveStatus = useCallback(() => {
-        setSaveStatus('saving');
-        setTimeout(() => setSaveStatus('saved'), 500);
-        setTimeout(() => setSaveStatus('idle'), 2500);
+    const showSaveStatus = useCallback((isError = false) => {
+        if (isError) {
+            setSaveStatus('error');
+            return;
+        }
+        setSaveStatus('saved');
+        setLastSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        setTimeout(() => setSaveStatus('idle'), 3000);
     }, []);
+
+    const markDirty = useCallback(() => {
+        if (saveStatus !== 'saving') {
+            setSaveStatus('dirty');
+        }
+    }, [saveStatus]);
+
+    // Enhanced beforeunload to warn about unsaved changes
+    useEffect(() => {
+        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+            if (saveStatus === 'dirty' || saveStatus === 'saving') {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [saveStatus]);
 
     // ─────────────────────────────────────────────────────────────
     // Integrated Sidebar Logic
@@ -276,6 +302,29 @@ export default function ProjectMapPage() {
         event.dataTransfer.effectAllowed = 'copy';
     };
 
+    // Keyboard support - Esc to clear selection
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setSelectedNodeId(null);
+                setSelectedNodeIds(new Set());
+                setSelectedEdgeId(null);
+                setContextMenu(null);
+            } else if (e.key === 'Enter' && !e.shiftKey) {
+                // If focus is not in input, we could trigger next search result
+                if (!(document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement)) {
+                    handleSearchNavigation('next');
+                }
+            } else if (e.key === 'Enter' && e.shiftKey) {
+                if (!(document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement)) {
+                    handleSearchNavigation('prev');
+                }
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
+
     const onDropOnCanvas = useCallback(async (event: React.DragEvent) => {
         event.preventDefault();
 
@@ -316,10 +365,54 @@ export default function ProjectMapPage() {
     const clearHighlight = () => {
         setHighlightedNodes(new Set());
         setHighlightedEdges(new Set());
+        setSearchResults([]);
+        setCurrentSearchIndex(0);
+    };
+
+    // New: Handle search navigation
+    const jumpToNode = useCallback((nodeId: string) => {
+        if (!project) return;
+        const node = activeNodes.find(n => n.id === nodeId);
+        if (!node) return;
+
+        // Ensure visible (expand parents)
+        setCollapsedNodeIds(prev => {
+            const next = new Set(prev);
+            let hasChanges = false;
+
+            // For now, let's just make sure this specific node isn't collapsed 
+            // and maybe its immediate parent if we had a more complex hierarchy structure
+            if (next.has(nodeId)) {
+                next.delete(nodeId);
+                hasChanges = true;
+            }
+
+            // In a real tree, we'd recursively expand parents here.
+            // Since this is a mindmap with edges, we might need a BFS/DFS to find parents.
+            // For now, we manually expand the node if it's in collapsed set.
+
+            return hasChanges ? next : prev;
+        });
+
+        setSelectedNodeId(nodeId);
+        // Dispatch to ReactFlow to center
+        // (This would typically be done via a ref to MindmapCanvas or useReactFlow if within the component)
+        // We'll pass a 'focusTrigger' or similar if needed, but for now we'll rely on onNodeSelect
+    }, [activeNodes, project]);
+
+    const handleSearchNavigation = (direction: 'next' | 'prev') => {
+        if (searchResults.length === 0) return;
+        let nextIndex = direction === 'next' ? currentSearchIndex + 1 : currentSearchIndex - 1;
+        if (nextIndex >= searchResults.length) nextIndex = 0;
+        if (nextIndex < 0) nextIndex = searchResults.length - 1;
+
+        setCurrentSearchIndex(nextIndex);
+        jumpToNode(searchResults[nextIndex]);
     };
 
     // Node operations
     const handleStatusChange = async (nodeId: string, newStatus: string) => {
+        markDirty();
         try {
             await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
                 method: 'PUT',
@@ -332,6 +425,7 @@ export default function ProjectMapPage() {
             loadNextActions();
         } catch (err) {
             console.error('Status update error:', err);
+            showSaveStatus(true);
         }
     };
 
@@ -364,9 +458,19 @@ export default function ProjectMapPage() {
         } else {
             setSelectedNodeId(null);
         }
+        if (nodeIds.length > 0) {
+            setSelectedEdgeId(null);
+        }
+    }, []);
+
+    const handleEdgeSelect = useCallback((edgeId: string) => {
+        setSelectedEdgeId(edgeId);
+        setSelectedNodeId(null);
+        setSelectedNodeIds(new Set());
     }, []);
 
     const handleNodeDragStop = async (nodeId: string, x: number, y: number) => {
+        markDirty();
         // Optimistic update
         setProject(prev => {
             if (!prev) return null;
@@ -389,12 +493,14 @@ export default function ProjectMapPage() {
             showSaveStatus();
         } catch (err) {
             console.error('Drag error:', err);
+            showSaveStatus(true);
             // Revert on error (optional, but good practice)
             loadProject(false);
         }
     };
 
     const handleNodeLabelChange = async (nodeId: string, newLabel: string) => {
+        markDirty();
         try {
             await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
                 method: 'PUT',
@@ -551,6 +657,14 @@ export default function ProjectMapPage() {
     };
 
     const handleEdgeClick = (id: string, edge: EdgeData) => {
+        if (!isEditMode) return;
+        // setEdgeToEdit(edge);
+        // setPendingConnection(null);
+        // setShowEdgeDialog(true);
+        handleEdgeSelect(id);
+    };
+
+    const handleEdgeDoubleClick = (id: string, edge: EdgeData) => {
         if (!isEditMode) return;
         setEdgeToEdit(edge);
         setPendingConnection(null);
@@ -1039,14 +1153,23 @@ export default function ProjectMapPage() {
                     <div className="p-4 border-b border-[var(--border)]">
                         <GoalSearchBar
                             nodes={activeNodes}
-                            onSearch={handleGoalSearch}
+                            onSearch={(nodeId) => {
+                                handleGoalSearch(nodeId);
+                                jumpToNode(nodeId);
+                            }}
                             onClear={clearHighlight}
                             highlightedCount={highlightedNodes.size}
                             templateId={project?.template_id || ''}
                             onReverseTreeResult={(nodeIds, edgeIds) => {
                                 setHighlightedNodes(new Set(nodeIds));
                                 setHighlightedEdges(new Set(edgeIds));
+                                setSearchResults(nodeIds);
+                                setCurrentSearchIndex(0);
+                                if (nodeIds.length > 0) jumpToNode(nodeIds[0]);
                             }}
+                            currentResultIndex={currentSearchIndex}
+                            totalResults={searchResults.length}
+                            onNavigateResult={handleSearchNavigation}
                         />
                     </div>
 
@@ -1098,11 +1221,11 @@ export default function ProjectMapPage() {
                             edges={visibleEdges}
                             allEdges={activeEdges}
                             selectedNodeId={selectedNodeId}
-                            selectedNodeIds={selectedNodeIds}
+                            selectedEdgeId={selectedEdgeId}
                             highlightedNodes={highlightedNodes}
                             highlightedEdges={highlightedEdges}
                             onNodeSelect={setSelectedNodeId}
-                            onSelectionChange={(ids) => setSelectedNodeIds(new Set(ids))}
+                            onSelectionChange={handleSelectionChange}
                             categoryColors={CATEGORY_COLORS}
                             isEditMode={isEditMode}
                             onNodeDragStop={handleNodeDragStop}
@@ -1110,8 +1233,9 @@ export default function ProjectMapPage() {
                             onConnectNodes={handleConnectNodes}
                             onEdgeUpdate={handleEdgeUpdate}
                             onEdgeClick={handleEdgeClick}
+                            onEdgeDoubleClick={handleEdgeDoubleClick}
                             onEdgeContextMenu={(e, edge) => {
-                                setContextMenu({ x: e.clientX, y: e.clientY, type: 'node', targetId: edge.id }); // Using 'node' type for simplicity or could add 'edge'
+                                setContextMenu({ x: e.clientX, y: e.clientY, type: 'edge', targetId: edge.id });
                                 setEdgeToEdit(edge);
                             }}
                             onEdgesDelete={handleEdgesDelete}
@@ -1235,7 +1359,14 @@ export default function ProjectMapPage() {
                 />
             )}
 
-            <SaveStatusOverlay status={saveStatus} />
+            <SaveStatusOverlay
+                status={saveStatus}
+                lastSavedAt={lastSavedAt}
+                onRetry={() => {
+                    setSaveStatus('saving');
+                    loadProject(false);
+                }}
+            />
 
             <MobileMindmapControls
                 nodes={activeNodes}

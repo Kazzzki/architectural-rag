@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { Search, X, Target, Loader2 } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { Search, X, Target, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { authFetch } from '@/lib/api';
 
 interface ProcessNode {
     id: string;
@@ -17,12 +18,24 @@ interface Props {
     highlightedCount: number;
     templateId: string;
     onReverseTreeResult: (nodeIds: string[], edgeIds: string[]) => void;
+    currentResultIndex?: number;
+    totalResults?: number;
+    onNavigateResult?: (direction: 'next' | 'prev') => void;
 }
 
-import { authFetch } from '@/lib/api';
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
-export default function GoalSearchBar({ nodes, onSearch, onClear, highlightedCount, templateId, onReverseTreeResult }: Props) {
+export default function GoalSearchBar({
+    nodes,
+    onSearch,
+    onClear,
+    highlightedCount,
+    templateId,
+    onReverseTreeResult,
+    currentResultIndex = 0,
+    totalResults = 0,
+    onNavigateResult
+}: Props) {
     const [query, setQuery] = useState('');
     const [isOpen, setIsOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
@@ -123,13 +136,37 @@ export default function GoalSearchBar({ nodes, onSearch, onClear, highlightedCou
                         ))}
                     </div>
                 )}
-
-                {isLoading && (
-                    <div className="absolute right-10 top-1/2 -translate-y-1/2">
-                        <Loader2 className="w-3.5 h-3.5 text-violet-500 animate-spin" />
-                    </div>
-                )}
             </div>
+
+            {totalResults > 0 && (
+                <div className="flex items-center justify-between px-1 py-1 bg-slate-50 border border-slate-200 rounded-lg">
+                    <div className="text-[10px] text-slate-500 font-medium ml-1">
+                        {currentResultIndex + 1} / {totalResults} 件
+                    </div>
+                    <div className="flex items-center gap-0.5">
+                        <button
+                            onClick={() => onNavigateResult?.('prev')}
+                            className="p-1 hover:bg-white rounded transition-colors text-slate-400 hover:text-slate-600"
+                            title="前へ (Shift+Enter)"
+                        >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                            onClick={() => onNavigateResult?.('next')}
+                            className="p-1 hover:bg-white rounded transition-colors text-slate-400 hover:text-slate-600"
+                            title="次へ (Enter)"
+                        >
+                            <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {isLoading && (
+                <div className="absolute right-10 top-1/2 -translate-y-1/2">
+                    <Loader2 className="w-3.5 h-3.5 text-violet-500 animate-spin" />
+                </div>
+            )}
 
             {error && (
                 <div className="text-[10px] text-red-500 bg-red-50 border border-red-100 rounded px-2 py-1">

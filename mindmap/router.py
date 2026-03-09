@@ -1264,16 +1264,18 @@ async def ai_auto_link_endpoint(req: AutoLinkRequest):
                 from .. import retriever
             
             # Perform search
-            search_results = retriever.search(query, top_k=3)
+            search_data = retriever.search(query, n_results=3)
+            search_hits = search_data.get("hits", [])
             
             # Format results
-            for res in search_results:
+            for hit in search_hits:
+                meta = hit.get("metadata", {})
                 results.append({
-                    "id": res.get("id", "unknown"),
-                    "source": res.get("source", "Unknown Source"),
-                    "content": res.get("content", "")[:200] + "...", # Truncate for preview
-                    "relevance": res.get("distance", 0.0), # or score
-                    "full_content": res.get("content", "")
+                    "id": meta.get("chunk_id", "unknown"),
+                    "source": meta.get("source_pdf_name") or meta.get("filename", "Unknown Source"),
+                    "content": hit.get("document", "")[:200] + "...", # Truncate for preview
+                    "relevance": hit.get("score", 0.0), # or distance
+                    "full_content": hit.get("document", "")
                 })
 
         except ImportError as e:
