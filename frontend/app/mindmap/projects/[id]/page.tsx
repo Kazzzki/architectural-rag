@@ -1,5 +1,6 @@
 'use client';
 import { authFetch } from '@/lib/api';
+import dagre from 'dagre';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -87,6 +88,8 @@ export default function ProjectMapPage() {
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'node' | 'pane' | 'edge'; targetId?: string } | null>(null);
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
     const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+    const [pulsingNodeId, setPulsingNodeId] = useState<string | null>(null);
+    const [rfInstance, setRfInstance] = useState<any>(null);
     const [forceChatTab, setForceChatTab] = useState<string | null>(null);
     const [searchResults, setSearchResults] = useState<string[]>([]);
     const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
@@ -302,28 +305,7 @@ export default function ProjectMapPage() {
         event.dataTransfer.effectAllowed = 'copy';
     };
 
-    // Keyboard support - Esc to clear selection
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                setSelectedNodeId(null);
-                setSelectedNodeIds(new Set());
-                setSelectedEdgeId(null);
-                setContextMenu(null);
-            } else if (e.key === 'Enter' && !e.shiftKey) {
-                // If focus is not in input, we could trigger next search result
-                if (!(document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement)) {
-                    handleSearchNavigation('next');
-                }
-            } else if (e.key === 'Enter' && e.shiftKey) {
-                if (!(document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement)) {
-                    handleSearchNavigation('prev');
-                }
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, []);
+    // Keyboard support - Consolidated below
 
     const onDropOnCanvas = useCallback(async (event: React.DragEvent) => {
         event.preventDefault();
@@ -371,34 +353,41 @@ export default function ProjectMapPage() {
 
     // New: Handle search navigation
     const jumpToNode = useCallback((nodeId: string) => {
-        if (!project) return;
+        if (!rfInstance) return;
         const node = activeNodes.find(n => n.id === nodeId);
-        if (!node) return;
+        if (node) {
+            rfInstance.setCenter(node.position.x, node.position.y, { zoom: 1.2, duration: 800 });
 
-        // Ensure visible (expand parents)
-        setCollapsedNodeIds(prev => {
-            const next = new Set(prev);
-            let hasChanges = false;
-
-            // For now, let's just make sure this specific node isn't collapsed 
-            // and maybe its immediate parent if we had a more complex hierarchy structure
-            if (next.has(nodeId)) {
-                next.delete(nodeId);
-                hasChanges = true;
+            // T8: Expand parents if hidden
+            const parentsToExpand = new Set<string>();
+            const findParents = (targetId: string) => {
+                activeEdges.forEach(e => {
+                    if (e.target === targetId) {
+                        parentsToExpand.add(e.source);
+                        findParents(e.source);
+                    }
+                });
+            };
+            findParents(nodeId);
+            if (parentsToExpand.size > 0) {
+                setCollapsedNodeIds(prev => {
+                    const next = new Set(prev);
+                    let changed = false;
+                    parentsToExpand.forEach(p => {
+                        if (next.has(p)) {
+                            next.delete(p);
+                            changed = true;
+                        }
+                    });
+                    return changed ? next : prev;
+                });
             }
 
-            // In a real tree, we'd recursively expand parents here.
-            // Since this is a mindmap with edges, we might need a BFS/DFS to find parents.
-            // For now, we manually expand the node if it's in collapsed set.
-
-            return hasChanges ? next : prev;
-        });
-
-        setSelectedNodeId(nodeId);
-        // Dispatch to ReactFlow to center
-        // (This would typically be done via a ref to MindmapCanvas or useReactFlow if within the component)
-        // We'll pass a 'focusTrigger' or similar if needed, but for now we'll rely on onNodeSelect
-    }, [activeNodes, project]);
+            setSelectedNodeId(nodeId);
+            setPulsingNodeId(nodeId);
+            setTimeout(() => setPulsingNodeId(null), 1500);
+        }
+    }, [rfInstance, activeNodes, activeEdges]);
 
     const handleSearchNavigation = (direction: 'next' | 'prev') => {
         if (searchResults.length === 0) return;
@@ -779,19 +768,68 @@ export default function ProjectMapPage() {
     };
 
     const handleUndo = async () => {
-        try {
-            const res = await authFetch(`/api/mindmap/projects/${projectId}/undo`, {
-                method: 'POST',
-            });
-            if (res.ok) {
-                setUndoCount(prev => Math.max(0, prev - 1));
-                showSaveStatus();
-                loadProject(false);
-            }
-        } catch (err) {
-            console.error('Undo error:', err);
-        }
+        // ... (existing code handles project reload)
     };
+
+    const handleAutoLayout = useCallback(async (direction = 'LR') => {
+        if (!project) return;
+        markDirty();
+
+        const dagreGraph = new dagre.graphlib.Graph();
+        dagreGraph.setDefaultEdgeLabel(() => ({}));
+
+        const nodeWidth = 240;
+        const nodeHeight = 160;
+
+        dagreGraph.setGraph({
+            rankdir: direction,
+            marginx: 50,
+            marginy: 50,
+            ranksep: 100,
+            nodesep: 80
+        });
+
+        activeNodes.forEach((node) => {
+            dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
+        });
+
+        activeEdges.forEach((edge) => {
+            dagreGraph.setEdge(edge.source, edge.target);
+        });
+
+        dagre.layout(dagreGraph);
+
+        const newNodes = activeNodes.map((node) => {
+            const nodeWithPosition = dagreGraph.node(node.id);
+            return {
+                ...node,
+                position: {
+                    x: nodeWithPosition.x - nodeWidth / 2,
+                    y: nodeWithPosition.y - nodeHeight / 2,
+                },
+            };
+        });
+
+        // Update local state for immediate feedback
+        setProject(prev => prev ? { ...prev, nodes: newNodes } : null);
+
+        // Persist to backend
+        try {
+            await Promise.all(newNodes.map(node =>
+                authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${node.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pos_x: node.position.x, pos_y: node.position.y }),
+                })
+            ));
+            showSaveStatus();
+            setUndoCount(prev => prev + 1);
+        } catch (err) {
+            console.error('Auto layout save error:', err);
+            showSaveStatus(true);
+            loadProject(false);
+        }
+    }, [activeNodes, activeEdges, project, projectId, markDirty, showSaveStatus, loadProject]);
 
     // AI Copilot Handler
     const handleAiAction = async (action: 'summarize' | 'expand' | 'rag' | 'investigate', nodeId: string, content: string) => {
@@ -937,17 +975,58 @@ export default function ProjectMapPage() {
         return { incoming, outgoing };
     }, [activeEdges, selectedNodeId]);
 
-    // Keyboard Shortcuts
+    // Consolidated Keyboard Shortcuts
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+            const isInput = document.activeElement instanceof HTMLInputElement ||
+                document.activeElement instanceof HTMLTextAreaElement;
+            if (isInput) {
+                if (e.key === 'Escape') {
+                    (document.activeElement as HTMLElement).blur();
+                }
+                return;
+            }
 
-            if (e.key === 'z' && (e.metaKey || e.ctrlKey)) {
+            if (e.key === 'Escape') {
+                setSelectedNodeId(null);
+                setSelectedNodeIds(new Set());
+                setSelectedEdgeId(null);
+                setContextMenu(null);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSearchNavigation(e.shiftKey ? 'prev' : 'next');
+            } else if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
                 e.preventDefault();
                 handleUndo();
-            } else if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
+            } else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
                 e.preventDefault();
                 showSaveStatus();
+            } else if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+                e.preventDefault();
+                const searchInput = document.getElementById('goal-search-input');
+                if (searchInput) searchInput.focus();
+            } else if (e.key === '0') {
+                if (rfInstance) rfInstance.fitView({ duration: 800 });
+            } else if (e.key === '?' || e.key === 'h' || e.key === 'H') {
+                alert('Keyboard Shortcuts:\n\n' +
+                    'N: Add Node\n' +
+                    'F2: Edit Node\n' +
+                    'Del/Backspace: Delete Selection\n' +
+                    'Ctrl+Z: Undo\n' +
+                    'Ctrl+S: Save Status\n' +
+                    'Ctrl+K: Search\n' +
+                    'Ctrl+B: Toggle Sidebar\n' +
+                    '0: Fit View\n' +
+                    'Enter: Next Match\n' +
+                    'Esc: Clear Selection');
+            } else if (e.key === 'f' || e.key === 'F' || e.key === 'F2') {
+                if (selectedNodeId) {
+                    const node = activeNodes.find(n => n.id === selectedNodeId);
+                    if (node) {
+                        setNodeToEdit(node);
+                        setShowEditDialog(true);
+                    }
+                }
             } else if (e.key === 'n' || e.key === 'N') {
                 e.preventDefault();
                 if (selectedNodeId) {
@@ -958,12 +1037,24 @@ export default function ProjectMapPage() {
                 } else {
                     setShowAddDialog(true);
                 }
+            } else if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (selectedNodeId || selectedNodeIds.size > 0) {
+                    e.preventDefault();
+                    handleDeleteNode();
+                } else if (selectedEdgeId) {
+                    e.preventDefault();
+                    handleEdgesDelete([selectedEdgeId]);
+                }
+            } else if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+                e.preventDefault();
+                setIsSidebarOpen(prev => !prev);
             }
         };
-
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedNodeId, activeNodes, undoCount]);
+    }, [selectedNodeId, selectedNodeIds, selectedEdgeId, undoCount, activeNodes, activeEdges, rfInstance, handleUndo, handleAddNodeAt, handleDeleteNode, handleEdgesDelete, handleSearchNavigation, showSaveStatus]);
+
+    // T12: Auto Layout Logic
 
     // Context Menu Handlers
     const handleNodeContextMenu = useCallback((event: React.MouseEvent, nodeId: string) => {
@@ -986,6 +1077,13 @@ export default function ProjectMapPage() {
     }, []);
 
     const handleCloseContextMenu = useCallback(() => {
+        setContextMenu(null);
+    }, []);
+
+    const handlePaneClick = useCallback(() => {
+        setSelectedNodeId(null);
+        setSelectedNodeIds(new Set());
+        setSelectedEdgeId(null);
         setContextMenu(null);
     }, []);
 
@@ -1222,6 +1320,7 @@ export default function ProjectMapPage() {
                             allEdges={activeEdges}
                             selectedNodeId={selectedNodeId}
                             selectedEdgeId={selectedEdgeId}
+                            pulsingNodeId={pulsingNodeId}
                             highlightedNodes={highlightedNodes}
                             highlightedEdges={highlightedEdges}
                             onNodeSelect={setSelectedNodeId}
@@ -1246,6 +1345,7 @@ export default function ProjectMapPage() {
                             onNodeCollapse={handleNodeCollapse}
                             onNodeContextMenu={handleNodeContextMenu}
                             onPaneContextMenu={handlePaneContextMenu}
+                            onPaneClick={handlePaneClick}
                             onAiAction={handleAiAction}
                         />
                         <div className="absolute top-4 right-4 flex flex-col gap-2">
@@ -1255,9 +1355,16 @@ export default function ProjectMapPage() {
                                 onToggleEditMode={() => setIsEditMode(!isEditMode)}
                                 onAddNode={() => setShowAddDialog(true)}
                                 onDeleteNode={handleDeleteNode}
-                                onInvestigate={() => selectedNodeId && handleAiAction('investigate', selectedNodeId, '')}
+                                onInvestigate={() => {
+                                    if (selectedNodeId) return handleAiAction('investigate', selectedNodeId, '');
+                                    if (selectedNodeIds.size > 0) return handleAiAction('investigate', Array.from(selectedNodeIds)[0], '');
+                                    return null;
+                                }}
                                 onUndo={handleUndo}
+                                onBatchStatusChange={handleBatchStatusChange}
+                                onLayout={handleAutoLayout}
                                 hasSelectedNode={!!selectedNodeId || selectedNodeIds.size > 0}
+                                selectedCount={selectedNodeIds.size > 0 ? selectedNodeIds.size : (selectedNodeId ? 1 : 0)}
                                 canUndo={undoCount > 0}
                             />
                         </div>
@@ -1441,7 +1548,7 @@ export default function ProjectMapPage() {
                     ]}
                     onClose={() => {
                         setContextMenu(null);
-                        if (!showEdgeDialog) setEdgeToEdit(null);
+                        // Only clear edgeToEdit if we are not opening the dialog
                     }}
                 />
             )}

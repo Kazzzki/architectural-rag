@@ -1,6 +1,6 @@
 'use client';
 
-import { Plus, Trash2, Undo2, Edit3, Eye, Search, CheckCircle2, Circle } from 'lucide-react';
+import { Plus, Trash2, Undo2, Edit3, Eye, Search, CheckCircle2, Circle, Layout } from 'lucide-react';
 
 interface Props {
     isEditMode: boolean;
@@ -11,6 +11,7 @@ interface Props {
     onUndo: () => void;
     onInvestigate: () => void;
     onBatchStatusChange: (status: string) => void;
+    onLayout?: (direction: string) => void;
     hasSelectedNode: boolean;
     selectedCount: number;
     canUndo: boolean;
@@ -25,6 +26,7 @@ export default function EditToolbar({
     onUndo,
     onInvestigate,
     onBatchStatusChange,
+    onLayout,
     hasSelectedNode,
     selectedCount,
     canUndo,
@@ -116,6 +118,27 @@ export default function EditToolbar({
                         >
                             <Trash2 className="w-3.5 h-3.5" />
                             <span className="hidden lg:inline">{selectedCount > 1 ? '一括削除' : '削除'}</span>
+                        </button>
+                    </div>
+
+                    <div className="w-px h-6 bg-slate-200 mx-1" />
+
+                    <div className="flex items-center gap-1">
+                        <button
+                            onClick={(e) => { e.stopPropagation(); onLayout?.('LR'); }}
+                            className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[10px] hover:bg-slate-100 text-slate-500 transition-colors font-bold"
+                            title="横方向に整列"
+                        >
+                            <Layout className="w-3.5 h-3.5 rotate-[-90deg]" />
+                            <span className="hidden xl:inline">整列 (横)</span>
+                        </button>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); onLayout?.('TB'); }}
+                            className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[10px] hover:bg-slate-100 text-slate-500 transition-colors font-bold"
+                            title="縦方向に整列"
+                        >
+                            <Layout className="w-3.5 h-3.5" />
+                            <span className="hidden xl:inline">整列 (縦)</span>
                         </button>
                     </div>
 

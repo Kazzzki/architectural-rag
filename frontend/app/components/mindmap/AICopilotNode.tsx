@@ -22,6 +22,7 @@ interface CustomNodeData {
     onContextMenu?: (e: React.MouseEvent) => void;
     // AI Action handlers
     onAiAction?: (action: 'summarize' | 'expand' | 'rag', nodeId: string, label: string) => void;
+    isPulsing?: boolean;
 }
 
 const STATUS_CONFIG: Record<string, { icon: React.ReactNode; bg: string; text: string }> = {
@@ -112,6 +113,7 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
                         ? 'opacity-20 scale-95'
                         : 'hover:shadow-md'
                     }
+                    ${data.isPulsing ? 'animate-pulse ring-4 ring-violet-400 ring-offset-4 ring-offset-[var(--canvas-bg)]' : ''}
                 `}
                 style={{
                     boxShadow: data.isDimmed

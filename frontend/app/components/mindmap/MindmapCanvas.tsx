@@ -50,6 +50,7 @@ interface Props {
     selectedNodeId: string | null;
     selectedNodeIds?: Set<string>;
     selectedEdgeId?: string | null;
+    pulsingNodeId?: string | null;
     highlightedNodes: Set<string>;
     highlightedEdges: Set<string>;
     onNodeSelect: (id: string) => void;
@@ -71,7 +72,9 @@ interface Props {
     onNodeCollapse?: (nodeId: string) => void;
     onNodeContextMenu?: (event: React.MouseEvent, nodeId: string) => void;
     onPaneContextMenu?: (event: React.MouseEvent) => void;
+    onPaneClick?: () => void;
     onAiAction?: (action: 'summarize' | 'expand' | 'rag', nodeId: string, label: string) => void;
+    onInit?: (instance: any) => void;
     allEdges?: EdgeData[];
 }
 
@@ -86,6 +89,7 @@ function MindmapCanvasInner({
     selectedNodeId,
     selectedNodeIds = EMPTY_SET,
     selectedEdgeId = null,
+    pulsingNodeId = null,
     highlightedNodes,
     highlightedEdges,
     onNodeSelect,
@@ -106,8 +110,10 @@ function MindmapCanvasInner({
     onEdgeClick,
     onEdgeContextMenu,
     onPaneContextMenu,
+    onPaneClick,
     onAiAction,
     onEdgeDoubleClick,
+    onInit,
 }: Props) {
     const hasHighlight = highlightedNodes.size > 0;
     const { screenToFlowPosition } = useReactFlow();
@@ -177,12 +183,23 @@ function MindmapCanvasInner({
         };
     }, [inlineInput, cancelInlineInput]);
 
-    // Focus inline input when shown
     useEffect(() => {
         if (inlineInput && inlineRef.current) {
             inlineRef.current.focus();
         }
     }, [inlineInput]);
+
+    const { fitView } = useReactFlow();
+    const [initialFitDone, setInitialFitDone] = useState(false);
+
+    useEffect(() => {
+        if (!initialFitDone && processNodes.length > 0) {
+            setTimeout(() => {
+                fitView({ duration: 800, padding: 0.2 });
+                setInitialFitDone(true);
+            }, 500);
+        }
+    }, [processNodes.length, initialFitDone, fitView]);
 
     // Build set of node IDs that have children (for collapse button visibility)
     const nodeIdsWithChildren = useMemo(() => {
@@ -222,7 +239,6 @@ function MindmapCanvasInner({
     const rfNodes: Node[] = useMemo(() => {
         return processNodes.map(pn => ({
             id: pn.id,
-            // Use 'aiCopilot' type to enable AI features, or fallback to 'custom'
             type: 'aiCopilot',
             position: pn.position,
             selected: pn.id === selectedNodeId,
@@ -247,10 +263,11 @@ function MindmapCanvasInner({
                     onNodeContextMenu(e, pn.id);
                 } : undefined,
                 onAiAction: onAiAction,
+                isPulsing: pn.id === pulsingNodeId,
             },
         }));
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [nodeFingerprint, selectedNodeId, highlightedNodes, hasHighlight, categoryColors, collapsedNodeIds, descendantCounts, nodeIdsWithChildren, isEditMode, onNodeLabelChange, onNodeCollapse, onNodeContextMenu, onAiAction]);
+    }, [nodeFingerprint, selectedNodeId, highlightedNodes, hasHighlight, categoryColors, collapsedNodeIds, descendantCounts, nodeIdsWithChildren, isEditMode, onNodeLabelChange, onNodeCollapse, onNodeContextMenu, onAiAction, pulsingNodeId]);
 
     // Convert to React Flow edges
     const rfEdges: RFEdge[] = useMemo(() => {
@@ -293,7 +310,8 @@ function MindmapCanvasInner({
                 labelBgBorderRadius: 4,
             };
         });
-    }, [processEdges, highlightedEdges, hasHighlight]);
+    }, [processEdges, highlightedEdges, hasHighlight, selectedEdgeId]);
+
 
     const [nodes, setNodes, onNodesChange] = useNodesState(rfNodes);
     const [edges, setEdges, onEdgesChange] = useEdgesState(rfEdges);
@@ -453,6 +471,7 @@ function MindmapCanvasInner({
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
+                onInit={onInit}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={onNodeClick}
@@ -500,7 +519,10 @@ function MindmapCanvasInner({
                     const edgeData = processEdges.find(e => e.id === edge.id);
                     if (edgeData) onEdgeContextMenu(event, edgeData);
                 } : undefined}
-                onPaneClick={() => setInlineInput(null)}
+                onPaneClick={() => {
+                    setInlineInput(null);
+                    if (onPaneClick) onPaneClick();
+                }}
                 isValidConnection={isValidConnection}
                 onSelectionChange={handleSelectionChange}
                 nodeTypes={nodeTypes}
@@ -509,7 +531,7 @@ function MindmapCanvasInner({
                 maxZoom={2}
                 nodesDraggable={true}
                 nodesConnectable={isEditMode}
-                selectionOnDrag={false}
+                selectionOnDrag={true}
                 selectionMode={SelectionMode.Partial}
                 panOnDrag={true}
                 panOnScroll={true}
