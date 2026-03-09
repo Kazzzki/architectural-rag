@@ -85,13 +85,15 @@ class IngestionOrchestrator:
                 # => Next: Indexing
                 # Bug fix: filepath を final_pdf_path (移動後パス) ではなく
                 # original_filepath (元パス) を渡すことで DB 更新が正常に機能する
+                # source_pdf_hash も引き回して chunk のメタデータを正確にする
                 self.dispatch_next_stage(
                     version_id, 
                     "enrichment_completed", 
                     original_filepath=original_filepath,
                     filepath=final_pdf_path,
                     final_md_path=final_md_path,
-                    output_blocks_path=output_blocks_path
+                    output_blocks_path=output_blocks_path,
+                    source_pdf_hash=source_pdf_hash,
                 )
                 
             elif current_stage == "enrichment_completed":
@@ -117,8 +119,39 @@ class IngestionOrchestrator:
                         import json
                         with open(output_blocks_path, 'r', encoding='utf-8') as bj:
                             ocr_results = json.load(bj)
-                    
-                    chunks = builder.build(version_id, markdown_text, ocr_results)
+
+                    # source_metadata を構築
+                    # Bug fix: build() の引数順序は (md_text, ocr_results, source_metadata)
+                    # 以前は (version_id, markdown_text, ocr_results) と間違えていたため
+                    # version_id が md_text として渡され、全チャンクに source_pdf_hash 等が欠落していた
+                    from config import KNOWLEDGE_BASE_DIR
+                    _rel_path = ""
+                    try:
+                        _rel_path = str(Path(final_md_path).relative_to(Path(KNOWLEDGE_BASE_DIR)))
+                    except ValueError:
+                        _rel_path = Path(final_md_path).name
+
+                    # LegacyDocument から source_pdf_hash と source_pdf_name を取得
+                    _source_pdf_hash = kwargs.get("source_pdf_hash", "")
+                    _source_pdf_name = Path(original_filepath).name if original_filepath else ""
+                    # Frontmatter から補完を試みる
+                    try:
+                        from indexer import parse_frontmatter
+                        fm = parse_frontmatter(final_md_path)
+                        _source_pdf_hash = _source_pdf_hash or fm.get("source_pdf", "")
+                        _source_pdf_name = fm.get("pdf_filename") or fm.get("source_pdf_name") or _source_pdf_name
+                    except Exception:
+                        pass
+
+                    source_metadata = {
+                        "version_id":       version_id,
+                        "source_pdf_hash":  _source_pdf_hash,
+                        "source_pdf_name":  _source_pdf_name,
+                        "rel_path":         _rel_path,
+                        "filename":         Path(final_md_path).name,
+                    }
+
+                    chunks = builder.build(markdown_text, ocr_results, source_metadata)
                     
                     # 2. Dense Indexing (ChromaDB)
                     from dense_indexer import DenseIndexer

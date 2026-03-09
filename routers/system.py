@@ -147,36 +147,70 @@ def get_stats():
 
 @router.get("/api/ocr/status")
 def get_ocr_status():
-    """OCR処理中・最近処理したファイルのステータスを返す"""
+    """OCR処理中・最近処理したファイルのステータスを返す。
+    
+    UI 改善: LegacyDocument の status に加えて DocumentVersion.ingest_status も参照し、
+    パイプライン全ステージ（OCR→分類→Drive同期→インデックス→完了）の状態を返す。
+    """
     try:
-        from database import get_session, LegacyDocument
+        from database import get_session, LegacyDocument, DocumentVersion
+        from sqlalchemy import or_
         session = get_session()
         try:
             from datetime import datetime, timedelta
-            # Bug fix: failed/completed どちらにも30分cutoffを適用。
-            # 修正前は failed が cutoff なしで永続的に返り続け、
-            # フロントエンドにエラーポップアップが消えない問題が発生していた。
             recent_cutoff = datetime.now() - timedelta(minutes=30)
+
+            # アクティブなステータス（時間制限なし）
+            ACTIVE_STATUSES = [
+                "processing", "ocr_completed",
+                "uploading_to_drive", "drive_synced",
+                "enriched", "indexing",
+                "enrichment_failed",   # エラー系もアクティブ扱い
+            ]
+
             docs = session.query(LegacyDocument).filter(
-                (LegacyDocument.status == "processing") |
-                ((LegacyDocument.status == "failed")    & (LegacyDocument.updated_at >= recent_cutoff)) |
-                ((LegacyDocument.status == "completed") & (LegacyDocument.updated_at >= recent_cutoff))
+                or_(
+                    LegacyDocument.status.in_(ACTIVE_STATUSES),
+                    # failed/completed は30分以内のみ
+                    (LegacyDocument.status == "failed")    & (LegacyDocument.updated_at >= recent_cutoff),
+                    (LegacyDocument.status == "completed") & (LegacyDocument.updated_at >= recent_cutoff),
+                )
             ).order_by(LegacyDocument.updated_at.desc()).limit(20).all()
-            
+
             jobs = []
             for doc in docs:
+                # DocumentVersion から詳細ステージを補完
+                ingest_status = doc.status
+                error_message = doc.error_message
+                if doc.source_pdf_hash:
+                    dv = session.query(DocumentVersion).filter(
+                        DocumentVersion.version_hash == doc.source_pdf_hash
+                    ).first()
+                    if dv:
+                        # ingest_status が LegacyDocument より詳細な場合は優先
+                        if dv.ingest_status not in (None, "accepted", "searchable"):
+                            ingest_status = dv.ingest_status
+                        if dv.error_message and not error_message:
+                            error_message = dv.error_message
+
                 jobs.append({
-                    "file_path": doc.file_path,
-                    "filename": doc.filename,
-                    "status": doc.status,
-                    "processed_pages": doc.processed_pages or 0,
-                    "total_pages": doc.total_pages or 1,
-                    "error_message": doc.error_message,
-                    "estimated_remaining": doc.estimated_remaining,
-                    "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
+                    "file_path":          doc.file_path,
+                    "filename":           doc.filename,
+                    "status":             ingest_status,
+                    "processed_pages":    doc.processed_pages or 0,
+                    "total_pages":        doc.total_pages or 1,
+                    "error_message":      error_message,
+                    "estimated_remaining":doc.estimated_remaining,
+                    "updated_at":         doc.updated_at.isoformat() if doc.updated_at else None,
                 })
-            
-            processing_count = sum(1 for j in jobs if j["status"] == "processing")
+
+            # processing_count = アクティブ（完了・エラー以外）の数
+            active_statuses_set = set(ACTIVE_STATUSES) | {"processing"}
+            processing_count = sum(
+                1 for j in jobs
+                if j["status"] in active_statuses_set
+                and j["status"] not in ("enrichment_failed", "failed")
+            )
             return {
                 "processing_count": processing_count,
                 "jobs": jobs
