@@ -127,12 +127,23 @@ async def lifespan(app: FastAPI):
         # jobs テーブル
         session.execute(text("UPDATE jobs SET status = 'failed', error_message = 'Server restarted' WHERE status = 'running'"))
         
-        # LegacyDocument (旧モデル)
-        session.execute(text("UPDATE legacy_documents SET status = 'failed', error_message = 'Server restarted during processing' WHERE status = 'processing'"))
+        # LegacyDocument (旧モデル) — 処理中扱いの全ステータスをリセット
+        # 'processing' だけでなく 'indexing', 'ocr_completed', 'enriched', 'uploading_to_drive' も
+        # サーバー再起動時にはスタックしているので failed にリセットする
+        session.execute(text(
+            "UPDATE legacy_documents "
+            "SET status = 'failed', error_message = 'Server restarted during processing' "
+            "WHERE status IN ('processing', 'indexing', 'ocr_completed', 'enriched', "
+            "                 'uploading_to_drive', 'drive_synced')"
+        ))
         
-        # DocumentVersion (新モデル)
-        # indexing や ocr_processing をリセット
-        session.execute(text("UPDATE document_versions SET ingest_status = 'failed', error_message = 'Server restarted during indexing' WHERE ingest_status IN ('ocr_processing', 'indexing')"))
+        # DocumentVersion (新モデル) — 同様に中間ステータスをリセット
+        session.execute(text(
+            "UPDATE document_versions "
+            "SET ingest_status = 'failed', error_message = 'Server restarted during processing' "
+            "WHERE ingest_status IN ('accepted', 'ocr_processing', 'indexing', "
+            "                        'ocr_completed', 'enriched', 'uploading_to_drive', 'drive_synced')"
+        ))
         
         session.commit()
     except Exception as e:
