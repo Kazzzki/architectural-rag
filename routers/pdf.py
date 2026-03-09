@@ -182,10 +182,30 @@ async def get_pdf(file_id: str):
             legacy_doc_path = Path(legacy_doc.file_path)
             if legacy_doc_path.exists():
                 return FileResponse(legacy_doc_path, media_type="application/pdf")
+            # ファイルパスが存在しない場合、元ファイル名で input/ を探す
+            if legacy_doc.filename:
+                from config import BASE_DIR
+                input_path = Path(BASE_DIR) / "input" / legacy_doc.filename
+                if input_path.exists():
+                    logger.info(f"Found PDF in input dir: {input_path}")
+                    return FileResponse(input_path, media_type="application/pdf")
 
-        # ── 解決策4: file_id がそのままパスの一部になっているケース ─────────
+        # ── 解決策4: input/ ディレクトリを検索（アップロード直後でパイプライン未完了の場合）─
+        from config import KNOWLEDGE_BASE_DIR, BASE_DIR
+        input_dir = Path(BASE_DIR) / "input"
+        if input_dir.exists():
+            # hash prefix で一致するファイルを探す (sha256[:16] 等の部分一致)
+            for pdf_file in input_dir.glob("*.pdf"):
+                import hashlib
+                try:
+                    h = hashlib.sha256(pdf_file.read_bytes()).hexdigest()
+                    if h == file_id or h.startswith(file_id) or file_id.startswith(h[:16]):
+                        return FileResponse(pdf_file, media_type="application/pdf")
+                except Exception:
+                    pass
+
+        # ── 解決策5: file_id がそのままパスの一部になっているケース ─────────
         # (旧indexer が source_pdf_hash = sha256[:16] で登録したファイル)
-        from config import KNOWLEDGE_BASE_DIR
         for search_dir in [Path(PDF_STORAGE_DIR), Path(KNOWLEDGE_BASE_DIR)]:
             for pdf_file in search_dir.rglob(f"*{file_id}*.pdf"):
                 if pdf_file.exists():

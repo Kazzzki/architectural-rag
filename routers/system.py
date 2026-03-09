@@ -158,22 +158,28 @@ def get_ocr_status():
         session = get_session()
         try:
             from datetime import datetime, timedelta
-            recent_cutoff = datetime.now() - timedelta(minutes=30)
+            now = datetime.now()
+            recent_cutoff    = now - timedelta(minutes=30)
+            stale_cutoff     = now - timedelta(hours=2)   # スタック検出用: 2時間動きがなければ表示しない
 
-            # アクティブなステータス（時間制限なし）
-            ACTIVE_STATUSES = [
-                "processing", "ocr_completed",
-                "uploading_to_drive", "drive_synced",
-                "enriched", "indexing",
-                "enrichment_failed",   # エラー系もアクティブ扱い
-            ]
+            # 本当に「進行中」のステータス（時間制限なし）
+            TRULY_ACTIVE_STATUSES = ["processing", "indexing", "uploading_to_drive"]
+
+            # 中間ステータス: 2時間以内なら表示（それ以降はスタックと判断して非表示）
+            INTERMEDIATE_STATUSES = ["ocr_completed", "drive_synced", "enriched"]
+
+            # エラー系: 30分以内のみ表示
+            ERROR_STATUSES = ["failed", "enrichment_failed"]
 
             docs = session.query(LegacyDocument).filter(
                 or_(
-                    LegacyDocument.status.in_(ACTIVE_STATUSES),
-                    # failed/completed は30分以内のみ
-                    (LegacyDocument.status == "failed")    & (LegacyDocument.updated_at >= recent_cutoff),
-                    (LegacyDocument.status == "completed") & (LegacyDocument.updated_at >= recent_cutoff),
+                    # 本当に処理中のステータスは時間制限なし
+                    LegacyDocument.status.in_(TRULY_ACTIVE_STATUSES),
+                    # 中間ステータスは2時間以内のみ（スタック防止）
+                    (LegacyDocument.status.in_(INTERMEDIATE_STATUSES)) & (LegacyDocument.updated_at >= stale_cutoff),
+                    # failed/enrichment_failed/completed は30分以内のみ
+                    (LegacyDocument.status.in_(ERROR_STATUSES))         & (LegacyDocument.updated_at >= recent_cutoff),
+                    (LegacyDocument.status == "completed")              & (LegacyDocument.updated_at >= recent_cutoff),
                 )
             ).order_by(LegacyDocument.updated_at.desc()).limit(20).all()
 
@@ -204,12 +210,11 @@ def get_ocr_status():
                     "updated_at":         doc.updated_at.isoformat() if doc.updated_at else None,
                 })
 
-            # processing_count = アクティブ（完了・エラー以外）の数
-            active_statuses_set = set(ACTIVE_STATUSES) | {"processing"}
+            # processing_count = 本当に処理中（完了・エラー・スタック以外）の数
+            active_statuses_set = set(TRULY_ACTIVE_STATUSES)
             processing_count = sum(
                 1 for j in jobs
                 if j["status"] in active_statuses_set
-                and j["status"] not in ("enrichment_failed", "failed")
             )
             return {
                 "processing_count": processing_count,

@@ -68,9 +68,20 @@ export default function PDFViewer({ url, initialPage = 1, onClose }: PDFViewerPr
     }
 
     function onDocumentLoadError(error: Error) {
-        console.error('Error loading PDF:', error);
+        console.error('Error loading PDF:', error, 'URL:', url);
         setIsLoading(false);
-        setLoadError(error.message || 'PDFの読み込みに失敗しました');
+        // react-pdf の生エラーは難解なので日本語メッセージに変換
+        let msg = error.message || 'PDFの読み込みに失敗しました';
+        if (msg.includes('404') || msg.includes('Not Found')) {
+            msg = 'PDFファイルが見つかりません (404)。ファイルが処理中か、パスが変更された可能性があります。';
+        } else if (msg.includes('401') || msg.includes('403') || msg.includes('Unauthorized') || msg.includes('Forbidden')) {
+            msg = '認証エラー。ページを再読み込みしてください (401/403)。';
+        } else if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network')) {
+            msg = 'ネットワークエラー。バックエンドサーバーが起動しているか確認してください。';
+        } else if (msg.includes('Invalid PDF') || msg.includes('MissingPDFException')) {
+            msg = '無効なPDFファイルです。OCR処理が完了していない可能性があります。';
+        }
+        setLoadError(msg);
     }
 
     function changePage(offset: number) {
@@ -165,15 +176,26 @@ export default function PDFViewer({ url, initialPage = 1, onClose }: PDFViewerPr
                     <div className="flex flex-col items-center justify-center gap-3 text-center p-8">
                         <AlertCircle className="w-10 h-10 text-red-400" />
                         <p className="text-sm text-gray-600 font-medium">PDFを読み込めませんでした</p>
-                        <p className="text-xs text-gray-400 break-all max-w-xs">{loadError}</p>
-                        <a
-                            href={url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs text-blue-500 underline hover:text-blue-600"
-                        >
-                            別タブで直接開く
-                        </a>
+                        <p className="text-xs text-gray-500 break-all max-w-xs">{loadError}</p>
+                        <div className="flex flex-col gap-2 items-center mt-1">
+                            <button
+                                onClick={() => {
+                                    setLoadError(null);
+                                    setIsLoading(true);
+                                }}
+                                className="text-xs bg-blue-500 text-white px-3 py-1.5 rounded hover:bg-blue-600 transition-colors"
+                            >
+                                再試行
+                            </button>
+                            <a
+                                href={url ?? '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-blue-500 underline hover:text-blue-600"
+                            >
+                                別タブで直接開く
+                            </a>
+                        </div>
                     </div>
                 ) : (
                     <div className="relative shadow-lg">

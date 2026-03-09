@@ -143,13 +143,23 @@ def list_files():
 async def view_file(file_path: str):
     """ファイルを閲覧・ダウンロード"""
     try:
-        from config import KNOWLEDGE_BASE_DIR
-        target_path = Path(KNOWLEDGE_BASE_DIR) / file_path
-        if not target_path.resolve().is_relative_to(Path(KNOWLEDGE_BASE_DIR).resolve()):
+        from config import KNOWLEDGE_BASE_DIR, BASE_DIR
+        kb_root = Path(KNOWLEDGE_BASE_DIR).resolve()
+        target_path = (kb_root / file_path).resolve()
+        
+        # パストラバーサル防止: KNOWLEDGE_BASE_DIR 配下か検証
+        try:
+            target_path.relative_to(kb_root)
+        except ValueError:
             raise HTTPException(status_code=403, detail="Access denied")
            
+        # KNOWLEDGE_BASE_DIR にない場合は input/ ディレクトリにフォールバック
         if not target_path.exists():
-            raise HTTPException(status_code=404, detail="File not found")
+            input_path = (Path(BASE_DIR) / "input" / file_path).resolve()
+            if input_path.exists():
+                target_path = input_path
+            else:
+                raise HTTPException(status_code=404, detail="File not found")
             
         headers = {}
         if target_path.suffix.lower() == ".pdf":
