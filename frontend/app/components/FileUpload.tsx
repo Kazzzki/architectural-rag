@@ -212,13 +212,27 @@ const FileUpload = () => {
             }
 
             const data = await res.json();
-            setUploadStatus('success');
             const totalUploaded = data.uploaded?.length || 0;
             const totalErrors = data.errors?.length || 0;
-            setUploadMsg(
-                `${totalUploaded}件アップロード完了。OCR処理を開始しました。` +
-                (totalErrors > 0 ? ` (${totalErrors}件失敗)` : '')
-            );
+
+            if (totalErrors > 0 && totalUploaded === 0) {
+                // 全件失敗
+                setUploadStatus('error');
+                const errDetails = (data.errors as { filename: string; error: string }[])
+                    .map((e) => `・${e.filename}: ${e.error}`)
+                    .join('\n');
+                setUploadMsg(`アップロード失敗 (${totalErrors}件)\n${errDetails}`);
+            } else {
+                setUploadStatus('success');
+                let msg = `${totalUploaded}件アップロード完了。OCR処理を開始しました。`;
+                if (totalErrors > 0) {
+                    const errDetails = (data.errors as { filename: string; error: string }[])
+                        .map((e) => `・${e.filename}: ${e.error}`)
+                        .join('\n');
+                    msg += `\n\n失敗 ${totalErrors}件:\n${errDetails}`;
+                }
+                setUploadMsg(msg);
+            }
 
             // すぐにジョブ一覧を更新してポーリング開始
             setTimeout(fetchOcrStatus, 1500);
@@ -288,7 +302,7 @@ const FileUpload = () => {
 
             {/* アップロード結果メッセージ */}
             {uploadMsg && (
-                <div className={`mt-2 px-3 py-2 rounded text-xs ${
+                <div className={`mt-2 px-3 py-2 rounded text-xs whitespace-pre-wrap break-all ${
                     uploadStatus === 'success'  ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
                     uploadStatus === 'error'    ? 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
                                                   'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'

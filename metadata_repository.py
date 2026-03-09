@@ -26,12 +26,17 @@ class MetadataRepository:
         source_kind: str = "pdf"
     ) -> Dict[str, str]:
         """
-        初回アップロード時にレコードを生成し、version_id と 旧ID (legacy_id) を返す。
+        アップロード時にレコードを生成/更新し、version_id と 旧ID (legacy_id) を返す。
+        同一ハッシュ（同一ファイル）の再アップロードや同一パスへの上書きに対応するため
+        INSERT ではなく upsert（既存なら更新）を使用する。
         """
         session = get_session()
         try:
-            # --- 1. 旧モデル (LegacyDocument) の更新/作成 ---
-            doc_legacy = session.query(LegacyDocument).filter(LegacyDocument.file_path == file_path).first()
+            # --- 1. 旧モデル (LegacyDocument) の upsert ---
+            # file_path が同じ既存レコードを探す
+            doc_legacy = session.query(LegacyDocument).filter(
+                LegacyDocument.file_path == file_path
+            ).first()
             if not doc_legacy:
                 doc_legacy = LegacyDocument(
                     filename=filename,
@@ -39,24 +44,25 @@ class MetadataRepository:
                     source_pdf_hash=source_pdf_hash,
                     file_size=file_size,
                     file_type=filename.split('.')[-1].lower() if '.' in filename else '',
-                    status="accepted",  # ingested -> processing の前段階
+                    status="accepted",
                     created_at=datetime.now(),
                     updated_at=datetime.now()
                 )
                 session.add(doc_legacy)
             else:
+                doc_legacy.filename = filename
                 doc_legacy.source_pdf_hash = source_pdf_hash
                 doc_legacy.file_size = file_size
                 doc_legacy.status = "accepted"
+                doc_legacy.error_message = None
                 doc_legacy.updated_at = datetime.now()
             
-            session.flush() # ID取得のためflush
-            
-            # --- 2. 新モデル (Documents, DocumentVersions, Uploads) の更新/作成 ---
-            # titleはファイル名から拡張子を除いたものとする
+            session.flush()  # ID取得のためflush
+
+            # --- 2. 新モデル (Document, DocumentVersion, Upload) の upsert ---
             base_title = filename.rsplit('.', 1)[0]
-            
-            # ハッシュで既存のDocumentを探す（簡易的Dedupe）
+
+            # Document: タイトルで既存を探す（なければ作成）
             doc_new = session.query(Document).filter(Document.title == base_title).first()
             if not doc_new:
                 doc_new = Document(
@@ -66,20 +72,31 @@ class MetadataRepository:
                 )
                 session.add(doc_new)
                 session.flush()
-                
-            # DocumentVersionを作る
-            doc_version = DocumentVersion(
-                document_id=doc_new.id,
-                version_hash=source_pdf_hash,
-                ingest_status="accepted",
-                searchable=False,
-                created_at=datetime.now(),
-                updated_at=datetime.now()
-            )
-            session.add(doc_version)
+
+            # DocumentVersion: version_hash (= sha256) が UNIQUE なので
+            # 同じハッシュが既存なら更新、なければ作成する
+            doc_version = session.query(DocumentVersion).filter(
+                DocumentVersion.version_hash == source_pdf_hash
+            ).first()
+            if doc_version:
+                # 再アップロード: ステータスをリセットして再処理
+                doc_version.ingest_status = "accepted"
+                doc_version.searchable = False
+                doc_version.error_message = None
+                doc_version.updated_at = datetime.now()
+            else:
+                doc_version = DocumentVersion(
+                    document_id=doc_new.id,
+                    version_hash=source_pdf_hash,
+                    ingest_status="accepted",
+                    searchable=False,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                )
+                session.add(doc_version)
             session.flush()
-            
-            # Uploadを作る
+
+            # Upload: 同一 version_id の upload が既存でも重複追加する（アップロード履歴として残す）
             upload = Upload(
                 version_id=doc_version.id,
                 original_filename=filename,
@@ -89,7 +106,7 @@ class MetadataRepository:
                 created_at=datetime.now()
             )
             session.add(upload)
-            
+
             session.commit()
             return {
                 "version_id": doc_version.id,
@@ -99,7 +116,7 @@ class MetadataRepository:
             }
         except Exception as e:
             session.rollback()
-            logger.error(f"Failed to create document version: {e}")
+            logger.error(f"Failed to create document version: {e}", exc_info=True)
             raise e
         finally:
             session.close()
