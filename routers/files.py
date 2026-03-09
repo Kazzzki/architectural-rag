@@ -391,11 +391,11 @@ def get_file_info(file_id: str):
 @router.get("/api/ocr/jobs")
 def get_ocr_job_by_path(file_path: str):
     """
-    file_path（knowledge_base からの相対パス）で OCR 進捗を1件取得する。
-    
+    file_path（絶対パスまたは knowledge_base からの相対パス）で OCR 進捗を1件取得する。
+
     使用例:
       GET /api/ocr/jobs?file_path=uploads/sample.pdf
-    
+
     レスポンス:
       {
         "file_path": "uploads/sample.pdf",
@@ -407,14 +407,19 @@ def get_ocr_job_by_path(file_path: str):
         "duration": null,                # 完了時のみ設定（秒）
         "error_message": null            # failed 時のみ設定
       }
+
+    Bug fix: Document テーブルには file_path / filename / status / processed_pages 等の
+    カラムが存在しない（それらは LegacyDocument テーブルのカラム）。
+    正しく LegacyDocument を参照するよう修正。
     """
     try:
-        from database import get_session, Document
+        # Bug fix: Document ではなく LegacyDocument を使う
+        from database import get_session, LegacyDocument
 
         session = get_session()
         try:
-            doc = session.query(Document).filter(
-                Document.file_path == file_path
+            doc = session.query(LegacyDocument).filter(
+                LegacyDocument.file_path == file_path
             ).first()
 
             if doc is None:

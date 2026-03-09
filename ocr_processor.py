@@ -894,6 +894,7 @@ def process_pdf_background(
             target=orchestrator.dispatch_next_stage,
             args=(version_id, "ocr_completed"),
             kwargs={
+                "original_filepath": filepath,  # Bug fix: 元のアップロードパスをoriginal_filepathとして明示的に渡す
                 "filepath": filepath,
                 "output_md_path": output_path,
                 "output_blocks_path": blocks_output_path,

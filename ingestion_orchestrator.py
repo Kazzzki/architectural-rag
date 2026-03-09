@@ -57,12 +57,19 @@ class IngestionOrchestrator:
     def dispatch_next_stage(self, version_id: str, current_stage: str, **kwargs):
         """
         各ステージの完了コールバックとして呼ばれる
+
+        Bug fix: enrichment_completed に filepath=final_pdf_path を渡していたが、
+        LegacyDocument は元の (アップロード直後の) file_path で登録されているため
+        update_ingest_stage / fail_processing が DB を更新できなかった。
+        original_filepath を全ステージで引き回すことで解決する。
         """
         logger.info(f"[Orchestrator] Dispatching next stage after '{current_stage}' for {version_id}")
         
         try:
             if current_stage == "ocr_completed":
                 # => Next: Metadata Enrichment
+                # original_filepath: アップロード直後の元パス (LegacyDocument の file_path)
+                original_filepath = kwargs.get("original_filepath", kwargs.get("filepath", ""))
                 filepath = kwargs.get("filepath", "")
                 output_md_path = kwargs.get("output_md_path", "")
                 output_blocks_path = kwargs.get("output_blocks_path", "")
@@ -76,9 +83,12 @@ class IngestionOrchestrator:
                 )
                 
                 # => Next: Indexing
+                # Bug fix: filepath を final_pdf_path (移動後パス) ではなく
+                # original_filepath (元パス) を渡すことで DB 更新が正常に機能する
                 self.dispatch_next_stage(
                     version_id, 
                     "enrichment_completed", 
+                    original_filepath=original_filepath,
                     filepath=final_pdf_path,
                     final_md_path=final_md_path,
                     output_blocks_path=output_blocks_path
@@ -86,15 +96,16 @@ class IngestionOrchestrator:
                 
             elif current_stage == "enrichment_completed":
                 # => Next: Chunking & Indexing (Phase 3)
-                filepath = kwargs.get("filepath", "")
+                # Bug fix: DB 操作には元のアップロードパス (original_filepath) を使う
+                original_filepath = kwargs.get("original_filepath", kwargs.get("filepath", ""))
                 final_md_path = kwargs.get("final_md_path", "")
                 output_blocks_path = kwargs.get("output_blocks_path", "")
                 
                 self.repo.update_ingest_stage_by_version_id(version_id, "indexing")
-                self.repo.update_ingest_stage(filepath, "indexing")
+                self.repo.update_ingest_stage(original_filepath, "indexing")
                 
                 try:
-                    # 3. チャンク生成 (Hierarchical Chunking)
+                    # 1. チャンク生成 (Hierarchical Chunking)
                     from chunk_builder import ChunkBuilder
                     builder = ChunkBuilder()
                     
@@ -119,19 +130,20 @@ class IngestionOrchestrator:
                     lexical = LexicalIndexer()
                     lexical.upsert_chunks(version_id, chunks)
                     
-                    # 4. Completion
-                    self.repo.update_ingest_stage(filepath, "completed")
+                    # 4. Completion - DB には元のアップロードパスで更新する
+                    self.repo.update_ingest_stage(original_filepath, "completed")
                     self.repo.update_ingest_stage_by_version_id(version_id, "completed")
-                    self.repo.mark_as_searchable(filepath)
+                    self.repo.mark_as_searchable(original_filepath)
                     
                     logger.info(f"[Orchestrator] Pipeline finished successfully for {version_id}")
                     
                 except Exception as e:
                     logger.error(f"[Orchestrator] Chunking/Indexing failed: {e}", exc_info=True)
-                    self.repo.fail_processing(filepath, str(e))
+                    self.repo.fail_processing(original_filepath, str(e))
                 
         except Exception as e:
             logger.error(f"[Orchestrator] Pipeline failed at dispatch after {current_stage}: {e}", exc_info=True)
-            filepath = kwargs.get("filepath")
-            if filepath:
-                self.repo.fail_processing(filepath, str(e))
+            # Bug fix: original_filepath を優先して使う
+            err_path = kwargs.get("original_filepath") or kwargs.get("filepath")
+            if err_path:
+                self.repo.fail_processing(err_path, str(e))

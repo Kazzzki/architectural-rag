@@ -119,8 +119,25 @@ class MetadataEnricher:
                         logger.info(f"[MetadataEnricher] Successfully uploaded to Drive: {drive_file_id}")
                         self.repo.update_ingest_stage_by_version_id(version_id, "drive_synced")
                 except Exception as e:
-                    logger.error(f"[MetadataEnricher] Drive upload failed: {e}")
-                    # 失敗してもパイプラインは続行する（ローカル正本があるため）
+                    # Bug fix: Drive アップロード失敗時にエラーメッセージをDBに記録する。
+                    # パイプラインは続行するが、credentials.json 未配置などのエラーを
+                    # ユーザーが確認できるよう error_message に残す。
+                    drive_error_msg = f"Drive upload failed (pipeline continues): {e}"
+                    logger.warning(f"[MetadataEnricher] {drive_error_msg}")
+                    try:
+                        session_db = __import__('database', fromlist=['get_session', 'DocumentVersion']).get_session()
+                        try:
+                            from database import DocumentVersion
+                            dv = session_db.query(DocumentVersion).filter(DocumentVersion.id == version_id).first()
+                            if dv:
+                                dv.error_message = drive_error_msg
+                                from datetime import datetime
+                                dv.updated_at = datetime.now()
+                                session_db.commit()
+                        finally:
+                            session_db.close()
+                    except Exception:
+                        pass  # DB 記録失敗してもパイプラインは継続
 
             # Artifactとして記録
             self.repo.save_artifact(
