@@ -7,7 +7,7 @@ from typing import Dict, Any
 
 from classifier import DocumentClassifier
 from metadata_repository import MetadataRepository
-from config import KNOWLEDGE_BASE_DIR, UNCATEGORIZED_FOLDER, ENABLE_AUTO_CATEGORIZE, PDF_STORAGE_DIR
+from config import KNOWLEDGE_BASE_DIR, UNCATEGORIZED_FOLDER, ENABLE_AUTO_CATEGORIZE, PDF_STORAGE_DIR, PDF_STORAGE_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,6 @@ class MetadataEnricher:
                     logger.warning(f"[MetadataEnricher] Original file {filepath} not found for moving.")
             
             # --- Google Driveへアップロード (Phase 4) ---
-            from config import PDF_STORAGE_MODE
             if PDF_STORAGE_MODE == "drive" and new_pdf_path.exists():
                 try:
                     from drive_sync import upload_rag_pdf_to_drive

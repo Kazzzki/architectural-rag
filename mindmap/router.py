@@ -15,7 +15,7 @@ from .models import (
     PhaseDefinition, CategoryDefinition,
     TemplateListItem, ReverseTreeResponse, Position,
     CreateProjectRequest, ProjectListItem, ProjectData,
-    NodeUpdate, NodeCreate, EdgeCreate,
+    NodeUpdate, NodeCreate, EdgeCreate, EdgeUpdate,
     KnowledgeNode, KnowledgeEntry, KnowledgeDepth,
     ProjectImportRequest, AIActionRequest
 )
@@ -399,6 +399,17 @@ async def delete_edge(project_id: str, edge_id: str):
     return {"message": "削除完了"}
 
 
+@router.put("/projects/{project_id}/edges/{edge_id}")
+async def update_edge(project_id: str, edge_id: str, update: EdgeUpdate):
+    """エッジを更新（差分記録）"""
+    updates = update.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No update fields provided")
+    if not project_store.update_edge(project_id, edge_id, updates):
+        raise HTTPException(status_code=404, detail="Edge not found")
+    return {"message": "更新完了"}
+
+
 # Undo
 @router.post("/projects/{project_id}/undo")
 async def undo_action(project_id: str):
@@ -488,12 +499,14 @@ async def scan_filesystem(path: str, max_depth: int = 3):
     # レイアウト計算用に、まずツリー構造をメモリ上に作る
     tree = {"path": root_path, "children": []}
     
-    # ノード数制限
+    # 状態管理用の辞書（nonlocalの再代入を避けるため）
+    state = {
+        "node_count": 0,
+        "current_y": 0
+    }
     MAX_NODES = 500
-    node_count = 0
     
     def build_tree(current_node, current_depth):
-        nonlocal node_count
         if current_depth >= max_depth:
             return
         
@@ -501,9 +514,11 @@ async def scan_filesystem(path: str, max_depth: int = 3):
             # ディレクトリ以外はスキップ（子を持たない）
             if not current_node["path"].is_dir():
                 return
-
-            for entry in sorted(os.scandir(current_node["path"]), key=lambda e: (not e.is_dir(), e.name)):
-                if node_count >= MAX_NODES:
+            
+            # scandirの結果をソートして処理
+            entries = sorted(os.scandir(current_node["path"]), key=lambda e: (not e.is_dir(), e.name))
+            for entry in entries:
+                if state["node_count"] >= MAX_NODES:
                     break
                 
                 # 隠しファイル除外
@@ -512,7 +527,7 @@ async def scan_filesystem(path: str, max_depth: int = 3):
                     
                 child = {"path": Path(entry.path), "children": []}
                 current_node["children"].append(child)
-                node_count += 1
+                state["node_count"] += 1
                 
                 if entry.is_dir():
                     build_tree(child, current_depth + 1)
@@ -526,23 +541,19 @@ async def scan_filesystem(path: str, max_depth: int = 3):
     X_GAP = 300
     Y_GAP = 80
     
-    current_y = 0
-    
     def layout_tree(node, depth):
-        nonlocal current_y
-        
         my_y = 0
         
         if not node["children"]:
             # Leaf node
-            my_y = current_y
-            current_y += Y_GAP
+            my_y = state["current_y"]
+            state["current_y"] += Y_GAP
         else:
             # Parent node: Y is average of children
             child_ys = []
             for child in node["children"]:
                 child_ys.append(layout_tree(child, depth + 1))
-            my_y = sum(child_ys) / len(child_ys)
+            my_y = sum(child_ys) / len(child_ys) if child_ys else state["current_y"]
             
         # ノード生成
         add_node_obj(node["path"], x=depth * X_GAP, y=my_y, is_dir=node["path"].is_dir())

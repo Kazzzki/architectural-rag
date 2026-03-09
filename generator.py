@@ -58,19 +58,22 @@ SYSTEM_PROMPT_DIRECT = """あなたは建築意匠設計の技術アドバイザ
 """
 
 
-def build_system_prompt_direct(context_sheet: Optional[str] = None) -> str:
-    """RAGなしモード用システムプロンプトを組み立てる。"""
-    if context_sheet and context_sheet.strip():
-        return SYSTEM_PROMPT_DIRECT + "\n\n---\n## 参照コンテキストシート\n" + context_sheet.strip()
+def build_layer_b_manual_block(context_sheet: Optional[str]) -> str:
+    """Layer B手動文脈をuser_promptへ注入するための整形済みブロックを返す。"""
+    if not context_sheet or not context_sheet.strip():
+        return ""
+    return (
+        "【Layer B: プロジェクトコンテキスト（手動設定）】\n"
+        f"{context_sheet.strip()}\n\n"
+    )
+
+def build_system_prompt_direct() -> str:
+    """RAGなしモード用システムプロンプトを返す。Layer Bはuser_prompt側で注入する。"""
     return SYSTEM_PROMPT_DIRECT
 
-
-def build_system_prompt(context_sheet: Optional[str] = None) -> str:
-    """Layer 0キャッシュにコンテキストシートを追記して返す。"""
-    base = _layer0_cache
-    if context_sheet and context_sheet.strip():
-        return base + "\n\n---\n## 参照コンテキストシート\n" + context_sheet.strip()
-    return base
+def build_system_prompt() -> str:
+    """Layer 0キャッシュを返す。Layer Bはuser_prompt側で注入する。"""
+    return _layer0_cache
 
 # フロントから受け取る会話履歴の1件あたりの最大文字数（長い回答を切り詰めてトークン節約）
 _HISTORY_MAX_CONTENT_CHARS = 2000
@@ -154,9 +157,11 @@ def generate_answer(
     if not context.strip():
         context = "（知識ベースからの検索結果はありませんでした）"
 
+    context_sheet_block = build_layer_b_manual_block(context_sheet)
+
     user_prompt = f"""以下の知識ベースの情報を参照して回答してください。
 
-【Layer B: 現在のプロジェクト文脈】
+{context_sheet_block}【Layer B: 現在のプロジェクト文脈（自動）】
 {project_context.get('core_view', '')}
 
 【Layer B: 現在の論点】
@@ -181,7 +186,7 @@ def generate_answer(
         from context_retriever import get_relevant_personal_contexts
         personal_contexts = get_relevant_personal_contexts(question)
 
-        local_system_prompt = build_system_prompt(context_sheet)
+        local_system_prompt = build_system_prompt()
         if personal_contexts:
             items = "\n".join([f"- [{c['type']}] {c['content']}" for c in personal_contexts])
             local_system_prompt += f"\n\n## あなた（Kazuki）の関連する経験・判断基準\n以下はこの質問に関連する、あなた自身の過去の判断や学びです。\n回答の参考にし、必要に応じて言及してください：\n\n{items}\n"
@@ -214,14 +219,17 @@ def generate_answer_direct(
         logger.warning(f"Personal context retrieval failed (non-critical): {e}")
         personal_contexts = []
 
-    local_system_prompt = build_system_prompt_direct(context_sheet)
+    context_sheet_block = build_layer_b_manual_block(context_sheet)
+    user_prompt = f"{context_sheet_block}{question}"
+
+    local_system_prompt = build_system_prompt_direct()
     if personal_contexts:
         items = "\n".join([f"- [{c['type']}] {c['content']}" for c in personal_contexts])
         local_system_prompt += f"\n\n## あなた（Kazuki）の関連する経験・判断基準\n以下はこの質問に関連する、あなた自身の過去の判断や学びです。\n回答の参考にし、必要に応じて言及してください：\n\n{items}\n"
 
     try:
         client = get_client()
-        contents = _build_contents(question, history)
+        contents = _build_contents(user_prompt, history)
         config = types.GenerateContentConfig(
             system_instruction=local_system_prompt,
             temperature=TEMPERATURE,
@@ -280,9 +288,11 @@ def generate_answer_stream(
         if not context.strip():
             context = "（知識ベースからの検索結果はありませんでした）"
 
+        context_sheet_block = build_layer_b_manual_block(context_sheet)
+
         user_prompt = f"""以下の知識ベースの情報を参照して回答してください。
 
-【Layer B: 現在のプロジェクト文脈】
+{context_sheet_block}【Layer B: 現在のプロジェクト文脈（自動）】
 {project_context.get('core_view', '')}
 
 【Layer B: 現在の論点】
@@ -310,7 +320,7 @@ def generate_answer_stream(
             logger.warning(f"Personal context retrieval failed (non-critical): {e}")
             personal_contexts = []
 
-        local_system_prompt = build_system_prompt(context_sheet)
+        local_system_prompt = build_system_prompt()
         if personal_contexts:
             items = "\n".join([f"- [{c['type']}] {c['content']}" for c in personal_contexts])
             local_system_prompt += f"\n\n## あなた（Kazuki）の関連する経験・判断基準\n以下はこの質問に関連する、あなた自身の過去の判断や学びです。\n回答の参考にし、必要に応じて言及してください：\n\n{items}\n"
@@ -351,13 +361,16 @@ def generate_answer_stream_direct(
             logger.warning(f"Personal context retrieval failed (non-critical): {e}")
             personal_contexts = []
 
-        local_system_prompt = build_system_prompt_direct(context_sheet)
+        context_sheet_block = build_layer_b_manual_block(context_sheet)
+        user_prompt = f"{context_sheet_block}{question}"
+
+        local_system_prompt = build_system_prompt_direct()
         if personal_contexts:
             items = "\n".join([f"- [{c['type']}] {c['content']}" for c in personal_contexts])
             local_system_prompt += f"\n\n## あなた（Kazuki）の関連する経験・判断基準\n以下はこの質問に関連する、あなた自身の過去の判断や学びです。\n回答の参考にし、必要に応じて言及してください：\n\n{items}\n"
 
         client = get_client()
-        contents = _build_contents(question, history)
+        contents = _build_contents(user_prompt, history)
         config = types.GenerateContentConfig(
             system_instruction=local_system_prompt,
             temperature=TEMPERATURE,

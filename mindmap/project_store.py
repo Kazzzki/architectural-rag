@@ -350,6 +350,20 @@ def delete_edge(project_id: str, edge_id: str) -> bool:
         return True
 
 
+def update_edge(project_id: str, edge_id: str, updates: Dict[str, Any]) -> bool:
+    """エッジを更新（差分として記録）"""
+    allowed = {'type', 'reason', 'source', 'target'}
+    filtered = {k: v for k, v in updates.items() if k in allowed}
+    if not filtered:
+        return False
+
+    with get_db() as conn:
+        _add_delta(conn, project_id, "modify_edge", edge_id, filtered)
+        _record_undo(conn, project_id, 'modify_edge', {'target_id': edge_id, 'data': filtered})
+        _touch_project(conn, project_id)
+        return True
+
+
 # --- Undo ---
 
 def undo(project_id: str) -> Optional[Dict[str, Any]]:

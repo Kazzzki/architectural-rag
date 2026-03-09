@@ -9,11 +9,17 @@ import NodeDetailPanel from '../../../components/mindmap/NodeDetailPanel';
 import GoalSearchBar from '../../../components/mindmap/GoalSearchBar';
 import EditToolbar from '../../../components/mindmap/EditToolbar';
 import AddNodeDialog from '../../../components/mindmap/AddNodeDialog';
+import EditNodeDialog from '../../../components/mindmap/EditNodeDialog';
 import ContextMenu from '../../../components/mindmap/ContextMenu';
+import EditEdgeDialog from '../../../components/mindmap/EditEdgeDialog';
 import IntegratedSidebar from '../../../components/mindmap/IntegratedSidebar'; // New
+import FilterPanel from '../../../components/mindmap/FilterPanel';
+import MobileMindmapControls from '../../../components/mindmap/MobileMindmapControls';
+import SaveStatusOverlay from '../../../components/mindmap/SaveStatusOverlay';
 import { useAutoRag } from '../../../hooks/useAutoRag'; // New
 import { Building2, ArrowLeft, Filter, ChevronDown, Plus, Edit2, Trash2, CornerDownRight, Minimize2, Maximize2, Sidebar, X, GitBranch, Loader2 } from 'lucide-react';
 import Link from 'next/link';
+import { PHASES, CATEGORIES, CATEGORY_COLORS } from '@/lib/mindmapConstants';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -52,17 +58,6 @@ interface ProjectData {
     edges: EdgeData[];
 }
 
-const PHASES = ['基本計画', '基本設計', '実施設計', '施工準備', '施工'];
-const CATEGORIES = ['構造', '意匠', '設備', '外装', '土木', '管理'];
-
-const CATEGORY_COLORS: Record<string, string> = {
-    '構造': '#ef4444',
-    '意匠': '#3b82f6',
-    '設備': '#22c55e',
-    '外装': '#f59e0b',
-    '土木': '#8b5cf6',
-    '管理': '#6b7280',
-};
 
 export default function ProjectMapPage() {
     const params = useParams();
@@ -80,10 +75,15 @@ export default function ProjectMapPage() {
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [isEditMode, setIsEditMode] = useState(false);
     const [showAddDialog, setShowAddDialog] = useState(false);
+    const [showEditDialog, setShowEditDialog] = useState(false);
+    const [showEdgeDialog, setShowEdgeDialog] = useState(false);
+    const [nodeToEdit, setNodeToEdit] = useState<ProcessNode | null>(null);
+    const [edgeToEdit, setEdgeToEdit] = useState<EdgeData | null>(null);
+    const [pendingConnection, setPendingConnection] = useState<{ source: string, target: string } | null>(null);
     const [undoCount, setUndoCount] = useState(0);
     const [nextActions, setNextActions] = useState<any[]>([]);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
-    const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'node' | 'pane'; targetId?: string } | null>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'node' | 'pane' | 'edge'; targetId?: string } | null>(null);
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
     const [forceChatTab, setForceChatTab] = useState<string | null>(null);
 
@@ -97,7 +97,7 @@ export default function ProjectMapPage() {
         const handleMouseMove = (e: MouseEvent) => {
             if (!isDraggingSidebarRef.current) return;
             const newWidth = document.body.clientWidth - e.clientX;
-            const clampedWidth = Math.max(300, Math.min(newWidth, 800));
+            const clampedWidth = Math.max(320, Math.min(newWidth, 450));
             setSidebarWidth(clampedWidth);
         };
         const handleMouseUp = () => {
@@ -467,43 +467,42 @@ export default function ProjectMapPage() {
         }
     };
 
-    // Connect two existing nodes with an edge
     const handleConnectNodes = async (sourceId: string, targetId: string) => {
-        try {
-            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    source: sourceId,
-                    target: targetId,
-                    type: 'hard',
-                    reason: '',
-                }),
-            });
-            setUndoCount(prev => prev + 1);
-            showSaveStatus();
-            loadProject(false);
-        } catch (err) {
-            console.error('Connect error:', err);
+        // W2: Client-side duplicate check
+        const exists = activeEdges.some(e => e.source === sourceId && e.target === targetId);
+        if (exists) {
+            console.warn('Edge already exists');
+            return;
         }
+
+        // Open dialog for type/reason
+        setPendingConnection({ source: sourceId, target: targetId });
+        setEdgeToEdit(null);
+        setShowEdgeDialog(true);
     };
 
     const handleEdgeUpdate = async (oldEdge: EdgeData, newConnection: Connection) => {
         if (!newConnection.source || !newConnection.target) return;
+
+        // W2: Prevent creating duplicates via update
+        const exists = activeEdges.some(
+            e => e.id !== oldEdge.id && e.source === newConnection.source && e.target === newConnection.target
+        );
+        if (exists) {
+            console.warn('Target edge already exists');
+            // Edge remains at old position if we don't reload, but ReactFlow might have moved it visually
+            loadProject(false);
+            return;
+        }
+
         try {
-            // Delete old edge
+            // W5: Use atomic update endpoint
             await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${oldEdge.id}`, {
-                method: 'DELETE',
-            });
-            // Create new edge
-            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
-                method: 'POST',
+                method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     source: newConnection.source,
                     target: newConnection.target,
-                    type: oldEdge.type,
-                    reason: oldEdge.reason,
                 }),
             });
             setUndoCount(prev => prev + 1);
@@ -512,6 +511,50 @@ export default function ProjectMapPage() {
         } catch (err) {
             console.error('Edge update error:', err);
         }
+    };
+
+    const handleEdgeDialogConfirm = async (type: string, reason: string) => {
+        try {
+            if (pendingConnection) {
+                // Create new edge
+                await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source: pendingConnection.source,
+                        target: pendingConnection.target,
+                        type,
+                        reason,
+                    }),
+                });
+            } else if (edgeToEdit) {
+                // Update existing edge
+                await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${edgeToEdit.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        type,
+                        reason,
+                    }),
+                });
+            }
+
+            setShowEdgeDialog(false);
+            setPendingConnection(null);
+            setEdgeToEdit(null);
+            setUndoCount(prev => prev + 1);
+            showSaveStatus();
+            loadProject(false);
+        } catch (err) {
+            console.error('Edge dialog confirm error:', err);
+        }
+    };
+
+    const handleEdgeClick = (id: string, edge: EdgeData) => {
+        if (!isEditMode) return;
+        setEdgeToEdit(edge);
+        setPendingConnection(null);
+        setShowEdgeDialog(true);
     };
 
     const handleEdgesDelete = async (edgeIds: string[]) => {
@@ -951,13 +994,6 @@ export default function ProjectMapPage() {
                         >
                             <Sidebar className="w-5 h-5" />
                         </button>
-
-                        {saveStatus !== 'idle' && (
-                            <span className={`text-xs font-medium transition-opacity ${saveStatus === 'saving' ? 'text-amber-500' : 'text-green-600'
-                                }`}>
-                                {saveStatus === 'saving' ? '保存中...' : '✓ 保存済み'}
-                            </span>
-                        )}
                         <div className="flex items-center gap-2">
                             <div className="w-32 h-2 bg-[var(--border)] rounded-full overflow-hidden">
                                 <div
@@ -973,27 +1009,34 @@ export default function ProjectMapPage() {
 
             <div className="flex-1 flex overflow-hidden">
                 <aside className="w-64 border-r border-[var(--border)] bg-white/50 flex flex-col overflow-y-auto hidden md:flex">
-                    {nextActions.length > 0 && (
-                        <div className="p-3 border-b border-[var(--border)]">
-                            <h4 className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider mb-2">
-                                🎯 次の決定事項
-                            </h4>
-                            <div className="space-y-1">
-                                {nextActions.slice(0, 5).map(action => (
-                                    <button
-                                        key={action.node_id}
-                                        onClick={() => setSelectedNodeId(action.node_id)}
-                                        className="w-full text-left px-2 py-1.5 text-xs rounded hover:bg-[var(--background)] transition-colors"
-                                    >
-                                        <span className="text-[var(--foreground)]">{action.label}</span>
-                                        <span className="block text-[var(--muted)] text-[10px]">{action.phase}</span>
-                                    </button>
-                                ))}
-                            </div>
+                    <div className="p-4 border-b border-[var(--border)] overflow-y-auto max-h-[40vh]">
+                        <h4 className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider mb-2 flex items-center gap-2">
+                            <span>🎯 次の決定事項</span>
+                            <span className="text-[10px] bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded-full border border-amber-100 italic font-normal">
+                                {nextActions.length} items
+                            </span>
+                        </h4>
+                        <div className="space-y-1">
+                            {nextActions.map(action => (
+                                <button
+                                    key={action.node_id}
+                                    onClick={() => setSelectedNodeId(action.node_id)}
+                                    className="w-full text-left px-2 py-2 text-xs rounded-lg hover:bg-[var(--background)] transition-colors border border-transparent hover:border-[var(--border)] active:scale-[0.98]"
+                                >
+                                    <span className="text-[var(--foreground)] font-medium block leading-tight mb-1">{action.label}</span>
+                                    <div className="flex items-center gap-2 text-[var(--muted)] text-[9px]">
+                                        <span className="bg-slate-100 px-1 py-0.5 rounded">{action.phase}</span>
+                                        <span className="flex items-center gap-1">
+                                            <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[action.category] || '#ccc' }} />
+                                            {action.category}
+                                        </span>
+                                    </div>
+                                </button>
+                            ))}
                         </div>
-                    )}
+                    </div>
 
-                    <div className="p-3 border-b border-[var(--border)]">
+                    <div className="p-4 border-b border-[var(--border)]">
                         <GoalSearchBar
                             nodes={activeNodes}
                             onSearch={handleGoalSearch}
@@ -1007,55 +1050,20 @@ export default function ProjectMapPage() {
                         />
                     </div>
 
-                    <div className="p-3 border-b border-[var(--border)]">
-                        <button
-                            onClick={() => setIsFilterOpen(!isFilterOpen)}
-                            className="flex items-center justify-between w-full text-sm font-medium"
-                        >
-                            <span className="flex items-center gap-2">
-                                <Filter className="w-4 h-4" />
-                                フィルター
-                            </span>
-                            <ChevronDown className={`w-4 h-4 transition-transform ${isFilterOpen ? 'rotate-180' : ''}`} />
-                        </button>
-
-                        {isFilterOpen && (
-                            <div className="mt-3 space-y-4 animate-fade-in">
-                                <div>
-                                    <h4 className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider mb-2">フェーズ</h4>
-                                    <div className="space-y-1">
-                                        {PHASES.map(phase => (
-                                            <label key={phase} className="flex items-center gap-2 cursor-pointer text-xs hover:bg-[var(--background)] p-1 rounded">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={filterPhases.has(phase)}
-                                                    onChange={() => togglePhase(phase)}
-                                                    className="rounded border-[var(--border)] accent-violet-500"
-                                                />
-                                                {phase}
-                                            </label>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div>
-                                    <h4 className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider mb-2">カテゴリ</h4>
-                                    <div className="space-y-1">
-                                        {CATEGORIES.map(cat => (
-                                            <label key={cat} className="flex items-center gap-2 cursor-pointer text-xs hover:bg-[var(--background)] p-1 rounded">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={filterCategories.has(cat)}
-                                                    onChange={() => toggleCategory(cat)}
-                                                    className="rounded border-[var(--border)] accent-violet-500"
-                                                />
-                                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[cat] }} />
-                                                {cat}
-                                            </label>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
+                    <div className="p-4">
+                        <FilterPanel
+                            phases={PHASES}
+                            categories={CATEGORIES}
+                            selectedPhases={filterPhases}
+                            selectedCategories={filterCategories}
+                            onTogglePhase={togglePhase}
+                            onToggleCategory={toggleCategory}
+                            onClearAll={() => {
+                                setFilterPhases(new Set());
+                                setFilterCategories(new Set());
+                            }}
+                            categoryColors={CATEGORY_COLORS}
+                        />
                     </div>
                 </aside>
 
@@ -1101,6 +1109,11 @@ export default function ProjectMapPage() {
                             onAddNodeAt={handleAddNodeAt}
                             onConnectNodes={handleConnectNodes}
                             onEdgeUpdate={handleEdgeUpdate}
+                            onEdgeClick={handleEdgeClick}
+                            onEdgeContextMenu={(e, edge) => {
+                                setContextMenu({ x: e.clientX, y: e.clientY, type: 'node', targetId: edge.id }); // Using 'node' type for simplicity or could add 'edge'
+                                setEdgeToEdit(edge);
+                            }}
                             onEdgesDelete={handleEdgesDelete}
                             onNodesDelete={handleNodesDelete}
                             collapsedNodeIds={collapsedNodeIds}
@@ -1129,8 +1142,8 @@ export default function ProjectMapPage() {
 
                 {isSidebarOpen && (
                     <aside
-                        className="border-l border-[var(--border)] bg-white/50 flex flex-col shadow-xl z-10 relative flex-shrink-0 transition-all duration-300"
-                        style={{ width: isSidebarMaximized ? '100%' : sidebarWidth }}
+                        className="border-l border-[var(--border)] bg-white/50 flex flex-col shadow-xl z-20 relative flex-shrink-0 transition-all duration-300"
+                        style={{ width: isSidebarMaximized ? 'min(800px, 90vw)' : sidebarWidth }}
                     >
                         {/* Resizer Handle */}
                         {!isSidebarMaximized && (
@@ -1196,29 +1209,109 @@ export default function ProjectMapPage() {
                 />
             )}
 
+            {showEditDialog && nodeToEdit && (
+                <EditNodeDialog
+                    node={nodeToEdit}
+                    onClose={() => {
+                        setShowEditDialog(false);
+                        setNodeToEdit(null);
+                    }}
+                    onSave={handleNodeUpdate}
+                />
+            )}
+
+            {showEdgeDialog && (
+                <EditEdgeDialog
+                    isOpen={showEdgeDialog}
+                    onClose={() => {
+                        setShowEdgeDialog(false);
+                        setPendingConnection(null);
+                        setEdgeToEdit(null);
+                    }}
+                    onSave={handleEdgeDialogConfirm}
+                    initialType={edgeToEdit?.type as 'hard' | 'soft' || 'hard'}
+                    initialReason={edgeToEdit?.reason || ''}
+                    title={edgeToEdit ? '依存関係の編集' : '新しい依存関係'}
+                />
+            )}
+
+            <SaveStatusOverlay status={saveStatus} />
+
+            <MobileMindmapControls
+                nodes={activeNodes}
+                nextActions={nextActions}
+                phases={PHASES}
+                categories={CATEGORIES}
+                selectedPhases={filterPhases}
+                selectedCategories={filterCategories}
+                onTogglePhase={togglePhase}
+                onToggleCategory={toggleCategory}
+                onClearFilters={() => {
+                    setFilterPhases(new Set());
+                    setFilterCategories(new Set());
+                }}
+                categoryColors={CATEGORY_COLORS}
+                templateId={project?.template_id || ''}
+                highlightedCount={highlightedNodes.size}
+                onReverseTreeResult={(nodeIds, edgeIds) => {
+                    setHighlightedNodes(new Set(nodeIds));
+                    setHighlightedEdges(new Set(edgeIds));
+                }}
+                onNodeSelect={setSelectedNodeId}
+                onClearSearch={clearHighlight}
+            />
+
             {contextMenu && (
                 <ContextMenu
                     x={contextMenu.x}
                     y={contextMenu.y}
                     options={[
-                        ...(contextMenu.type === 'node' ? [
-                            { label: '編集', icon: <Edit2 className="w-4 h-4" />, action: () => { handleCloseContextMenu(); /* TODO: Edit */ } },
-                            { label: '削除', icon: <Trash2 className="w-4 h-4" />, action: () => { handleDeleteNode(); handleCloseContextMenu(); }, danger: true },
+                        ...(contextMenu.type === 'node' || contextMenu.type === 'edge' ? [
                             {
-                                label: '子ノード追加', icon: <CornerDownRight className="w-4 h-4" />, action: () => {
-                                    if (selectedNodeId) {
-                                        const parent = activeNodes.find(n => n.id === selectedNodeId);
-                                        if (parent) handleAddNodeAt('新規ノード', parent.position.x + 200, parent.position.y, selectedNodeId);
+                                label: edgeToEdit ? 'エッジ編集' : '編集',
+                                icon: <Edit2 className="w-4 h-4" />,
+                                action: () => {
+                                    if (edgeToEdit) {
+                                        setShowEdgeDialog(true);
+                                    } else if (contextMenu.targetId) {
+                                        const node = activeNodes.find(n => n.id === contextMenu.targetId);
+                                        if (node) {
+                                            setNodeToEdit(node);
+                                            setShowEditDialog(true);
+                                        }
                                     }
                                     handleCloseContextMenu();
                                 }
-                            }
+                            },
+                            {
+                                label: '削除',
+                                icon: <Trash2 className="w-4 h-4 text-red-500" />,
+                                action: () => {
+                                    if (edgeToEdit) {
+                                        handleEdgesDelete([edgeToEdit.id]);
+                                        setEdgeToEdit(null);
+                                    } else if (contextMenu.targetId) {
+                                        handleNodesDelete([contextMenu.targetId]);
+                                    }
+                                    handleCloseContextMenu();
+                                }
+                            },
                         ] : []),
                         ...(contextMenu.type === 'pane' ? [
-                            { label: '新規ノード作成', icon: <Plus className="w-4 h-4" />, action: () => { setShowAddDialog(true); handleCloseContextMenu(); } }
+                            {
+                                label: 'ノードを追加',
+                                icon: <Plus className="w-4 h-4" />,
+                                action: () => {
+                                    setShowAddDialog(true);
+                                    handleCloseContextMenu();
+                                }
+                            }
                         ] : [])
                     ]}
-                    onClose={handleCloseContextMenu}
+                    onClose={() => {
+                        setContextMenu(null);
+                        if (!showEdgeDialog) setEdgeToEdit(null);
+                    }}
                 />
             )}
         </div>

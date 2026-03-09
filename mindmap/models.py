@@ -186,6 +186,13 @@ class EdgeCreate(BaseModel):
     reason: str = ""
 
 
+class EdgeUpdate(BaseModel):
+    source: Optional[str] = None
+    target: Optional[str] = None
+    type: Optional[str] = None
+    reason: Optional[str] = None
+
+
 # --- Phase 3: Knowledge Models ---
 
 class KnowledgeDepth(str, Enum):

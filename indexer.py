@@ -33,6 +33,7 @@ from config import (
     EMBEDDING_MODEL,
     PARENT_CHUNKS_DIR,
 )
+from dense_indexer import get_chroma_client
 from gemini_client import get_client
 from utils.retry import sync_retry
 
@@ -51,18 +52,7 @@ CHUNK_OVERLAP: int = 30
 PARENT_CHUNK_MIN: int = 500
 PARENT_CHUNK_MAX: int = 800
 
-# ─── Global ChromaDB Client (Singleton) ────────────────────────────────────────
-_chroma_client = None
-
-def get_chroma_client():
-    global _chroma_client
-    if _chroma_client is None:
-        os.makedirs(CHROMA_DB_DIR, exist_ok=True)
-        _chroma_client = chromadb.PersistentClient(
-            path=CHROMA_DB_DIR,
-            settings=chromadb.config.Settings(anonymized_telemetry=False)
-        )
-    return _chroma_client
+# (get_chroma_client was moved to dense_indexer.py)
 
 
 # ─── Embedding ─────────────────────────────────────────────────────────────────

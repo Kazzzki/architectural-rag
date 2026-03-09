@@ -6,8 +6,13 @@ import { resolvePdfUrl } from '@/lib/pdf';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
+import LayerPanel from './components/LayerPanel';
 import {
+    Search,
     Send,
+    MessageSquare,
+    Plus,
+    History,
     Upload,
     RefreshCw,
     Building2,
@@ -21,15 +26,17 @@ import {
     ExternalLink,
     UploadCloud,
     Library as LibraryIcon,
-    MessageSquare,
     Map,
-    Sparkles
+    Sparkles,
+    Layers,
+    Database,
+    Settings,
+    Folder
 } from 'lucide-react';
 import Link from 'next/link';
 import Library from './components/Library';
 import FileUpload from './components/FileUpload';
 import StatsPanel from './components/StatsPanel';
-import ContextSheetPanel from './components/ContextSheetPanel';
 import ScopeEnginePanel from './components/ScopeEnginePanel';
 import dynamic from 'next/dynamic';
 
@@ -275,7 +282,6 @@ export default function Home() {
     // Session Management State
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
-    const [showSessionList, setShowSessionList] = useState(true);
 
     // Filters
     const [category, setCategory] = useState('');
@@ -294,10 +300,6 @@ export default function Home() {
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncResult, setSyncResult] = useState<string | null>(null);
     const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
-    const [activeTab, setActiveTab] = useState<'chat' | 'library'>('chat');
-    const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-    const [pdfInitialPage, setPdfInitialPage] = useState(1);
-    const [isPdfOpen, setIsPdfOpen] = useState(false);
 
     // --- Scope Engine ---
     const [projectId, setProjectId] = useState<string | null>(null);
@@ -308,8 +310,18 @@ export default function Home() {
     const [availableModels, setAvailableModels] = useState<Record<string, string>>({});
     const [availableRoles, setAvailableRoles] = useState<Record<string, string>>({});
     const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
-    const [activeContextSheet, setActiveContextSheet] = useState<string | null>(null);
-    const [activeSheetTitle, setActiveSheetTitle] = useState<string | null>(null);
+
+    // UI State
+    const [sidebarTab, setSidebarTab] = useState<'knowledge' | 'layers'>('knowledge');
+    const [activeTab, setActiveTab] = useState<'chat' | 'library'>('chat');
+    const [isPdfOpen, setIsPdfOpen] = useState(false);
+    const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+    const [pdfInitialPage, setPdfInitialPage] = useState(1);
+    const [showSessionList, setShowSessionList] = useState(true);
+
+    // Layer / Context State
+    const [activeLayerB, setActiveLayerB] = useState<string | null>(null);
+    const [activeLayerBTitle, setActiveLayerBTitle] = useState<string | null>(null);
     const [activeContextRole, setActiveContextRole] = useState<string | null>(null);
     const [isGeneratingSheet, setIsGeneratingSheet] = useState(false);
 
@@ -503,7 +515,7 @@ export default function Home() {
         e.preventDefault();
         if (!input.trim() || isLoading) return;
 
-        const userMessage = input.trim();
+        const userMessageContent = input.trim();
         setInput('');
 
         // 現在の会話履歴を送信前にキャプチャ（新しいメッセージを追加する前）
@@ -513,7 +525,7 @@ export default function Home() {
         }));
 
         // Add user message
-        setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+        setMessages(prev => [...prev, { role: 'user', content: userMessageContent }]);
 
         // Add placeholder assistant message
         setMessages(prev => [...prev, {
@@ -529,21 +541,18 @@ export default function Home() {
             let accumulatedAnswer = '';
             let currentSources: SourceFile[] = [];
 
-            for await (const update of chatStream(
-                userMessage,
-                category,
-                fileType,
-                dateRange,
-                selectedTags.length > 0 ? selectedTags : undefined,
-                tagMatchMode,
-                historySnapshot.length > 0 ? historySnapshot : undefined,
-                selectedModel,
-                activeContextSheet,
-                true,       // quickMode
-                projectId,
-                scopeMode,
-                useRag
-            )) {
+            const historyToSend = historySnapshot.length > 0 ? historySnapshot : undefined;
+
+            for await (const update of chatStream({
+                session_id: activeSessionId || undefined,
+                project_id: projectId || undefined,
+                scope_mode: scopeMode,
+                question: userMessageContent,
+                history: historyToSend,
+                model: selectedModel,
+                use_rag: useRag,
+                contextSheet: activeLayerB || undefined,
+            })) {
                 if (update.type === 'sources') {
                     currentSources = update.data;
                     setMessages(prev => {
@@ -576,7 +585,7 @@ export default function Home() {
             }
             try {
                 await saveMessages(sessionIdToSave, {
-                    user: userMessage,
+                    user: userMessageContent,
                     assistant: accumulatedAnswer,
                     sources: currentSources,
                     model: selectedModel
@@ -624,10 +633,9 @@ export default function Home() {
         setIsGeneratingSheet(false);
     };
 
-    const handleSheetApplied = (content: string, title: string, role: string) => {
-        setActiveContextSheet(content);
-        setActiveSheetTitle(title);
-        setActiveContextRole(role);
+    const handleLayerBChange = (content: string | null, title: string | null) => {
+        setActiveLayerB(content);
+        setActiveLayerBTitle(title);
     };
 
     // Replaced with FileUpload component, but keeping this for legacy multiple file upload via button if needed
@@ -734,266 +742,199 @@ export default function Home() {
             {/* Main Content */}
             <div className="flex-1 max-w-6xl mx-auto w-full flex flex-col md:flex-row gap-4 p-4">
                 {/* Sidebar */}
-                <aside className="md:w-64 space-y-4">
+                <aside className="md:w-64 space-y-4 flex flex-col min-h-0">
                     <ScopeEnginePanel onScopeChange={(pid, sm) => { setProjectId(pid); setScopeMode(sm); }} />
 
-                    {/* Session List */}
-                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] shadow-sm">
-                        <div className="flex items-center justify-between mb-3">
-                            <label className="block text-sm font-medium flex items-center gap-2">
-                                <MessageSquare className="w-4 h-4" />
-                                チャット履歴
-                            </label>
-                            <button
-                                onClick={() => setShowSessionList(!showSessionList)}
-                                className="text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
-                            >
-                                <ChevronDown className={`w-4 h-4 transition-transform ${showSessionList ? 'rotate-180' : ''}`} />
-                            </button>
-                        </div>
-
-                        {showSessionList && (
-                            <div className="space-y-1 max-h-48 overflow-y-auto pr-1 animate-fade-in custom-scrollbar">
-                                {sessions.length === 0 ? (
-                                    <div className="text-xs text-[var(--muted)] text-center py-4 bg-[var(--background)] rounded-lg border border-[var(--border)] border-dashed">履歴がありません</div>
-                                ) : (
-                                    sessions.map(s => (
-                                        <div key={s.id} className={`group flex items-center justify-between p-2 rounded-lg text-xs cursor-pointer transition-all border border-transparent ${activeSessionId === s.id ? 'bg-primary-500/10 text-primary-600 border-primary-500/20 shadow-sm' : 'hover:bg-[var(--card-hover)] text-[var(--foreground)] hover:border-[var(--border)]'}`} onClick={async () => {
-                                            try {
-                                                const detail = await fetchSessionDetail(s.id);
-                                                setActiveSessionId(s.id);
-                                                setMessages(detail.messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, sources: m.sources })));
-                                            } catch (e) { console.error('Failed to load session', e); }
-                                        }}>
-                                            <div className="flex-1 overflow-hidden">
-                                                <div className="truncate font-medium">{s.title || '新規チャット'}</div>
-                                                <div className="text-[10px] text-[var(--muted)] mt-0.5">{new Date(s.updated_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
-                                            </div>
-                                            <button
-                                                onClick={async (e) => {
-                                                    e.stopPropagation();
-                                                    if (confirm('この履歴を削除しますか？')) {
-                                                        try {
-                                                            await deleteSession(s.id);
-                                                            if (activeSessionId === s.id) {
-                                                                setMessages([]);
-                                                                setActiveSessionId(null);
-                                                            }
-                                                            fetchSessions().then(setSessions);
-                                                        } catch (err) { console.error(err); }
-                                                    }
-                                                }}
-                                                className="text-[var(--muted)] hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all p-1.5 rounded-md hover:bg-red-500/10"
-                                                title="削除"
-                                            >
-                                                <X className="w-3.5 h-3.5" />
-                                            </button>
-                                        </div>
-                                    ))
-                                )}
-                            </div>
-                        )}
+                    {/* Sidebar Tabs */}
+                    <div className="flex p-1 bg-[var(--background)] rounded-xl border border-[var(--border)] shadow-sm">
+                        <button
+                            onClick={() => setSidebarTab('knowledge')}
+                            className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${sidebarTab === 'knowledge' ? 'bg-primary-500 text-white shadow-md' : 'text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--card-hover)]'}`}
+                        >
+                            <Database className="w-3.5 h-3.5" />
+                            Knowledge
+                        </button>
+                        <button
+                            onClick={() => setSidebarTab('layers')}
+                            className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${sidebarTab === 'layers' ? 'bg-violet-500 text-white shadow-md' : 'text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--card-hover)]'}`}
+                        >
+                            <Layers className="w-3.5 h-3.5" />
+                            Layers
+                        </button>
                     </div>
 
-                    {/* Stats Dashboard (Phase 4-1) */}
-                    <div className="md:hidden">
-                        {/* Mobile only here, or duplicate? The component design is 3 cols, fits sidebar width? 
-                            Sidebar is w-64 (256px). 3 cols might be tight. 
-                            Let's put it at the top of Sidebar but maybe stack vertically if needed or just use it. 
-                            Actually the design in StatsPanel is grid-cols-3. 
-                            Let's assume it fits or style adjusts. 
-                        */}
-                    </div >
-                    <StatsPanel stats={stats} onRefresh={fetchStats} isLoading={false} />
-
-                    {/* File Upload Component (New) */}
-                    <FileUpload />
-
-                    {/* Category Filter */}
-                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
-                        <label className="block text-sm font-medium mb-2">検索対象</label>
-                        <div className="relative">
-                            <select
-                                value={category}
-                                onChange={(e) => setCategory(e.target.value)}
-                                className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
-                            >
-                                {CATEGORIES.map((cat) => (
-                                    <option key={cat.value} value={cat.value}>
-                                        {cat.label}
-                                    </option>
-                                ))}
-                            </select>
-                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--muted)] pointer-events-none" />
-                        </div>
-                    </div>
-
-
-
-                    {/* Search Filters (Phase 4-2) */}
-                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] space-y-3">
-                        <label className="block text-sm font-medium">絞り込み</label>
-
-                        {/* File Type Filter */}
-                        <div className="relative">
-                            <select
-                                className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
-                                value={fileType}
-                                onChange={(e) => setFileType(e.target.value)}
-                            >
-                                <option value="">全てのファイル形式</option>
-                                <option value=".pdf">PDFドキュメント</option>
-                                <option value=".md">Markdown</option>
-                                <option value=".txt">テキスト</option>
-                            </select>
-                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
-                        </div>
-
-                        {/* Date Filter */}
-                        <div className="relative">
-                            <select
-                                className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
-                                value={dateRange}
-                                onChange={(e) => setDateRange(e.target.value)}
-                            >
-                                <option value="">全期間</option>
-                                <option value="7d">過去1週間</option>
-                                <option value="1m">過去1ヶ月</option>
-                                <option value="3m">過去3ヶ月</option>
-                            </select>
-                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
-                        </div>
-
-                        {/* Tag Filter (Phase 4-4) */}
-                        <div className="pt-2 border-t border-[var(--border)]">
-                            <button
-                                onClick={() => setIsTagExpanded(!isTagExpanded)}
-                                className="flex items-center justify-between w-full text-xs font-medium text-[var(--foreground)] mb-2"
-                            >
-                                <span>タグフィルター ({selectedTags.length})</span>
-                                <ChevronDown className={`w-3 h-3 transition-transform ${isTagExpanded ? 'rotate-180' : ''}`} />
-                            </button>
-
-                            {isTagExpanded && (
-                                <div className="space-y-3 animate-fade-in">
-                                    <div className="flex items-center gap-2 text-xs mb-2 bg-[var(--background)] p-1 rounded-lg border border-[var(--border)]">
+                    <div className="flex-1 space-y-4 overflow-y-auto custom-scrollbar pr-1">
+                        {sidebarTab === 'knowledge' ? (
+                            <>
+                                {/* Session List */}
+                                <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] shadow-sm">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <label className="block text-sm font-medium flex items-center gap-2">
+                                            <MessageSquare className="w-4 h-4" />
+                                            チャット履歴
+                                        </label>
                                         <button
-                                            onClick={() => setTagMatchMode('any')}
-                                            className={`flex-1 py-1 rounded-md transition-colors ${tagMatchMode === 'any' ? 'bg-primary-100 text-primary-700' : 'text-[var(--muted)] hover:bg-[var(--card-hover)]'}`}
+                                            onClick={() => setShowSessionList(!showSessionList)}
+                                            className="text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
                                         >
-                                            Any
-                                        </button>
-                                        <button
-                                            onClick={() => setTagMatchMode('all')}
-                                            className={`flex-1 py-1 rounded-md transition-colors ${tagMatchMode === 'all' ? 'bg-primary-100 text-primary-700' : 'text-[var(--muted)] hover:bg-[var(--card-hover)]'}`}
-                                        >
-                                            All
+                                            <ChevronDown className={`w-4 h-4 transition-transform ${showSessionList ? 'rotate-180' : ''}`} />
                                         </button>
                                     </div>
 
-                                    <div className="max-h-60 overflow-y-auto pr-1 space-y-4">
-                                        {Object.entries(availableTags).map(([group, tags]) => (
-                                            <div key={group}>
-                                                <h4 className="text-[10px] uppercase tracking-wider text-[var(--muted)] mb-1.5 font-bold">
-                                                    {group}
-                                                </h4>
-                                                <div className="space-y-1">
-                                                    {tags.map((tag) => (
-                                                        <label key={tag} className="flex items-center gap-2 cursor-pointer group hover:bg-[var(--background)] p-1 rounded-md transition-colors">
-                                                            <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedTags.includes(tag)
-                                                                ? 'bg-primary-500 border-primary-500'
-                                                                : 'border-[var(--border)] group-hover:border-primary-400'
-                                                                }`}>
-                                                                {selectedTags.includes(tag) && <Check className="w-3 h-3 text-white" />}
+                                    {showSessionList && (
+                                        <div className="space-y-1 max-h-48 overflow-y-auto pr-1 animate-fade-in custom-scrollbar">
+                                            {sessions.length === 0 ? (
+                                                <div className="text-xs text-[var(--muted)] text-center py-4 bg-[var(--background)] rounded-lg border border-[var(--border)] border-dashed">履歴がありません</div>
+                                            ) : (
+                                                sessions.map(s => (
+                                                    <div key={s.id} className={`group flex items-center justify-between p-2 rounded-lg text-xs cursor-pointer transition-all border border-transparent ${activeSessionId === s.id ? 'bg-primary-500/10 text-primary-600 border-primary-500/20 shadow-sm' : 'hover:bg-[var(--card-hover)] text-[var(--foreground)] hover:border-[var(--border)]'}`} onClick={async () => {
+                                                        try {
+                                                            const detail = await fetchSessionDetail(s.id);
+                                                            setActiveSessionId(s.id);
+                                                            setMessages(detail.messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, sources: m.sources })));
+                                                        } catch (e) { console.error('Failed to load session', e); }
+                                                    }}>
+                                                        <div className="flex-1 overflow-hidden">
+                                                            <div className="truncate font-medium">{s.title || '新規チャット'}</div>
+                                                            <div className="text-[10px] text-[var(--muted)] mt-0.5">{new Date(s.updated_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                                                        </div>
+                                                        <button
+                                                            onClick={async (e) => {
+                                                                e.stopPropagation();
+                                                                if (confirm('この履歴を削除しますか？')) {
+                                                                    try {
+                                                                        await deleteSession(s.id);
+                                                                        if (activeSessionId === s.id) {
+                                                                            setMessages([]);
+                                                                            setActiveSessionId(null);
+                                                                        }
+                                                                        fetchSessions().then(setSessions);
+                                                                    } catch (err) { console.error(err); }
+                                                                }
+                                                            }}
+                                                            className="text-[var(--muted)] hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all p-1.5 rounded-md hover:bg-red-500/10"
+                                                            title="削除"
+                                                        >
+                                                            <X className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Stats Dashboard */}
+                                <StatsPanel stats={stats} onRefresh={fetchStats} isLoading={false} />
+
+                                {/* File Upload */}
+                                <FileUpload />
+
+                                {/* Category Filter */}
+                                <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
+                                    <label className="block text-sm font-medium mb-2">検索対象</label>
+                                    <div className="relative">
+                                        <select
+                                            value={category}
+                                            onChange={(e) => setCategory(e.target.value)}
+                                            className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
+                                        >
+                                            {CATEGORIES.map((cat) => (
+                                                <option key={cat.value} value={cat.value}>
+                                                    {cat.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--muted)] pointer-events-none" />
+                                    </div>
+                                </div>
+
+                                {/* Search Filters */}
+                                <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] space-y-3">
+                                    <label className="block text-sm font-medium">絞り込み</label>
+                                    <div className="relative">
+                                        <select
+                                            className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
+                                            value={fileType}
+                                            onChange={(e) => setFileType(e.target.value)}
+                                        >
+                                            <option value="">全てのファイル形式</option>
+                                            <option value=".pdf">PDFドキュメント</option>
+                                            <option value=".md">Markdown</option>
+                                            <option value=".txt">テキスト</option>
+                                        </select>
+                                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
+                                    </div>
+                                    <div className="relative">
+                                        <select
+                                            className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
+                                            value={dateRange}
+                                            onChange={(e) => setDateRange(e.target.value)}
+                                        >
+                                            <option value="">全期間</option>
+                                            <option value="7d">過去1週間</option>
+                                            <option value="1m">過去1ヶ月</option>
+                                            <option value="3m">過去3ヶ月</option>
+                                        </select>
+                                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
+                                    </div>
+                                    {/* Tag Filter */}
+                                    <div className="pt-2 border-t border-[var(--border)]">
+                                        <button
+                                            onClick={() => setIsTagExpanded(!isTagExpanded)}
+                                            className="flex items-center justify-between w-full text-xs font-medium text-[var(--foreground)] mb-2"
+                                        >
+                                            <span>タグフィルター ({selectedTags.length})</span>
+                                            <ChevronDown className={`w-3 h-3 transition-transform ${isTagExpanded ? 'rotate-180' : ''}`} />
+                                        </button>
+                                        {isTagExpanded && (
+                                            <div className="space-y-3 animate-fade-in">
+                                                <div className="max-h-60 overflow-y-auto pr-1 space-y-4">
+                                                    {Object.entries(availableTags).map(([group, tags]) => (
+                                                        <div key={group}>
+                                                            <h4 className="text-[10px] uppercase tracking-wider text-[var(--muted)] mb-1.5 font-bold">{group}</h4>
+                                                            <div className="space-y-1">
+                                                                {tags.map((tag) => (
+                                                                    <label key={tag} className="flex items-center gap-2 cursor-pointer group hover:bg-[var(--background)] p-1 rounded-md transition-colors">
+                                                                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedTags.includes(tag) ? 'bg-primary-500 border-primary-500' : 'border-[var(--border)] group-hover:border-primary-400'}`}>
+                                                                            {selectedTags.includes(tag) && <Check className="w-3 h-3 text-white" />}
+                                                                        </div>
+                                                                        <input type="checkbox" className="hidden" checked={selectedTags.includes(tag)} onChange={() => setSelectedTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])} />
+                                                                        <span className={`text-xs ${selectedTags.includes(tag) ? 'text-primary-600 font-medium' : 'text-[var(--foreground)]'}`}>{tag}</span>
+                                                                    </label>
+                                                                ))}
                                                             </div>
-                                                            <input
-                                                                type="checkbox"
-                                                                className="hidden"
-                                                                checked={selectedTags.includes(tag)}
-                                                                onChange={() => {
-                                                                    setSelectedTags(prev =>
-                                                                        prev.includes(tag)
-                                                                            ? prev.filter(t => t !== tag)
-                                                                            : [...prev, tag]
-                                                                    );
-                                                                }}
-                                                            />
-                                                            <span className={`text-xs ${selectedTags.includes(tag) ? 'text-primary-600 font-medium' : 'text-[var(--foreground)]'}`}>
-                                                                {tag}
-                                                            </span>
-                                                        </label>
+                                                        </div>
                                                     ))}
                                                 </div>
                                             </div>
-                                        ))}
+                                        )}
                                     </div>
+                                </div>
 
-                                    {selectedTags.length > 0 && (
-                                        <button
-                                            onClick={() => setSelectedTags([])}
-                                            className="w-full text-xs text-[var(--muted)] hover:text-[var(--foreground)] py-1 text-center border-t border-[var(--border)] mt-2"
-                                        >
-                                            クリア
-                                        </button>
+                                {/* Drive Sync */}
+                                <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
+                                    <label className="block text-sm font-medium mb-2 flex items-center gap-2"><Cloud className="w-4 h-4" />Google Drive</label>
+                                    {driveStatus?.authenticated ? (
+                                        <div className="space-y-2">
+                                            <button onClick={handleDriveSync} disabled={isSyncing} className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50">
+                                                {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                                {isSyncing ? '同期中...' : 'Driveから同期'}
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <button onClick={handleDriveAuth} className="w-full flex items-center justify-center gap-2 bg-[var(--background)] hover:bg-[var(--card-hover)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm transition-colors"><CloudOff className="w-4 h-4" />認証する</button>
                                     )}
                                 </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Google Drive Sync */}
-                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
-                        <label className="block text-sm font-medium mb-2 flex items-center gap-2">
-                            <Cloud className="w-4 h-4" />
-                            Google Drive
-                        </label>
-                        {driveStatus?.authenticated ? (
-                            <div className="space-y-2">
-                                <button
-                                    onClick={handleDriveSync}
-                                    disabled={isSyncing}
-                                    className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50"
-                                >
-                                    {isSyncing ? (
-                                        <Loader2 className="w-4 h-4 animate-spin" />
-                                    ) : (
-                                        <RefreshCw className="w-4 h-4" />
-                                    )}
-                                    {isSyncing ? '同期中...' : 'Driveから同期'}
-                                </button>
-
-                                <button
-                                    onClick={handleDriveUpload}
-                                    disabled={isUploadingToDrive}
-                                    className="w-full flex items-center justify-center gap-2 bg-[var(--background)] hover:bg-[var(--card-hover)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm transition-colors disabled:opacity-50"
-                                >
-                                    <UploadCloud className={`w-4 h-4 ${isUploadingToDrive ? 'animate-bounce' : ''}`} />
-                                    {isUploadingToDrive ? 'アップロード中...' : 'Driveへバックアップ'}
-                                </button>
-
-                                <p className="text-xs mt-2 text-green-400 flex items-center gap-1">
-                                    <Check className="w-3 h-3" />
-                                    認証済み
-                                </p>
-                            </div>
-                        ) : (
-                            <>
-                                <button
-                                    onClick={handleDriveAuth}
-                                    className="w-full flex items-center justify-center gap-2 bg-[var(--background)] hover:bg-[var(--card-hover)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm transition-colors"
-                                >
-                                    <CloudOff className="w-4 h-4" />
-                                    認証する
-                                </button>
-                                <p className="text-xs mt-2 text-[var(--muted)]">
-                                    {driveStatus?.message || '未認証'}
-                                </p>
                             </>
-                        )}
-                        {syncResult && (
-                            <p className="text-xs mt-2 text-blue-400">
-                                {syncResult}
-                            </p>
+                        ) : (
+                            <LayerPanel
+                                activeLayerB={activeLayerB}
+                                activeLayerBTitle={activeLayerBTitle}
+                                onLayerBChange={handleLayerBChange}
+                                availableModels={availableModels}
+                                availableRoles={availableRoles}
+                            />
                         )}
                     </div>
 
@@ -1061,12 +1002,12 @@ export default function Home() {
                             ))}
                         </div>
                     </div>
-                </aside >
+                </aside>
 
                 {/* Chat Area */}
-                < div className="flex-1 flex flex-col bg-[var(--card)] rounded-xl border border-[var(--border)] overflow-hidden relative" >
+                <div className="flex-1 flex flex-col bg-[var(--card)] rounded-xl border border-[var(--border)] overflow-hidden relative">
                     {/* Tabs */}
-                    < div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--muted)]/5" >
+                    <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--muted)]/5">
                         <button
                             onClick={() => setActiveTab('chat')}
                             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'chat' ? 'bg-white shadow-sm text-primary-600' : 'text-[var(--muted)] hover:bg-[var(--card-hover)]'}`}
@@ -1081,148 +1022,124 @@ export default function Home() {
                             <LibraryIcon className="w-4 h-4" />
                             Library
                         </button>
-                    </div >
+                    </div>
 
                     {/* Chat Container (Split View) */}
-                    < div className="flex-1 flex overflow-hidden" style={{ display: activeTab === 'chat' ? 'flex' : 'none' }
-                    }>
+                    <div className="flex-1 flex overflow-hidden" style={{ display: activeTab === 'chat' ? 'flex' : 'none' }}>
                         {/* Left Pane: Chat */}
-                        < div className={`flex flex-col border-r border-[var(--border)] transition-all duration-300 h-full ${isPdfOpen ? 'w-1/2' : 'w-full'}`}>
+                        <div className={`flex flex-col border-r border-[var(--border)] transition-all duration-300 h-full ${isPdfOpen ? 'w-1/2' : 'w-full'}`}>
                             {/* Messages */}
-                            < div className="flex-1 overflow-y-auto p-4 space-y-4" >
-                                {
-                                    messages.length === 0 && (
-                                        <div className="h-full flex flex-col items-center justify-center text-center text-[var(--muted)]">
-                                            <Building2 className="w-16 h-16 mb-4 opacity-50" />
-                                            <h2 className="text-lg font-medium mb-2">建築意匠ナレッジベース</h2>
-                                            <p className="text-sm max-w-md">
-                                                図面・カタログ・技術基準を横断検索し、
-                                                建築技術に関する質問に回答します。
-                                            </p>
-                                        </div>
-                                    )
-                                }
+                            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                                {messages.length === 0 && (
+                                    <div className="h-full flex flex-col items-center justify-center text-center text-[var(--muted)]">
+                                        <Building2 className="w-16 h-16 mb-4 opacity-50" />
+                                        <h2 className="text-lg font-medium mb-2">建築意匠ナレッジベース</h2>
+                                        <p className="text-sm max-w-md">
+                                            図面・カタログ・技術基準を横断検索し、
+                                            建築技術に関する質問に回答します。
+                                        </p>
+                                    </div>
+                                )}
 
-                                {
-                                    messages.map((msg, i) => (
+                                {messages.map((msg, i) => (
+                                    <div
+                                        key={i}
+                                        className={`animate-fade-in ${msg.role === 'user' ? 'flex justify-end' : ''}`}
+                                    >
                                         <div
-                                            key={i}
-                                            className={`animate-fade-in ${msg.role === 'user' ? 'flex justify-end' : ''
+                                            className={`max-w-[85%] rounded-xl p-4 ${msg.role === 'user'
+                                                ? 'bg-primary-600 text-white'
+                                                : 'bg-[var(--background)] border border-[var(--border)]'
                                                 }`}
                                         >
-                                            <div
-                                                className={`max-w-[85%] rounded-xl p-4 ${msg.role === 'user'
-                                                    ? 'bg-primary-600 text-white'
-                                                    : 'bg-[var(--background)]'
-                                                    }`}
-                                            >
-                                                {msg.role === 'user' ? (
-                                                    <p>{msg.content}</p>
-                                                ) : (
-                                                    <div className="markdown-content">
-                                                        <ReactMarkdown
-                                                            components={{
-                                                                p: ({ children }) => {
-                                                                    const currentSources = msg.sources || [];
-                                                                    const transformed = React.Children.map(children, (child) => {
-                                                                        if (typeof child === 'string') {
-                                                                            return transformCitations(
-                                                                                child,
-                                                                                currentSources,
-                                                                                (url, page) => {
-                                                                                    setPdfUrl(url);
-                                                                                    setPdfInitialPage(page);
-                                                                                    setIsPdfOpen(true);
-                                                                                }
-                                                                            );
-                                                                        }
-                                                                        return child;
-                                                                    });
-                                                                    return <p>{transformed}</p>;
-                                                                },
-                                                            }}
-                                                        >{msg.content}</ReactMarkdown>
-                                                    </div>
-                                                )}
-
-                                                {msg.sources && msg.sources.length > 0 && (
-                                                    <div className="mt-4 pt-3 border-t border-[var(--border)]">
-                                                        <p className="text-xs text-[var(--muted)] mb-2 font-medium">参照ファイル:</p>
-                                                        <div className="flex flex-wrap gap-2">
-                                                            {msg.sources.map((src, j) => (
-                                                                <SourceCard
-                                                                    key={j}
-                                                                    src={src}
-                                                                    onPageClick={(url, page) => {
-                                                                        setPdfUrl(url);
-                                                                        setPdfInitialPage(page);
-                                                                        setIsPdfOpen(true);
-                                                                    }}
-                                                                />
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ))
-                                }
-
-                                {
-                                    isLoading && (
-                                        <div className="animate-fade-in">
-                                            <div className="max-w-[85%] rounded-xl p-4 bg-[var(--background)]">
-                                                <div className="flex items-center gap-2 text-[var(--muted)]">
-                                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                                    <span className="loading-dots">回答を生成中</span>
+                                            {msg.role === 'user' ? (
+                                                <p className="whitespace-pre-wrap">{msg.content}</p>
+                                            ) : (
+                                                <div className="markdown-content">
+                                                    <ReactMarkdown
+                                                        components={{
+                                                            p: ({ children }) => {
+                                                                const currentSources = msg.sources || [];
+                                                                const transformed = React.Children.map(children, (child) => {
+                                                                    if (typeof child === 'string') {
+                                                                        return transformCitations(
+                                                                            child,
+                                                                            currentSources,
+                                                                            (url, page) => {
+                                                                                setPdfUrl(url);
+                                                                                setPdfInitialPage(page);
+                                                                                setIsPdfOpen(true);
+                                                                            }
+                                                                        );
+                                                                    }
+                                                                    return child;
+                                                                });
+                                                                return <p>{transformed}</p>;
+                                                            },
+                                                        }}
+                                                    >{msg.content}</ReactMarkdown>
                                                 </div>
+                                            )}
+
+                                            {msg.sources && msg.sources.length > 0 && (
+                                                <div className="mt-4 pt-3 border-t border-[var(--border)]">
+                                                    <p className="text-xs text-[var(--muted)] mb-2 font-medium">参照ファイル:</p>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {msg.sources.map((src, j) => (
+                                                            <SourceCard
+                                                                key={j}
+                                                                src={src}
+                                                                onPageClick={(url, page) => {
+                                                                    setPdfUrl(url);
+                                                                    setPdfInitialPage(page);
+                                                                    setIsPdfOpen(true);
+                                                                }}
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {isLoading && (
+                                    <div className="animate-fade-in">
+                                        <div className="max-w-[85%] rounded-xl p-4 bg-[var(--background)] border border-[var(--border)]">
+                                            <div className="flex items-center gap-2 text-[var(--muted)]">
+                                                <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                                                <span className="loading-dots text-sm">回答を生成中</span>
                                             </div>
                                         </div>
-                                    )
-                                }
+                                    </div>
+                                )}
 
                                 <div ref={messagesEndRef} />
-                            </div >
+                            </div>
 
                             {/* Input area */}
-                            <div className="border-t border-[var(--border)] p-4 space-y-3">
-                                {/* Context Sheet Panel — outside <form> to avoid accidental submission */}
-                                <ContextSheetPanel
-                                    availableModels={availableModels}
-                                    availableRoles={availableRoles}
-                                    activeContextSheet={activeContextSheet}
-                                    activeSheetTitle={activeSheetTitle}
-                                    activeContextRole={activeContextRole}
-                                    onSheetApplied={handleSheetApplied}
-                                    onSheetCleared={() => { setActiveContextSheet(null); setActiveSheetTitle(null); setActiveContextRole(null); }}
-                                    onStreamStart={handleSheetStreamStart}
-                                    onStreamChunk={handleSheetStreamChunk}
-                                    onStreamEnd={handleSheetStreamEnd}
-                                    isStreaming={isGeneratingSheet}
-                                />
-
-                                {/* Controls row */}
+                            <div className="border-t border-[var(--border)] p-4 space-y-3 bg-[var(--card)]/50 backdrop-blur-sm">
                                 <div className="flex flex-col gap-3">
                                     <div className="flex flex-wrap items-center justify-between gap-y-2 gap-x-4">
                                         <div className="flex flex-wrap items-center gap-2 flex-1">
                                             {/* Model Selector */}
                                             <div className="flex items-center gap-1.5">
                                                 <span className="text-xs text-[var(--muted)] flex-shrink-0">🤖 モデル:</span>
-                                                <div className="relative min-w-[150px] max-w-[220px]">
+                                                <div className="relative min-w-[140px]">
                                                     <select
                                                         value={selectedModel}
                                                         onChange={(e) => setSelectedModel(e.target.value)}
                                                         className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-2 py-1 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary-500 pr-6"
                                                     >
-                                                        {Object.keys(availableModels).length > 0
+                                                        {Object.keys(availableModels).length > 2
                                                             ? Object.entries(availableModels).map(([k, v]) => (
                                                                 <option key={k} value={k}>{v}</option>
                                                             ))
                                                             : (
                                                                 <>
-                                                                    <option value="gemini-3-flash-preview">Gemini 3 Flash（高速・標準）</option>
-                                                                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro（高精度）</option>
-                                                                    <option value="gemini-2.0-flash">Gemini 2.0 Flash（安定板）</option>
+                                                                    <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
+                                                                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
+                                                                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
                                                                 </>
                                                             )
                                                         }
@@ -1240,20 +1157,17 @@ export default function Home() {
                                                         ? 'bg-primary-50 border-primary-300 text-primary-700 hover:bg-primary-100'
                                                         : 'bg-[var(--card)] border-[var(--border)] text-[var(--muted)] hover:bg-[var(--card-hover)]'
                                                         }`}
-                                                    title={useRag ? '知識ベース参照中（クリックでOFF）' : '直接回答モード（クリックでON）'}
+                                                    title={useRag ? '知識ベース参照中' : '直接回答モード'}
                                                 >
                                                     <span>{useRag ? '📚' : '💬'}</span>
                                                     <span>{useRag ? 'RAG ON' : 'RAG OFF'}</span>
                                                 </button>
-                                                <span className="text-[10px] text-[var(--muted)] hidden sm:inline-block">
-                                                    {useRag ? '参照する' : '参照しない'}
-                                                </span>
                                             </div>
 
-                                            {activeContextSheet && (
-                                                <span className="text-[10px] px-2 py-1 rounded-full bg-violet-500/15 border border-violet-500/30 text-violet-300 flex items-center gap-1 flex-shrink-0">
+                                            {activeLayerB && (
+                                                <span className="text-[10px] px-2 py-1 rounded-full bg-violet-500/15 border border-violet-500/30 text-violet-300 flex items-center gap-1 flex-shrink-0 animate-pulse-slow">
                                                     <Sparkles className="w-2.5 h-2.5" />
-                                                    {activeSheetTitle || 'コンテキスト適用中'}
+                                                    ✨ Layer B 適用中
                                                 </span>
                                             )}
                                         </div>
@@ -1271,60 +1185,53 @@ export default function Home() {
                                                 }
                                             }}
                                             className="text-xs px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-sm hover:bg-primary-50 flex items-center gap-1.5 text-primary-600 font-medium transition-all flex-shrink-0"
-                                            title="新しい会話を始める"
                                         >
-                                            <MessageSquare className="w-4 h-4" />
+                                            <Plus className="w-3.5 h-3.5" />
                                             新規チャット
                                         </button>
                                     </div>
                                 </div>
 
-                                {/* Main chat input */}
                                 <form onSubmit={handleSubmit} className="flex gap-2">
                                     <input
                                         type="text"
                                         value={input}
                                         onChange={(e) => setInput(e.target.value)}
                                         placeholder="質問を入力してください..."
-                                        className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary-500 placeholder:text-[var(--muted)]"
+                                        className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary-500 placeholder:text-[var(--muted)] shadow-inner"
                                         disabled={isLoading}
                                     />
                                     <button
                                         type="submit"
                                         disabled={isLoading || !input.trim()}
-                                        className="bg-gradient-to-r from-primary-500 to-accent-500 hover:from-primary-600 hover:to-accent-600 rounded-xl px-6 py-3 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="bg-gradient-to-r from-primary-500 to-accent-500 hover:from-primary-600 hover:to-accent-600 text-white rounded-xl px-6 py-3 font-medium transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center min-w-[80px]"
                                     >
-                                        <Send className="w-5 h-5" />
+                                        {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
                                     </button>
                                 </form>
                             </div>
-
-                        </div >
+                        </div>
 
                         {/* Right Pane: PDF Viewer */}
-                        {
-                            isPdfOpen && (
-                                <div className="w-1/2 h-full border-l border-[var(--border)] relative transition-all duration-300">
-                                    <PDFViewer
-                                        url={pdfUrl}
-                                        initialPage={pdfInitialPage}
-                                        onClose={() => setIsPdfOpen(false)}
-                                    />
-                                </div>
-                            )
-                        }
-                    </div >
+                        {isPdfOpen && (
+                            <div className="w-1/2 h-full border-l border-[var(--border)] relative bg-[var(--background)]">
+                                <PDFViewer
+                                    url={pdfUrl!}
+                                    initialPage={pdfInitialPage}
+                                    onClose={() => setIsPdfOpen(false)}
+                                />
+                            </div>
+                        )}
+                    </div>
 
                     {/* Library Container */}
-                    {
-                        activeTab === 'library' && (
-                            <div className="flex-1 overflow-hidden p-4 h-full">
-                                <Library />
-                            </div>
-                        )
-                    }
-                </div >
-            </div >
-        </div >
+                    {activeTab === 'library' && (
+                        <div className="flex-1 overflow-hidden h-full">
+                            <Library />
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
     );
 }

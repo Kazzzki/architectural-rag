@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Search, X, Target } from 'lucide-react';
+import { Search, X, Target, Loader2 } from 'lucide-react';
 
 interface ProcessNode {
     id: string;
@@ -25,6 +25,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 export default function GoalSearchBar({ nodes, onSearch, onClear, highlightedCount, templateId, onReverseTreeResult }: Props) {
     const [query, setQuery] = useState('');
     const [isOpen, setIsOpen] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const filtered = useMemo(() => {
         if (!query.trim()) return [];
@@ -42,22 +44,31 @@ export default function GoalSearchBar({ nodes, onSearch, onClear, highlightedCou
         if (node) setQuery(node.label);
 
         try {
+            setIsLoading(true);
+            setError(null);
             // Call reverse tree API
             const res = await authFetch(
                 `${API_BASE}/api/mindmap/tree/${templateId}/${nodeId}`
             );
-            if (!res.ok) throw new Error('Reverse tree failed');
+            if (!res.ok) throw new Error('依存関係の取得に失敗しました');
             const data = await res.json();
 
             // data.nodes: source nodes, data.edges: source edges
-            // Note: API might return slightly different structure, adjusting based on instructions
             const nodeIds = data.nodes ? data.nodes.map((n: any) => n.id) : data.path_order || [];
             const edgeIds = data.edges ? data.edges.map((e: any) => e.id) : [];
 
-            onReverseTreeResult(nodeIds, edgeIds);
-        } catch {
+            if (nodeIds.length === 0) {
+                setError('依存ノードが見つかりませんでした');
+            } else {
+                onReverseTreeResult(nodeIds, edgeIds);
+            }
+        } catch (err: any) {
+            console.error('Reverse tree search error:', err);
+            setError(err.message || '検索中にエラーが発生しました');
             // Fallback: local single node highlight
             onSearch(nodeId);
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -112,7 +123,19 @@ export default function GoalSearchBar({ nodes, onSearch, onClear, highlightedCou
                         ))}
                     </div>
                 )}
+
+                {isLoading && (
+                    <div className="absolute right-10 top-1/2 -translate-y-1/2">
+                        <Loader2 className="w-3.5 h-3.5 text-violet-500 animate-spin" />
+                    </div>
+                )}
             </div>
+
+            {error && (
+                <div className="text-[10px] text-red-500 bg-red-50 border border-red-100 rounded px-2 py-1">
+                    ⚠️ {error}
+                </div>
+            )}
 
             {highlightedCount > 0 && (
                 <div className="flex items-center justify-between text-[10px] bg-violet-50 border border-violet-200 rounded-lg px-2.5 py-1.5">

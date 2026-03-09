@@ -4,16 +4,33 @@ import chromadb
 from typing import List, Dict, Any, Optional
 from gemini_client import get_client
 from google.genai import types
+from threading import Lock
 from config import CHROMA_DB_DIR, COLLECTION_NAME, EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__)
+
+# --- ChromaDB Client Singleton Factory ---
+_chroma_clients = {}
+_chroma_lock = Lock()
+
+def _get_chroma_client(path=CHROMA_DB_DIR):
+    """同一プロセス内で同一パスのClientを再利用するためのファクトリ"""
+    with _chroma_lock:
+        if path not in _chroma_clients:
+            os.makedirs(path, exist_ok=True)
+            _chroma_clients[path] = chromadb.PersistentClient(
+                path=path,
+                settings=chromadb.config.Settings(anonymized_telemetry=False)
+            )
+            logger.info(f"[DenseIndexer] ChromaDB client initialized for path: {path}")
+        return _chroma_clients[path]
 
 class DenseIndexer:
     """
     Phase 3: ChromaDB へのベクトルインデックス登録を管理する。
     """
     def __init__(self):
-        self.client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
+        self.client = _get_chroma_client()
         self.collection = self.client.get_or_create_collection(
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"}

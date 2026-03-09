@@ -99,6 +99,28 @@ export default function Library() {
         }
     };
 
+    const handleDownload = async (file: FileNode, e?: React.MouseEvent) => {
+        if (e) e.stopPropagation();
+        try {
+            // file.path contains the relative path from knowledge_base
+            const encodedPath = file.path.split('/').map(encodeURIComponent).join('/');
+            const res = await authFetch(`${API_BASE}/api/files/view/${encodedPath}`);
+            if (!res.ok) throw new Error('Download failed');
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = file.name;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (error) {
+            console.error('Download error:', error);
+            alert('ダウンロードに失敗しました');
+        }
+    };
+
     const confirmBulkDelete = async () => {
         if (selectedPaths.size === 0) return;
         if (!window.confirm(`選択した ${selectedPaths.size} 件のファイルを完全に削除します。よろしいですか？`)) return;
@@ -301,6 +323,13 @@ export default function Library() {
                                     </div>
                                 </div>
                                 <button
+                                    onClick={(e) => handleDownload(selectedFile, e)}
+                                    className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
+                                    title="ダウンロード"
+                                >
+                                    <Download className="w-4 h-4" />
+                                </button>
+                                <button
                                     onClick={(e) => handleDeleteClick(selectedFile, e)}
                                     className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
                                     title="削除"
@@ -324,15 +353,13 @@ export default function Library() {
                                 <div className="h-full flex flex-col items-center justify-center text-slate-400 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 border-dashed">
                                     <File className="w-12 h-12 mb-3 opacity-20" />
                                     <p className="text-sm">プレビューできません</p>
-                                    <a
-                                        href={`${API_BASE}/api/files/view/${selectedFile.path}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="mt-4 text-xs text-blue-600 hover:underline flex items-center gap-1"
+                                    <button
+                                        onClick={() => handleDownload(selectedFile)}
+                                        className="mt-4 text-xs text-blue-600 hover:underline flex items-center gap-1 bg-transparent border-none cursor-pointer"
                                     >
-                                        <Eye className="w-3 h-3" />
-                                        ダウンロードして開く
-                                    </a>
+                                        <Download className="w-3 h-3" />
+                                        ダウンロード
+                                    </button>
                                 </div>
                             )}
                         </div>
@@ -442,7 +469,8 @@ function MarkdownPreview({ filePath }: { filePath: string }) {
 
     useEffect(() => {
         setLoading(true);
-        authFetch(`${API_BASE}/api/files/view/${filePath}`)
+        const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
+        authFetch(`${API_BASE}/api/files/view/${encodedPath}`)
             .then(res => res.text())
             .then(text => setContent(text))
             .catch(err => setContent('読み込みエラー'))

@@ -44,42 +44,6 @@ const STATUS_CONFIG: Record<string, { icon: React.ReactNode; bg: string; text: s
 
 function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
     const status = STATUS_CONFIG[data.status] || STATUS_CONFIG['未着手'];
-    const [isEditing, setIsEditing] = useState(false);
-    const [editValue, setEditValue] = useState(data.label);
-    const inputRef = useRef<HTMLTextAreaElement>(null);
-
-    useEffect(() => {
-        if (isEditing && inputRef.current) {
-            inputRef.current.focus();
-            inputRef.current.select();
-            inputRef.current.style.height = 'auto';
-            inputRef.current.style.height = inputRef.current.scrollHeight + 'px';
-        }
-    }, [isEditing]);
-
-    const handleDoubleClick = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        setIsEditing(true);
-        setEditValue(data.label);
-    };
-
-    const handleBlur = () => {
-        setIsEditing(false);
-        if (editValue.trim() !== data.label && data.onLabelChange) {
-            data.onLabelChange(editValue.trim());
-        }
-    };
-
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleBlur();
-        }
-        if (e.key === 'Escape') {
-            setIsEditing(false);
-            setEditValue(data.label);
-        }
-    };
 
     const handleCollapseClick = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -117,10 +81,14 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
                 <div className="w-px bg-slate-200 my-1" />
                 <button
                     onClick={() => handleAiAction('rag')}
-                    className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 rounded transition-colors"
-                    title="補完 (RAG Check)"
+                    disabled={data.status === '決定済み'}
+                    className={`flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded transition-colors ${data.status === '決定済み'
+                        ? 'text-slate-300 cursor-not-allowed'
+                        : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
+                        }`}
+                    title={data.status === '決定済み' ? '決定済みノードは再調査できません' : '関連ドキュメントを再調査 (RAG Check)'}
                 >
-                    <Search className="w-3.5 h-3.5" />
+                    <Search className={`w-3.5 h-3.5 ${data.status === '決定済み' ? 'opacity-30' : ''}`} />
                     <span className="hidden sm:inline">RAG</span>
                 </button>
             </NodeToolbar>
@@ -134,7 +102,7 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
             <div
                 className={`
                     group relative
-                    rounded-lg bg-white min-w-[160px] max-w-[220px]
+                    rounded-lg bg-white min-w-[160px] max-w-[260px]
                     transition-all duration-200 cursor-pointer
                     ${selected
                         ? 'ring-2 ring-violet-500 ring-offset-2 ring-offset-[var(--canvas-bg)] scale-105 shadow-lg'
@@ -153,7 +121,6 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
                             : '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)',
                     borderLeft: `4px solid ${data.isDimmed ? '#cbd5e1' : data.color}`,
                 }}
-                onDoubleClick={handleDoubleClick}
                 onContextMenu={data.onContextMenu}
             >
                 {/* AI Badge for visual flair */}
@@ -188,36 +155,20 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
 
                     {/* Label Area */}
                     <div className="mb-2 min-h-[1.25rem]">
-                        {isEditing ? (
-                            <textarea
-                                ref={inputRef}
-                                value={editValue}
-                                onChange={(e) => {
-                                    setEditValue(e.target.value);
-                                    e.target.style.height = 'auto';
-                                    e.target.style.height = e.target.scrollHeight + 'px';
-                                }}
-                                onBlur={handleBlur}
-                                onKeyDown={handleKeyDown}
-                                className="w-full text-sm font-bold leading-tight bg-blue-50 px-1 py-0.5 rounded outline-none resize-none overflow-hidden"
-                                style={{ color: '#1e293b' }}
-                                onClick={(e) => e.stopPropagation()}
-                            />
-                        ) : (
-                            <div
-                                className="text-sm font-bold leading-tight break-words select-none"
-                                style={{
-                                    color: data.isDimmed ? '#cbd5e1' : '#1e293b',
-                                }}
-                            >
-                                {data.label}
-                                {data.collapsed && (data.hiddenDescendantCount || 0) > 0 && (
-                                    <span className="ml-1.5 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200 align-middle">
-                                        +{data.hiddenDescendantCount}
-                                    </span>
-                                )}
-                            </div>
-                        )}
+                        <div
+                            className="text-sm font-bold leading-tight break-words select-none line-clamp-3"
+                            title={data.label}
+                            style={{
+                                color: data.isDimmed ? '#cbd5e1' : '#1e293b',
+                            }}
+                        >
+                            {data.label}
+                            {data.collapsed && (data.hiddenDescendantCount || 0) > 0 && (
+                                <span className="ml-1.5 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200 align-middle">
+                                    +{data.hiddenDescendantCount}
+                                </span>
+                            )}
+                        </div>
                     </div>
 
                     {/* Footer */}

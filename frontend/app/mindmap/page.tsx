@@ -8,6 +8,7 @@ import MindmapCanvas from '../components/mindmap/MindmapCanvas';
 import GoalSearchBar from '../components/mindmap/GoalSearchBar';
 import { Building2, ArrowLeft, Plus, Trash2, Clock, Target, ChevronDown, Eye, FolderOpen, Layers } from 'lucide-react';
 import Link from 'next/link';
+import { CATEGORY_COLORS } from '@/lib/mindmapConstants';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -45,14 +46,6 @@ interface TemplateDetail {
     edges: any[];
 }
 
-const CATEGORY_COLORS: Record<string, string> = {
-    '構造': '#ef4444',
-    '意匠': '#3b82f6',
-    '設備': '#22c55e',
-    '外装': '#f59e0b',
-    '土木': '#8b5cf6',
-    '管理': '#6b7280',
-};
 
 export default function MindmapDashboard() {
     const router = useRouter();

@@ -21,7 +21,8 @@ from config import (
     RERANK_THRESHOLD,
     RERANK_CANDIDATE_COUNT,
 )
-from indexer import GeminiEmbeddingFunction, get_query_embedding, get_chroma_client, load_parent_chunk
+from indexer import GeminiEmbeddingFunction, get_query_embedding, load_parent_chunk
+from dense_indexer import get_chroma_client
 from lexical_indexer import LexicalIndexer
 from gemini_client import get_client
 from utils.retry import sync_retry

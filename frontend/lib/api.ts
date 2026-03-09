@@ -178,26 +178,45 @@ export async function saveMessages(sessionId: string, payload: SaveMessagePayloa
 }
 
 /** チャットストリーム（モデル選択・コンテキストシート注入対応） */
-export async function* chatStream(
-    question: string,
-    category?: string,
-    file_type?: string,
-    date_range?: string,
-    tags?: string[],
-    tag_match_mode?: "any" | "all",
-    history?: HistoryMessage[],
-    model?: string,
-    contextSheet?: string | null,
-    quickMode: boolean = true,  // デフォルトは高速モード（ストリーム向けにTTFB優先）
-    projectId?: string | null,
-    scopeMode?: string,
-    useRag: boolean = true,
-): AsyncGenerator<StreamUpdate> {
+export async function* chatStream(params: {
+    question: string;
+    session_id?: string;
+    category?: string;
+    file_type?: string;
+    date_range?: string;
+    tags?: string[];
+    tag_match_mode?: "any" | "all";
+    history?: HistoryMessage[];
+    model?: string;
+    contextSheet?: string | null;
+    quickMode?: boolean;
+    project_id?: string | null;
+    scope_mode?: string;
+    use_rag?: boolean;
+}): AsyncGenerator<StreamUpdate> {
+    const {
+        question,
+        session_id,
+        category,
+        file_type,
+        date_range,
+        tags,
+        tag_match_mode,
+        history,
+        model,
+        contextSheet,
+        quickMode = true,
+        project_id,
+        scope_mode,
+        use_rag = true,
+    } = params;
+
     const response = await fetch(`${API_BASE}/api/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
             question,
+            session_id: session_id || null,
             category: category || null,
             file_type: file_type || null,
             date_range: date_range || null,
@@ -207,9 +226,9 @@ export async function* chatStream(
             model: model || 'gemini-3-flash-preview',
             context_sheet: contextSheet || null,
             quick_mode: quickMode,
-            project_id: projectId || null,
-            scope_mode: scopeMode || 'auto',
-            use_rag: useRag,
+            project_id: project_id || null,
+            scope_mode: scope_mode || 'auto',
+            use_rag: use_rag,
         }),
     });
     if (!response.ok) throw new Error(`API Error: ${response.statusText}`);

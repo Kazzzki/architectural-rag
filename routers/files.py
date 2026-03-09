@@ -157,6 +157,10 @@ async def view_file(file_path: str):
             from urllib.parse import quote
             safe_name = quote(target_path.name)
             headers["Content-Disposition"] = f"inline; filename*=utf-8''{safe_name}"
+        elif target_path.suffix.lower() == ".md":
+            media_type = "text/markdown; charset=utf-8"
+        elif target_path.suffix.lower() == ".txt":
+            media_type = "text/plain; charset=utf-8"
         else:
             media_type = "application/octet-stream"
             

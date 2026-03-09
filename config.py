@@ -17,7 +17,14 @@ PDF_CACHE_DIR      = BASE_DIR / "data" / "cache" / "pdfs"
 
 # Storage Strategy (drive: Google Drive canonical, local: Local filesystem canonical)
 PDF_STORAGE_MODE = os.environ.get("PDF_STORAGE_MODE", "drive").lower()
+if PDF_STORAGE_MODE not in {"drive", "local"}:
+    PDF_STORAGE_MODE = "drive"
 PDF_CACHE_MAX_GB = int(os.environ.get("PDF_CACHE_MAX_GB", "2"))
+
+# Google Drive 設定
+GOOGLE_DRIVE_FOLDER_NAME = os.environ.get("GOOGLE_DRIVE_FOLDER_NAME", "建築意匠ナレッジDB")
+GOOGLE_DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID") # 指定があればそれを使う
+GOOGLE_DRIVE_CREDENTIALS_JSON = os.environ.get("GOOGLE_DRIVE_CREDENTIALS_JSON") # サービスアカウント用
 
 # ChromaDB保存先
 CHROMA_DB_DIR = str(BASE_DIR / "data" / "chroma")
