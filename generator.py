@@ -343,7 +343,6 @@ def generate_answer_stream(
             raise
     except Exception as e:
         logger.error(f"generate_answer_stream failed: {e}", exc_info=True)
-        yield f"\n\n[生成エラー: {type(e).__name__}]"
         raise
 
 def generate_answer_stream_direct(
@@ -387,5 +386,4 @@ def generate_answer_stream_direct(
             raise
     except Exception as e:
         logger.error(f"generate_answer_stream_direct failed: {e}", exc_info=True)
-        yield f"\n\n[生成エラー: {type(e).__name__}]"
         raise

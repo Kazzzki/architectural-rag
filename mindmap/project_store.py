@@ -8,7 +8,7 @@ import sqlite3
 import uuid
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from contextlib import contextmanager
 
@@ -91,7 +91,7 @@ def init_db():
 def create_project(name: str, template: MindmapTemplate) -> str:
     """テンプレートからプロジェクトをフォーク（差分方式：テンプレートIDのみ保存）"""
     project_id = str(uuid.uuid4())[:8]
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     template_id = template.meta.id if template.meta else template.id
 
@@ -286,7 +286,7 @@ def _add_delta(conn, project_id: str, delta_type: str, target_id: str, data: Dic
     conn.execute(
         """INSERT INTO project_deltas (project_id, delta_type, target_id, data_json, created_at)
            VALUES (?,?,?,?,?)""",
-        (project_id, delta_type, target_id, json.dumps(data, ensure_ascii=False), datetime.now().isoformat())
+        (project_id, delta_type, target_id, json.dumps(data, ensure_ascii=False), datetime.now(timezone.utc).isoformat())
     )
 
 
@@ -401,14 +401,14 @@ def undo(project_id: str) -> Optional[Dict[str, Any]]:
 def _touch_project(conn, project_id: str):
     """updated_atを更新"""
     conn.execute("UPDATE projects SET updated_at = ? WHERE id = ?",
-                 (datetime.now().isoformat(), project_id))
+                 (datetime.now(timezone.utc).isoformat(), project_id)) # Modified
 
 
 def _record_undo(conn, project_id: str, action_type: str, action_data: Dict):
     """undo操作を記録"""
     conn.execute(
         "INSERT INTO undo_history (project_id, action_type, action_data, created_at) VALUES (?,?,?,?)",
-        (project_id, action_type, json.dumps(action_data, ensure_ascii=False), datetime.now().isoformat())
+        (project_id, action_type, json.dumps(action_data, ensure_ascii=False), datetime.now(timezone.utc).isoformat())
     )
 
 

@@ -3,7 +3,7 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -137,7 +137,7 @@ def save_context_sheet(
             char_limit=char_limit,
             truncated=truncated,
             content=content,
-            created_at=datetime.now(),
+            created_at=datetime.now(timezone.utc),
         )
         session.add(sheet)
         session.commit()

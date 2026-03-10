@@ -1,19 +1,21 @@
-"""
-Shared Google Gemini API client (google.genai SDK)
-全モジュールからインポートして使用する。
-APIキーが更新された場合は reconfigure() を呼び出すこと。
-"""
 from google import genai
 from config import GEMINI_API_KEY
+from threading import Lock
 
-_client = genai.Client(api_key=GEMINI_API_KEY)
+_client = None
+_client_lock = Lock()
 
 
 def get_client() -> genai.Client:
-    return _client
+    global _client
+    with _client_lock:
+        if _client is None:
+            _client = genai.Client(api_key=GEMINI_API_KEY)
+        return _client
 
 
 def reconfigure(api_key: str):
     """APIキー更新時にクライアントを再生成"""
     global _client
-    _client = genai.Client(api_key=api_key)
+    with _client_lock:
+        _client = genai.Client(api_key=api_key)

@@ -906,3 +906,12 @@ def process_pdf_background(
     except Exception as e:
         logger.error(f"OCRプロセス全体でエラー ({filepath}): {e}", exc_info=True)
         repo.fail_processing(filepath, str(e))
+    finally:
+        # 最終クリーンアップ (成功・失敗に関わらず一時ファイルを削除)
+        if 'chunks' in locals():
+            for c in chunks:
+                if c.get("is_temp") and c.get("path") and os.path.exists(c["path"]):
+                    try:
+                        os.remove(c["path"])
+                    except OSError:
+                        pass

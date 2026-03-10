@@ -37,11 +37,11 @@ _EMBED_MAX_RETRIES = 4
 _EMBED_BASE_WAIT = 2.0   # 指数バックオフの基準秒数
 
 
-def _embed_batch_with_retry(gemini_client, texts: List[str]) -> List[List[float]]:
+def _embed_batch_with_retry(gemini_client, texts: List[str]) -> Optional[List[List[float]]]:
     """
     テキストリストをバッチで embed_content に渡し、エンベディングを返す。
     レート制限 (429) に対して指数バックオフでリトライする。
-    失敗したチャンクはゼロベクトルで埋めてパイプラインを止めない。
+    失敗した場合は None を返し、呼び出し側でスキップさせる。
     """
     for attempt in range(_EMBED_MAX_RETRIES):
         try:
@@ -53,7 +53,6 @@ def _embed_batch_with_retry(gemini_client, texts: List[str]) -> List[List[float]
             return [e.values for e in res.embeddings]
         except Exception as e:
             err_str = str(e)
-            is_rate_limit = "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower()
             wait = _EMBED_BASE_WAIT ** (attempt + 1)
             if attempt < _EMBED_MAX_RETRIES - 1:
                 logger.warning(
@@ -65,9 +64,8 @@ def _embed_batch_with_retry(gemini_client, texts: List[str]) -> List[List[float]
                 logger.error(
                     f"[DenseIndexer] embed_content gave up after {_EMBED_MAX_RETRIES} attempts: {e}"
                 )
-                # 全件ゼロベクトルで返す（パイプライン継続を優先）
-                return [[0.0] * 768 for _ in texts]
-    return [[0.0] * 768 for _ in texts]
+                return None
+    return None
 
 
 class DenseIndexer:
@@ -120,32 +118,49 @@ class DenseIndexer:
 
         # --- Embedding をバッチ取得 ---
         gemini = get_client()
-        embeddings: List[List[float]] = []
+        final_ids = []
+        final_embeddings = []
+        final_documents = []
+        final_metadatas = []
 
         total = len(documents)
         for batch_start in range(0, total, _EMBED_BATCH_SIZE):
             batch_texts = documents[batch_start: batch_start + _EMBED_BATCH_SIZE]
+            batch_ids = ids[batch_start: batch_start + _EMBED_BATCH_SIZE]
+            batch_metas = metadatas[batch_start: batch_start + _EMBED_BATCH_SIZE]
+            
             batch_end   = batch_start + len(batch_texts)
             logger.info(
                 f"[DenseIndexer] Embedding batch {batch_start+1}–{batch_end}/{total} "
                 f"for version_id={version_id}"
             )
             batch_embeddings = _embed_batch_with_retry(gemini, batch_texts)
-            embeddings.extend(batch_embeddings)
+            
+            if batch_embeddings:
+                final_ids.extend(batch_ids)
+                final_embeddings.extend(batch_embeddings)
+                final_documents.extend(batch_texts)
+                final_metadatas.extend(batch_metas)
+            else:
+                logger.error(f"[DenseIndexer] Skipping batch {batch_start+1}–{batch_end} due to embedding failure")
 
             # バッチ間に短いスリープを挟んでレート制限を回避
             if batch_end < total:
                 time.sleep(0.5)
 
+        if not final_ids:
+            logger.error(f"[DenseIndexer] No embeddings were generated for {version_id}. Aborting upsert.")
+            return
+
         # --- ChromaDB に upsert ---
         self.collection.upsert(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas
+            ids=final_ids,
+            embeddings=final_embeddings,
+            documents=final_documents,
+            metadatas=final_metadatas
         )
         logger.info(
-            f"[DenseIndexer] Indexed {len(ids)} leaf chunks into ChromaDB for {version_id}"
+            f"[DenseIndexer] Indexed {len(final_ids)} leaf chunks into ChromaDB for {version_id}"
         )
 
     def delete_by_version(self, version_id: str):

@@ -325,6 +325,9 @@ export default function Home() {
     const [activeContextRole, setActiveContextRole] = useState<string | null>(null);
     const [isGeneratingSheet, setIsGeneratingSheet] = useState(false);
 
+    // Phase A: リクエストの競合防止とキャンセル管理
+    const abortControllerRef = useRef<AbortController | null>(null);
+    const lastRequestIdRef = useRef<number>(0);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -536,6 +539,16 @@ export default function Home() {
 
         setIsLoading(true);
 
+        // --- Phase A: 前回のリクエストをキャンセル ---
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+        
+        const requestId = ++lastRequestIdRef.current;
+        // ------------------------------------------
+
         try {
             const { chatStream } = await import('../lib/api');
             let accumulatedAnswer = '';
@@ -552,7 +565,11 @@ export default function Home() {
                 model: selectedModel,
                 use_rag: useRag,
                 contextSheet: activeLayerB || undefined,
+                signal: abortController.signal // キャンセル信号を渡す
             })) {
+                // Phase A: 別のリクエストが開始されていたらこのストリームの処理を中断
+                if (requestId !== lastRequestIdRef.current) break;
+
                 if (update.type === 'sources') {
                     currentSources = update.data;
                     setMessages(prev => {
@@ -570,6 +587,15 @@ export default function Home() {
                         const lastMsg = newMessages[newMessages.length - 1];
                         if (lastMsg.role === 'assistant') {
                             lastMsg.content = accumulatedAnswer;
+                        }
+                        return newMessages;
+                    });
+                } else if (update.type === 'error') {
+                    setMessages(prev => {
+                        const newMessages = [...prev];
+                        const lastMsg = newMessages[newMessages.length - 1];
+                        if (lastMsg.role === 'assistant') {
+                            lastMsg.content = `Error: ${update.data}`;
                         }
                         return newMessages;
                     });
@@ -596,17 +622,25 @@ export default function Home() {
                 console.error('Failed to save message:', saveErr);
             }
 
-        } catch (error) {
+        } catch (error: any) {
+            if (error.name === 'AbortError') {
+                console.log('Request aborted');
+                return;
+            }
+            console.error('Chat error:', error);
             setMessages(prev => {
                 const newMessages = [...prev];
                 const lastMsg = newMessages[newMessages.length - 1];
                 if (lastMsg.role === 'assistant') {
-                    lastMsg.content += '\n\n(エラーが発生しました。通信を確認してください)';
+                    lastMsg.content = `System Error: ${error.message}`;
                 }
                 return newMessages;
             });
         } finally {
-            setIsLoading(false);
+            if (requestId === lastRequestIdRef.current) {
+                setIsLoading(false);
+                abortControllerRef.current = null;
+            }
         }
     };
 

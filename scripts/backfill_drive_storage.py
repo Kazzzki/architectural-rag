@@ -4,7 +4,7 @@ import sys
 import logging
 import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # プロジェクトルートをパスに追加
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -92,7 +92,7 @@ def backfill():
                         storage_path=str(pdf_path),
                         drive_file_id=drive_id,
                         storage_type="drive",
-                        created_at=datetime.now()
+                        created_at=datetime.now(timezone.utc)
                     )
                     session.add(artifact)
                 elif artifact:

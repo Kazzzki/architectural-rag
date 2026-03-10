@@ -211,7 +211,7 @@ async def health_check():
     外形監視用ヘルスチェック。
     ChromaDB・SQLite・Gemini API・Google Drive・ファイルストレージの疎通を確認する。
     """
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timezone as _tz
 
     status = {
         "server": "ok",
@@ -287,7 +287,7 @@ async def health_check():
     result = {
         "status": overall,
         "services": status,
-        "timestamp": _dt.now().isoformat(),
+        "timestamp": _dt.now(_tz.utc).isoformat(),
     }
 
     all_ok = overall == "ok"
@@ -410,8 +410,7 @@ def get_ocr_status():
         session = get_session()
         try:
             # processingまたは最近completedになったもの
-            from datetime import datetime, timedelta
-            recent_cutoff = datetime.now() - timedelta(minutes=30)
+            recent_cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
             docs = session.query(Document).filter(
                 (Document.status == "processing") |
                 (Document.status == "failed") |
@@ -637,7 +636,7 @@ async def export_source():
     try:
         import zipfile
         from io import BytesIO
-        from datetime import datetime
+        from datetime import datetime, timezone
         
         # 除外設定
         EXCLUDE_DIRS = {
@@ -667,7 +666,7 @@ async def export_source():
                     zf.write(file_path, arcname)
                     
         zip_buffer.seek(0)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"antigravity_source_{timestamp}.zip"
         
         # FastAPIのResponseだとストリーミングが難しい場合があるので、

@@ -304,8 +304,8 @@ def search(
     if filter_category:
         where_conditions.append({"category": {"$eq": filter_category}})
     if filter_date_range:
-        from datetime import datetime, timedelta
-        now = datetime.now()
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
         delta_map = {"7d": 7, "1m": 30, "3m": 90}
         days = delta_map.get(filter_date_range)
         if days:

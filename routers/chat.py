@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from retriever import search, build_context, get_source_files
 from generator import generate_answer, generate_answer_stream, generate_answer_direct, generate_answer_stream_direct
 from database import get_db, ChatSession, ChatMessage
@@ -58,8 +58,50 @@ def run_memory_pipeline(user_message: str, assistant_response: str, project_id: 
     except Exception as e:
         logger.warning(f"Memory pipeline failed (non-critical): {e}")
 
+def persist_chat_message(session_id: str, user_query: str, assistant_response: str, sources: List[dict], model: str):
+    """メッセージをDBに永続化し、セッションの更新日時を更新する"""
+    from database import SessionLocal, ChatSession, ChatMessage
+    db = SessionLocal()
+    try:
+        session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+        if not session:
+            # セッションがない場合は新規作成（通常は呼ばれないはずだが救済策）
+            session = ChatSession(id=session_id)
+            db.add(session)
+        
+        if not session.title:
+            session.title = user_query[:30]
+
+        # updated_at は onupdate で自動更新されるが、明示的に変更を入れる
+        session.updated_at = datetime.now(timezone.utc)
+        
+        user_msg = ChatMessage(
+            session_id=session_id,
+            role="user",
+            content=user_query,
+            sources=json.dumps([], ensure_ascii=False),
+            model=model
+        )
+        assistant_msg = ChatMessage(
+            session_id=session_id,
+            role="assistant",
+            content=assistant_response,
+            sources=json.dumps(sources, ensure_ascii=False),
+            model=model
+        )
+
+        db.add(user_msg)
+        db.add(assistant_msg)
+        db.commit()
+        logger.info(f"Chat messages persisted for session {session_id}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to persist chat message: {e}")
+    finally:
+        db.close()
+
 @router.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest, background_tasks: BackgroundTasks):
+def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Optional[str] = None):
     """質問に対する回答を生成"""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="質問を入力してください")
@@ -104,6 +146,17 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks):
 
         logger.info(f"Answer generated ({len(answer)} chars)")
         
+        # 永続化タスク
+        if session_id:
+            background_tasks.add_task(
+                persist_chat_message,
+                session_id=session_id,
+                user_query=request.question,
+                assistant_response=answer,
+                sources=source_files,
+                model=request.model
+            )
+
         background_tasks.add_task(
             run_memory_pipeline,
             user_message=request.question,
@@ -121,7 +174,7 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail="Chat processing failed")
 
 @router.post("/api/chat/stream")
-def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
+def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Optional[str] = None):
     """ストリーミング形式で回答を生成 (Phase 2: SSE対応)"""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="質問を入力してください")
@@ -182,17 +235,30 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
             except Exception as e:
                 logger.error(f"Stream generation exception: {e}", exc_info=True)
                 yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+                return
 
-            # [DONE]送信前に蓄積タスクを登録
-            background_tasks.add_task(
-                run_memory_pipeline,
-                user_message=request.question,
-                assistant_response=full_answer,
-                project_id=request.project_id
-            )
+            # [DONE]送信前に蓄積タスクを登録 (正常終了時のみ)
+            if full_answer.strip():
+                # 永続化
+                if session_id:
+                    background_tasks.add_task(
+                        persist_chat_message,
+                        session_id=session_id,
+                        user_query=request.question,
+                        assistant_response=full_answer,
+                        sources=source_files,
+                        model=request.model
+                    )
 
-            # 3. 完了シグナル
-            yield "data: [DONE]\n\n"
+                background_tasks.add_task(
+                    run_memory_pipeline,
+                    user_message=request.question,
+                    assistant_response=full_answer,
+                    project_id=request.project_id
+                )
+
+                # 3. 完了シグナル
+                yield "data: [DONE]\n\n"
         
         return StreamingResponse(
             generate(), 
@@ -217,8 +283,8 @@ class SaveMessagesRequest(BaseModel):
     model: str
 
 @router.get("/api/chat/sessions")
-def get_sessions(db: Session = Depends(get_db)):
-    sessions = db.query(ChatSession).order_by(ChatSession.updated_at.desc()).limit(100).all()
+def get_sessions(limit: int = 100, db: Session = Depends(get_db)):
+    sessions = db.query(ChatSession).order_by(ChatSession.updated_at.desc()).limit(limit).all()
     return [{"id": s.id, "title": s.title, "created_at": s.created_at, "updated_at": s.updated_at} for s in sessions]
 
 @router.post("/api/chat/sessions")
@@ -275,7 +341,7 @@ def save_messages(session_id: str, request: SaveMessagesRequest, db: Session = D
     if not session.title:
         session.title = request.user[:30]
 
-    session.updated_at = datetime.now()
+    session.updated_at = datetime.now(timezone.utc)
     
     user_msg = ChatMessage(
         session_id=session_id,

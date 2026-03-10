@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any
 
@@ -131,8 +132,7 @@ class MetadataEnricher:
                             dv = session_db.query(DocumentVersion).filter(DocumentVersion.id == version_id).first()
                             if dv:
                                 dv.error_message = drive_error_msg
-                                from datetime import datetime
-                                dv.updated_at = datetime.now()
+                                dv.updated_at = datetime.now(timezone.utc)
                                 session_db.commit()
                         finally:
                             session_db.close()

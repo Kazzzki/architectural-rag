@@ -11,7 +11,7 @@ import subprocess
 import time
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import requests
 
 # 環境変数読み込み
@@ -30,7 +30,7 @@ LOG_DIR.mkdir(exist_ok=True)
 
 def log(message: str):
     """ログ出力"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {message}")
     with open(LOG_DIR / "startup.log", "a") as f:
         f.write(f"[{timestamp}] {message}\n")
@@ -201,7 +201,7 @@ def save_url_to_file(tunnel_url: str):
     with open(url_file, "w") as f:
         f.write(f"URL: {tunnel_url}\n")
         f.write(f"Password: {APP_PASSWORD}\n")
-        f.write(f"Started: {datetime.now().isoformat()}\n")
+        f.write(f"Started: {datetime.now(timezone.utc).isoformat()}\n")
     log(f"URL saved to {url_file}")
 
 

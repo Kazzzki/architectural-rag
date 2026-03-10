@@ -7,7 +7,7 @@ import pickle
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import sys
 
 # Python 3.9互換性パッチ
@@ -354,11 +354,11 @@ def upload_recursive(service, local_path: Path, parent_id: str = None, stats: Di
             
             if files:
                 drive_file = files[0]
-                local_mtime = datetime.fromtimestamp(local_path.stat().st_mtime)
+                local_mtime = datetime.fromtimestamp(local_path.stat().st_mtime, tz=timezone.utc)
                 try:
                     drive_mtime = datetime.fromisoformat(
                         drive_file['modifiedTime'].replace('Z', '+00:00')
-                    ).replace(tzinfo=None)
+                    )
                     
                     if local_mtime <= drive_mtime:
                         logger.info(f"  スキップ(変更なし): {local_path.name}")
@@ -578,10 +578,10 @@ def sync_drive_folder(
             local_path = local_dir / file['name']
             
             if local_path.exists():
-                local_mtime = datetime.fromtimestamp(local_path.stat().st_mtime)
+                local_mtime = datetime.fromtimestamp(local_path.stat().st_mtime, tz=timezone.utc)
                 drive_mtime = datetime.fromisoformat(
                     file['modifiedTime'].replace('Z', '+00:00')
-                ).replace(tzinfo=None)
+                )
                 
                 if local_mtime >= drive_mtime:
                     stats['skipped'] += 1

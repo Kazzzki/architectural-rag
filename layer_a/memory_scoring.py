@@ -4,16 +4,20 @@ from typing import List
 logger = logging.getLogger(__name__)
 
 def calculate_recency_score(last_used_at_iso: str, created_at_iso: str) -> float:
-    from datetime import datetime
+    from datetime import datetime, timezone
     try:
         if last_used_at_iso:
             dt = datetime.fromisoformat(last_used_at_iso)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
         elif created_at_iso:
             dt = datetime.fromisoformat(created_at_iso)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
         else:
             return 0.5
             
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         age_days = (now - dt).days
         # Sigmoid decay
         score = max(0.0, 1.0 - (age_days / 365.0))

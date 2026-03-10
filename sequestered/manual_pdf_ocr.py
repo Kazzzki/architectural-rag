@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import argparse
-import google.generativeai as genai
+import google.genai as genai
 import pypdf
 from pathlib import Path
 from dotenv import load_dotenv
@@ -12,19 +12,11 @@ load_dotenv()
 
 # Configuration
 # If config.py is available, we can try to import it, but for standalone script, we'll redefine constants or load from env
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    print("Error: GEMINI_API_KEY not found in environment variables.")
-    sys.exit(1)
+from config import GEMINI_API_KEY, GEMINI_MODEL_OCR as GEMINI_MODEL
+from gemini_client import get_client
 
-# Configure Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-
-# Model Name - using the one specified by user request or config
-GEMINI_MODEL = "gemini-3-flash-preview"  # Using the user-specified model which is available in environment
-# Note: User request said "gemini 3 flash", but currently available models are 1.5-flash and 2.0-flash-exp. 
-# Providing 2.0-flash-exp as it is the latest high performance model.
-# If the user insists on a specific string, they can change this variable.
+# v2 SDK Client
+client = get_client()
 
 def split_pdf(filepath: str, chunk_size: int = 2):
     """Splits a PDF into chunks of `chunk_size` pages."""
@@ -59,22 +51,28 @@ def split_pdf(filepath: str, chunk_size: int = 2):
     return chunks
 
 def call_gemini(model_name: str, file_path: str, mime_type: str, prompt: str):
-    """Calls Gemini API with the given file and prompt."""
-    model = genai.GenerativeModel(model_name)
+    """Calls Gemini API with the given file and prompt using v2 SDK."""
+    from google.genai import types
     
     print(f"Uploading {file_path}...")
-    uploaded_file = genai.upload_file(file_path, mime_type=mime_type)
+    uploaded_file = client.files.upload(path=file_path, config={"mime_type": mime_type})
     
+    file_name = uploaded_file.name
+
     # Wait for processing
-    while uploaded_file.state.name == "PROCESSING":
+    while True:
+        f = client.files.get(name=file_name)
+        if f.state.name == "ACTIVE":
+            break
+        if f.state.name == "FAILED":
+            raise Exception("Google AI File processing failed")
         time.sleep(1)
-        uploaded_file = genai.get_file(uploaded_file.name)
-    
-    if uploaded_file.state.name == "FAILED":
-        raise Exception("Google AI File processing failed")
 
     print(f"Generating content for {file_path}...")
-    response = model.generate_content([prompt, uploaded_file])
+    response = client.models.generate_content(
+        model=model_name,
+        contents=[prompt, uploaded_file]
+    )
     return response.text
 
 def process_pdf(filepath: str, output_path: str = None):

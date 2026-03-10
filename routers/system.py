@@ -34,7 +34,7 @@ def health_check():
     外形監視用ヘルスチェック。
     ChromaDB・SQLite・Gemini API・Google Drive・ファイルストレージの疎通を確認する。
     """
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timezone
     import sys
 
     print("HEALTH CHECK STARTING...", file=sys.stderr)
@@ -125,7 +125,7 @@ def health_check():
     result = {
         "status": overall,
         "services": status,
-        "timestamp": _dt.now().isoformat(),
+        "timestamp": _dt.now(timezone.utc).isoformat(),
     }
 
     all_ok = overall == "ok"
@@ -157,8 +157,8 @@ def get_ocr_status():
         from sqlalchemy import or_
         session = get_session()
         try:
-            from datetime import datetime, timedelta
-            now = datetime.now()
+            from datetime import datetime, timedelta, timezone
+            now = datetime.now(timezone.utc)
             recent_cutoff    = now - timedelta(minutes=30)
             stale_cutoff     = now - timedelta(hours=2)   # スタック検出用: 2時間動きがなければ表示しない
 
@@ -241,8 +241,8 @@ def dismiss_ocr_status(file_path: str):
             ).first()
             if legacy:
                 legacy.status = "dismissed"
-                from datetime import datetime
-                legacy.updated_at = datetime.now()
+                from datetime import datetime, timezone
+                legacy.updated_at = datetime.now(timezone.utc)
 
                 # 新モデル側も合わせて更新
                 if legacy.source_pdf_hash:
@@ -251,7 +251,7 @@ def dismiss_ocr_status(file_path: str):
                     ).first()
                     if doc_ver:
                         doc_ver.ingest_status = "dismissed"
-                        doc_ver.updated_at = datetime.now()
+                        doc_ver.updated_at = datetime.now(timezone.utc)
 
             session.commit()
         finally:
@@ -306,7 +306,7 @@ async def export_source():
                     zf.write(file_path, arcname)
                     
         zip_buffer.seek(0)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"antigravity_source_{timestamp}.zip"
         
         return StreamingResponse(

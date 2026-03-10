@@ -1,6 +1,6 @@
 import uuid
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 import logging
 
@@ -45,8 +45,8 @@ class MetadataRepository:
                     file_size=file_size,
                     file_type=filename.split('.')[-1].lower() if '.' in filename else '',
                     status="accepted",
-                    created_at=datetime.now(),
-                    updated_at=datetime.now()
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc)
                 )
                 session.add(doc_legacy)
             else:
@@ -55,7 +55,7 @@ class MetadataRepository:
                 doc_legacy.file_size = file_size
                 doc_legacy.status = "accepted"
                 doc_legacy.error_message = None
-                doc_legacy.updated_at = datetime.now()
+                doc_legacy.updated_at = datetime.now(timezone.utc)
             
             session.flush()  # ID取得のためflush
 
@@ -67,8 +67,8 @@ class MetadataRepository:
             if not doc_new:
                 doc_new = Document(
                     title=base_title,
-                    created_at=datetime.now(),
-                    updated_at=datetime.now()
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc)
                 )
                 session.add(doc_new)
                 session.flush()
@@ -83,15 +83,15 @@ class MetadataRepository:
                 doc_version.ingest_status = "accepted"
                 doc_version.searchable = False
                 doc_version.error_message = None
-                doc_version.updated_at = datetime.now()
+                doc_version.updated_at = datetime.now(timezone.utc)
             else:
                 doc_version = DocumentVersion(
                     document_id=doc_new.id,
                     version_hash=source_pdf_hash,
                     ingest_status="accepted",
                     searchable=False,
-                    created_at=datetime.now(),
-                    updated_at=datetime.now()
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc)
                 )
                 session.add(doc_version)
             session.flush()
@@ -103,7 +103,7 @@ class MetadataRepository:
                 mime_type=mime_type,
                 file_size=file_size,
                 source_kind=source_kind,
-                created_at=datetime.now()
+                created_at=datetime.now(timezone.utc)
             )
             session.add(upload)
 
@@ -134,7 +134,7 @@ class MetadataRepository:
                 storage_path=storage_path,
                 drive_file_id=drive_file_id,
                 storage_type=storage_type,
-                created_at=datetime.now()
+                created_at=datetime.now(timezone.utc)
             )
             session.add(artifact)
             session.commit()
@@ -155,7 +155,7 @@ class MetadataRepository:
             doc_ver = session.query(DocumentVersion).filter(DocumentVersion.id == version_id).first()
             if doc_ver:
                 doc_ver.ingest_status = status
-                doc_ver.updated_at = datetime.now()
+                doc_ver.updated_at = datetime.now(timezone.utc)
                 session.commit()
         except Exception as e:
             session.rollback()
@@ -174,7 +174,7 @@ class MetadataRepository:
                 doc.status = next_stage
                 if total_pages > 0:
                     doc.total_pages = total_pages
-                doc.updated_at = datetime.now()
+                doc.updated_at = datetime.now(timezone.utc)
                 session.commit()
         except Exception as e:
             session.rollback()
@@ -191,7 +191,7 @@ class MetadataRepository:
             doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == filepath).first()
             if doc:
                 doc.processed_pages = processed_pages
-                doc.updated_at = datetime.now()
+                doc.updated_at = datetime.now(timezone.utc)
                 session.commit()
         except Exception as e:
             session.rollback()
@@ -208,15 +208,15 @@ class MetadataRepository:
             doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == filepath).first()
             if doc:
                 doc.status = "completed"
-                doc.last_indexed_at = datetime.now()
-                doc.updated_at = datetime.now()
+                doc.last_indexed_at = datetime.now(timezone.utc)
+                doc.updated_at = datetime.now(timezone.utc)
                 
                 # 新モデルのStatusもSearchableにできればする
                 doc_ver = session.query(DocumentVersion).filter(DocumentVersion.version_hash == doc.source_pdf_hash).first()
                 if doc_ver:
                     doc_ver.searchable = True
                     doc_ver.ingest_status = "searchable"
-                    doc_ver.updated_at = datetime.now()
+                    doc_ver.updated_at = datetime.now(timezone.utc)
                 
                 session.commit()
         except Exception as e:
@@ -235,14 +235,14 @@ class MetadataRepository:
             if doc:
                 doc.status = "failed"
                 doc.error_message = error_msg
-                doc.updated_at = datetime.now()
+                doc.updated_at = datetime.now(timezone.utc)
                 
                 # 新モデルのErrorも更新
                 doc_ver = session.query(DocumentVersion).filter(DocumentVersion.version_hash == doc.source_pdf_hash).first()
                 if doc_ver:
                     doc_ver.ingest_status = "failed"
                     doc_ver.error_message = error_msg
-                    doc_ver.updated_at = datetime.now()
+                    doc_ver.updated_at = datetime.now(timezone.utc)
                 
                 session.commit()
         except Exception as e:

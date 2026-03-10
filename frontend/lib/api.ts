@@ -16,6 +16,7 @@ export interface SourceFile {
 export type StreamUpdate =
     | { type: 'sources'; data: SourceFile[] }
     | { type: 'answer'; data: string }
+    | { type: 'error'; data: string }
     | { type: 'truncation_warning'; data: string }
     | { type: 'saved'; id: number }
     | { type: 'done' };
@@ -177,7 +178,7 @@ export async function saveMessages(sessionId: string, payload: SaveMessagePayloa
     if (!res.ok) throw new Error(`Failed to save messages for session: ${res.statusText}`);
 }
 
-/** チャットストリーム（モデル選択・コンテキストシート注入対応） */
+/** チャットストリーム（モデル選択・コンテキストシート注入対応・キャンセル対応） */
 export async function* chatStream(params: {
     question: string;
     session_id?: string;
@@ -193,6 +194,7 @@ export async function* chatStream(params: {
     project_id?: string | null;
     scope_mode?: string;
     use_rag?: boolean;
+    signal?: AbortSignal;
 }): AsyncGenerator<StreamUpdate> {
     const {
         question,
@@ -209,6 +211,7 @@ export async function* chatStream(params: {
         project_id,
         scope_mode,
         use_rag = true,
+        signal,
     } = params;
 
     const response = await fetch(`${API_BASE}/api/chat/stream`, {
@@ -230,9 +233,16 @@ export async function* chatStream(params: {
             scope_mode: scope_mode || 'auto',
             use_rag: use_rag,
         }),
+        signal
     });
-    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-    yield* _readSSEStream(response);
+    
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(err.detail || `API Error: ${response.statusText}`);
+    }
+    
+    if (!response.body) throw new Error('Response body is null');
+    yield* _readSSEStream(response.body);
 }
 
 /** コンテキストシート生成（複数ファイル対応SSEストリーム） */
@@ -253,7 +263,8 @@ export async function* contextSheetStream(params: {
         const err = await response.json().catch(() => ({ detail: response.statusText }));
         throw new Error(err.detail || `API Error: ${response.statusText}`);
     }
-    yield* _readSSEStream(response);
+    if (!response.body) throw new Error('Response body is null');
+    yield* _readSSEStream(response.body);
 }
 
 /** 保存済みコンテキストシート一覧を取得 */
@@ -276,42 +287,65 @@ export async function deleteContextSheet(id: number): Promise<void> {
     if (!res.ok) throw new Error(`Failed to delete context sheet ${id}: ${res.statusText}`);
 }
 
-/** 共通SSEリーダー */
-async function* _readSSEStream(response: Response): AsyncGenerator<StreamUpdate> {
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('Response body is null');
+/**
+ * SSEストリームを読み込み、イベント単位でパースする共通ヘルパー。
+ */
+async function* _readSSEStream(stream: ReadableStream<Uint8Array>): AsyncGenerator<StreamUpdate> {
+    const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-        for (const line of lines) {
-            if (line.trim() === '') continue;
-            if (line.startsWith('event: error')) {
-                // Next line should be data: {"error": "..."}
-                continue;
-            }
-            if (line.startsWith('data: ')) {
-                const dataStr = line.slice(6);
-                if (dataStr === '[DONE]') { yield { type: 'done' }; return; }
-                try {
-                    const parsed = JSON.parse(dataStr);
-                    if (parsed.error) {
-                        throw new Error(parsed.error);
+            buffer += decoder.decode(value, { stream: true });
+            
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop() || '';
+
+            for (const part of parts) {
+                if (!part.trim()) continue;
+
+                let eventName = 'message';
+                let dataContent = '';
+                
+                const lines = part.split('\n');
+                for (const line of lines) {
+                    if (line.startsWith('event:')) {
+                        eventName = line.replace('event:', '').trim();
+                    } else if (line.startsWith('data:')) {
+                        const content = line.replace('data:', '').trim();
+                        dataContent += (dataContent ? '\n' : '') + content;
                     }
-                    yield parsed;
-                } catch (e) {
-                    if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
-                        throw e; // throw backend errors to be caught in page.tsx
+                }
+
+                if (dataContent === '[DONE]') {
+                    yield { type: 'done' };
+                    return;
+                }
+
+                if (dataContent) {
+                    try {
+                        const data = JSON.parse(dataContent);
+                        if (eventName === 'error') {
+                            yield { type: 'error', data: data.error || 'Unknown streaming error' };
+                        } else if (data.type && data.data) {
+                            yield data as StreamUpdate;
+                        } else if (data.text) {
+                            yield { type: 'answer', data: data.text };
+                        } else {
+                            yield data as StreamUpdate;
+                        }
+                    } catch (e) {
+                        yield { type: 'answer', data: dataContent };
                     }
-                    console.warn('SSE parse error:', e);
                 }
             }
         }
+    } finally {
+        reader.cancel().catch(() => {});
+        reader.releaseLock();
     }
 }

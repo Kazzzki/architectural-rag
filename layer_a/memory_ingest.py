@@ -2,7 +2,7 @@ import logging
 import hashlib
 import json
 from typing import List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config import MEMORY_V2_ENABLED, MEMORY_V2_WRITE_ENABLED
 from database import SessionLocal
@@ -120,9 +120,9 @@ def ingest_conversation(
                 "salience": max(candidate.salience_flags != ["none"], 0.0), # 簡易
                 "utility_score": util_score,
                 "support_count": 1,
-                "first_seen_at": datetime.now(),
-                "last_seen_at": datetime.now(),
-                "last_used_at": datetime.now(),
+                "first_seen_at": datetime.now(timezone.utc),
+                "last_seen_at": datetime.now(timezone.utc),
+                "last_used_at": datetime.now(timezone.utc),
                 "source_hash": source_hash
             }
 
@@ -153,8 +153,8 @@ def ingest_conversation(
                                 setattr(existing_item, k, v)
                     
                     existing_item.support_count += 1
-                    existing_item.last_confirmed_at = datetime.now()
-                    existing_item.last_seen_at = datetime.now()
+                    existing_item.last_confirmed_at = datetime.now(timezone.utc)
+                    existing_item.last_seen_at = datetime.now(timezone.utc)
                     
                     db.commit()
                     db.refresh(existing_item)

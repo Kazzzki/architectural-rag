@@ -9,7 +9,7 @@ import json
 import logging
 import hashlib
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -162,7 +162,7 @@ def scan_files(base_dir: Path = SEARCH_MD_DIR) -> List[Dict[str, Any]]:
             "sub_subcategory": sub_subcategory,
             "file_type":      filepath.suffix.lower().lstrip('.'),
             "file_size_kb":   round(filepath.stat().st_size / 1024, 2),
-            "modified_at":    datetime.fromtimestamp(filepath.stat().st_mtime).isoformat(),
+            "modified_at":    datetime.fromtimestamp(filepath.stat().st_mtime, tz=timezone.utc).isoformat(),
             "doc_type":       doc_type,
         })
 
@@ -460,7 +460,7 @@ def _upsert_doc_index(rel_path: str, file_info: Dict[str, Any], chunk_count: int
             session.add(doc)
         doc.file_hash    = file_info.get("modified_at", "")
         doc.chunk_count  = chunk_count
-        doc.last_indexed_at = datetime.now()
+        doc.last_indexed_at = datetime.now(timezone.utc)
         doc.file_size    = int(file_info.get("file_size_kb", 0) * 1024)
         doc.category     = file_info.get("category", "")
         doc.subcategory  = file_info.get("subcategory", "")
@@ -468,7 +468,7 @@ def _upsert_doc_index(rel_path: str, file_info: Dict[str, Any], chunk_count: int
         doc.source_pdf_hash = file_info.get("source_pdf_hash", "")
         doc.source_pdf_name = file_info.get("source_pdf_name", "")
         doc.drive_file_id = file_info.get("drive_file_id", "")
-        doc.updated_at   = datetime.now()
+        doc.updated_at   = datetime.now(timezone.utc)
         session.commit()
     except Exception as e:
         session.rollback()
@@ -659,7 +659,7 @@ def reindex_from_pdfs(progress_interval: int = 10) -> Dict[str, Any]:
                 "sub_subcategory": "",
                 "file_type":       "pdf",
                 "file_size_kb":    round(pdf_path.stat().st_size / 1024, 2),
-                "modified_at":     datetime.fromtimestamp(pdf_path.stat().st_mtime).isoformat(),
+                "modified_at":     datetime.fromtimestamp(pdf_path.stat().st_mtime, tz=timezone.utc).isoformat(),
                 "doc_type":        doc_type,
                 "source_pdf_hash": pdf_hash,
                 "source_pdf_name": pdf_name,
@@ -728,7 +728,7 @@ def index_file(filepath: str) -> Dict[str, Any]:
         "sub_subcategory": parts[2] if len(parts) > 3 else "",
         "file_type":      path.suffix.lower().lstrip("."),
         "file_size_kb":   round(path.stat().st_size / 1024, 2),
-        "modified_at":    datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+        "modified_at":    datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
         "doc_type":       _infer_doc_type(category, path.name),
     }
 

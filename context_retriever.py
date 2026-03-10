@@ -18,7 +18,7 @@ def get_relevant_personal_contexts(question: str, max_items: int = 3) -> List[Di
         from config import MEMORY_V2_ENABLED, MEMORY_V2_READ_ENABLED
         if MEMORY_V2_ENABLED and MEMORY_V2_READ_ENABLED:
             from layer_a.memory_retrieve import retrieve_context
-            from datetime import datetime
+            from datetime import datetime, timezone
             
             res = retrieve_context(user_id="default", query=question)
             
@@ -36,7 +36,7 @@ def get_relevant_personal_contexts(question: str, max_items: int = 3) -> List[Di
                     "id": "mem_v2",
                     "type": "layered_memory",
                     "content": full_text,
-                    "updated_at": datetime.now().isoformat()
+                    "updated_at": datetime.now(timezone.utc).isoformat()
                 }]
                 
         # シンプルに2文字以上の単語（漢字・カタカナ・英数字など）を抽出して検索キーワードとする

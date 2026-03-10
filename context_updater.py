@@ -113,7 +113,7 @@ JSONブロック（```json ... ```）のみを出力してください：
                 pass
                 
             elif decision == "MERGE" and target_id is not None and merged_content:
-                now_str = datetime.datetime.now().isoformat()
+                now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
                 merge_log = {
                     "merged_at": now_str,
                     "original": candidate.get("content"),

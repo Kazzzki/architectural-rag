@@ -8,7 +8,7 @@ import json
 import os
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -31,8 +31,8 @@ class Document(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     canonical_id = Column(String, nullable=True, unique=True)
     title = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 class DocumentVersion(Base):
     """
@@ -46,8 +46,8 @@ class DocumentVersion(Base):
     ingest_status = Column(String, nullable=False, default="accepted") # accepted, ocr_processing, classified, searchable, etc.
     drive_status = Column(String, nullable=True) # pending, synced, error
     searchable = Column(Boolean, nullable=False, default=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
-    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     error_message = Column(Text, nullable=True)
 
 class Upload(Base):
@@ -62,7 +62,7 @@ class Upload(Base):
     mime_type = Column(String, nullable=False)
     file_size = Column(Integer, nullable=False)
     source_kind = Column(String, nullable=False) # 'pdf', 'image', 'document'
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class Artifact(Base):
     """
@@ -76,7 +76,7 @@ class Artifact(Base):
     storage_path = Column(Text, nullable=False)
     drive_file_id = Column(String, nullable=True)
     storage_type = Column(String, nullable=False, default='local') # local, drive
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 class Job(Base):
     """
@@ -88,7 +88,7 @@ class Job(Base):
     version_id = Column(String, ForeignKey('document_versions.id'), nullable=True)
     job_type = Column(String, nullable=False) # 'ingest', 'drive_sync', 'reindex'
     status = Column(String, nullable=False, default="queued") # queued, running, completed, failed
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime, nullable=True)
     error_message = Column(Text, nullable=True)
 
@@ -123,8 +123,8 @@ class LegacyDocument(Base):
     last_indexed_at = Column(DateTime, nullable=True)
 
     # --- タイムスタンプ ---
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # --- Google Drive連携用 ---
     drive_file_id = Column(String, nullable=True)
@@ -147,8 +147,8 @@ class PersonalContext(Base):
     project_tag = Column(String, nullable=True)                  # プロジェクト名（任意）
     source_question = Column(Text, nullable=True)                    # 元になったユーザー発言
     merge_history = Column(Text, nullable=True)                    # JSON: 過去にマージされた内容のログ
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     is_active = Column(Boolean, default=True)   # 無効化フラグ
 
 
@@ -164,7 +164,7 @@ class ContextSheet(Base):
     char_limit = Column(Integer, default=80000)      # 使用した文字数上限
     truncated  = Column(Boolean, default=False)      # 圧縮が発生したか
     content    = Column(Text, nullable=True)         # 生成されたシート本文
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class ChatSession(Base):
@@ -173,8 +173,8 @@ class ChatSession(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     title = Column(String, nullable=True)        # 最初のユーザー発言先頭30文字から自動生成
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
 
@@ -189,7 +189,7 @@ class ChatMessage(Base):
     content = Column(Text, nullable=False)       # 発言内容
     sources = Column(Text, nullable=True)        # JSON文字列 (参照ファイルリスト)
     model = Column(String, nullable=True)        # 使用モデル名
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     session = relationship("ChatSession", back_populates="messages")
 
@@ -223,8 +223,8 @@ class MemoryItem(Base):
     expires_at = Column(DateTime, nullable=True)
     supersedes_id = Column(String, nullable=True)
     source_hash = Column(String, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
-    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     __table_args__ = (
         Index('idx_memory_items_user_type_status', 'user_id', 'memory_type', 'status'),
@@ -245,7 +245,7 @@ class MemoryEvidence(Base):
     quote_text = Column(Text, nullable=True)
     evidence_strength = Column(Float, nullable=False, default=0.0)
     occurred_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index('idx_memory_evidence_memory', 'memory_item_id'),
@@ -281,7 +281,7 @@ class MemoryHistory(Base):
     reason = Column(Text, nullable=True)
     actor = Column(String, nullable=False, default='system')
     prompt_version = Column(String, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index('idx_memory_history_item', 'memory_item_id'),
@@ -300,7 +300,7 @@ class MemoryCompactionRun(Base):
     output_memory_item_id = Column(String, nullable=True)
     status = Column(String, nullable=False)
     error_text = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime, nullable=True)
 
 
@@ -315,7 +315,7 @@ class MemoryIngestionRun(Base):
     extracted_count = Column(Integer, nullable=False, default=0)
     saved_count = Column(Integer, nullable=False, default=0)
     error_text = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
@@ -328,7 +328,7 @@ class Settings(Base):
     __tablename__ = 'settings'
     key = Column(String, primary_key=True)
     value = Column(String, nullable=False)
-    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 class ProjectProfile(Base):
     __tablename__ = 'project_profiles'
@@ -343,8 +343,8 @@ class ProjectProfile(Base):
     current_issues = Column(String, default='')
     rag_notes = Column(String, default='')
     source_json = Column(Text, default='{}')
-    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index('idx_project_profiles_user', 'user_id'),
@@ -358,7 +358,7 @@ class ProjectView(Base):
     content_text = Column(String, nullable=False)
     token_estimate = Column(Integer, nullable=False, default=0)
     source_version_hash = Column(String, nullable=False)
-    generated_at = Column(DateTime, nullable=False, default=datetime.now)
+    generated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 class MemoryScopeLink(Base):
     __tablename__ = 'memory_scope_links'
@@ -369,7 +369,7 @@ class MemoryScopeLink(Base):
     scope_id = Column(String, nullable=False)
     relation_type = Column(String, nullable=False, default='primary')
     weight = Column(Float, nullable=False, default=1.0)
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index('idx_memory_scope_links_scope', 'user_id', 'scope_type', 'scope_id'),

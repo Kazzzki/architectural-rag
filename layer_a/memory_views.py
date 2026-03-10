@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, List
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -66,7 +66,7 @@ def regenerate_views(user_id: str, db_session: Session = None) -> Dict[str, Any]
         
         # Save Views
         # generate simple version hash based on item count and latest update
-        latest_update = max((i.updated_at for i in active_items if i.updated_at), default=datetime.now())
+        latest_update = max((i.updated_at for i in active_items if i.updated_at), default=datetime.now(timezone.utc))
         version_hash = f"v_{len(active_items)}_{latest_update.timestamp()}"
         
         if "core_200" in data:

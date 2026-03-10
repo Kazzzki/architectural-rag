@@ -1,6 +1,6 @@
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import uuid
 
@@ -113,7 +113,7 @@ def add_memory_evidence(
         conversation_id=conversation_id,
         quote_text=quote_text,
         evidence_strength=evidence_strength,
-        occurred_at=datetime.now()
+        occurred_at=datetime.now(timezone.utc)
     )
     db.add(evidence)
     return evidence
@@ -138,7 +138,7 @@ def save_memory_view(
         view.content_text = content_text
         view.source_version_hash = source_version_hash
         view.token_estimate = token_estimate
-        view.generated_at = datetime.now()
+        view.generated_at = datetime.now(timezone.utc)
     else:
         view = MemoryView(
             id=generate_id(),
@@ -147,7 +147,7 @@ def save_memory_view(
             content_text=content_text,
             token_estimate=token_estimate,
             source_version_hash=source_version_hash,
-            generated_at=datetime.now()
+            generated_at=datetime.now(timezone.utc)
         )
         db.add(view)
     return view
@@ -192,7 +192,7 @@ def complete_ingestion_run(db: Session, run_id: str, extracted_count: int, saved
         run.status = 'completed'
         run.extracted_count = extracted_count
         run.saved_count = saved_count
-        run.completed_at = datetime.now()
+        run.completed_at = datetime.now(timezone.utc)
         db.commit()
 
 def fail_ingestion_run(db: Session, run_id: str, error_text: str):
@@ -201,5 +201,5 @@ def fail_ingestion_run(db: Session, run_id: str, error_text: str):
     if run:
         run.status = 'failed'
         run.error_text = error_text
-        run.completed_at = datetime.now()
+        run.completed_at = datetime.now(timezone.utc)
         db.commit()

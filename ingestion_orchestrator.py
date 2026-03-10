@@ -51,8 +51,8 @@ class IngestionOrchestrator:
             
             # ocr_processor は同期ブロックするか、あるいは dispatch_next_stage を呼び出す
         except Exception as e:
-            logger.error(f"[Orchestrator] OCR stage failed: {e}", exc_info=True)
-            self.repo.fail_processing(file_path, str(e))
+            logger.error(f"[Orchestrator] OCR stage failed for {file_path}: {e}", exc_info=True)
+            self.repo.fail_processing(file_path, f"[OCR Stage Error] {str(e)}")
 
     def dispatch_next_stage(self, version_id: str, current_stage: str, **kwargs):
         """
@@ -171,8 +171,8 @@ class IngestionOrchestrator:
                     logger.info(f"[Orchestrator] Pipeline finished successfully for {version_id}")
                     
                 except Exception as e:
-                    logger.error(f"[Orchestrator] Chunking/Indexing failed: {e}", exc_info=True)
-                    self.repo.fail_processing(original_filepath, str(e))
+                    logger.error(f"[Orchestrator] Chunking/Indexing failed for {version_id}: {e}", exc_info=True)
+                    self.repo.fail_processing(original_filepath, f"[Indexing Stage Error] {str(e)}")
                 
         except Exception as e:
             logger.error(f"[Orchestrator] Pipeline failed at dispatch after {current_stage}: {e}", exc_info=True)
