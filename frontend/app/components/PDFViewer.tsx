@@ -1,14 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, X, Loader2, AlertCircle, Download } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { getAuthHeaders } from '@/lib/api';
 
-// Worker setup: pdfjs-dist v5.x は .mjs 形式。CDN経由で確実に読み込む
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// Worker setup: public/ にコピーしたローカルWorkerを使用する。
+// CDN (unpkg) は以下の理由で使わない:
+//   1. ネットワーク環境・CSPによりブロックされる場合がある
+//   2. バージョン不一致が起きると "The API version does not match" エラーになる
+// public/pdf.worker.min.mjs は node_modules/pdfjs-dist/build/pdf.worker.min.mjs と同一ファイル。
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 interface PDFViewerProps {
     url: string | null;
@@ -24,6 +28,89 @@ export default function PDFViewer({ url, initialPage = 1, onClose }: PDFViewerPr
     const [loadError, setLoadError] = useState<string | null>(null);
     const [isDownloading, setIsDownloading] = useState(false);
 
+    // PDF バイナリを authFetch で取得し Blob URL として保持する。
+    // react-pdf の Document コンポーネントは内部で pdfjs Worker を使って
+    // PDF を fetch するが、Worker スレッドは window.fetch のパッチ (AuthProvider)
+    // が効かないため Authorization ヘッダーが付かず BasicAuth 環境で 401 になる。
+    // 解決策: メインスレッドで認証付き fetch → ArrayBuffer → BlobURL に変換して渡す。
+    const [blobUrl, setBlobUrl] = useState<string | null>(null);
+    const prevBlobUrlRef = useRef<string | null>(null);
+    const [retryCount, setRetryCount] = useState(0);
+
+    useEffect(() => {
+        // url が変わったら前回の BlobURL を解放
+        return () => {
+            if (prevBlobUrlRef.current) {
+                URL.revokeObjectURL(prevBlobUrlRef.current);
+                prevBlobUrlRef.current = null;
+            }
+        };
+    }, [url]);
+
+    useEffect(() => {
+        if (!url) {
+            setBlobUrl(null);
+            return;
+        }
+
+        let cancelled = false;
+
+        const fetchPdf = async () => {
+            setIsLoading(true);
+            setLoadError(null);
+            setBlobUrl(null);
+
+            try {
+                const headers = getAuthHeaders();
+                const response = await fetch(url, { headers });
+
+                if (cancelled) return;
+
+                if (!response.ok) {
+                    const statusText = response.statusText || String(response.status);
+                    if (response.status === 401 || response.status === 403) {
+                        throw new Error(`認証エラー (${response.status})。NEXT_PUBLIC_API_PASSWORDを確認してください。`);
+                    } else if (response.status === 404) {
+                        throw new Error(`PDFファイルが見つかりません (404)。ファイルが処理中か、パスが変更された可能性があります。`);
+                    }
+                    throw new Error(`サーバーエラー: ${statusText} (${response.status})`);
+                }
+
+                const blob = await response.blob();
+                if (cancelled) return;
+
+                // 前回の BlobURL を解放
+                if (prevBlobUrlRef.current) {
+                    URL.revokeObjectURL(prevBlobUrlRef.current);
+                }
+
+                const newBlobUrl = URL.createObjectURL(blob);
+                prevBlobUrlRef.current = newBlobUrl;
+                setBlobUrl(newBlobUrl);
+            } catch (err) {
+                if (cancelled) return;
+                const msg = err instanceof Error ? err.message : 'PDFの取得に失敗しました';
+                let friendly = msg;
+                if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.toLowerCase().includes('network')) {
+                    friendly = 'ネットワークエラー。バックエンドサーバーが起動しているか確認してください。';
+                }
+                setLoadError(friendly);
+                setIsLoading(false);
+            }
+        };
+
+        fetchPdf();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [url, retryCount]);
+
+    // url/initialPage が変わったらページ番号をリセット
+    useEffect(() => {
+        setPageNumber(Math.max(1, initialPage));
+    }, [initialPage, url]);
+
     const handleDownload = async () => {
         if (!url || isDownloading) return;
 
@@ -31,7 +118,6 @@ export default function PDFViewer({ url, initialPage = 1, onClose }: PDFViewerPr
         try {
             const fileName = decodeURIComponent(url.split('/').pop()?.split('#')[0] || 'document.pdf');
             const headers = getAuthHeaders();
-
             const response = await fetch(url, { headers });
 
             if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
@@ -53,33 +139,19 @@ export default function PDFViewer({ url, initialPage = 1, onClose }: PDFViewerPr
         }
     };
 
-    useEffect(() => {
-        setPageNumber(Math.max(1, initialPage));
-        setLoadError(null);
-        setIsLoading(true);
-    }, [initialPage, url]);
-
     function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
         setNumPages(numPages);
         setIsLoading(false);
         setLoadError(null);
-        // 読み込み完了後、ページ番号が範囲内に収まるよう調整
         setPageNumber(prev => Math.max(1, Math.min(prev, numPages)));
     }
 
     function onDocumentLoadError(error: Error) {
-        console.error('Error loading PDF:', error, 'URL:', url);
+        console.error('PDFViewer: react-pdf load error:', error, 'blobUrl:', blobUrl);
         setIsLoading(false);
-        // react-pdf の生エラーは難解なので日本語メッセージに変換
-        let msg = error.message || 'PDFの読み込みに失敗しました';
-        if (msg.includes('404') || msg.includes('Not Found')) {
-            msg = 'PDFファイルが見つかりません (404)。ファイルが処理中か、パスが変更された可能性があります。';
-        } else if (msg.includes('401') || msg.includes('403') || msg.includes('Unauthorized') || msg.includes('Forbidden')) {
-            msg = '認証エラー。ページを再読み込みしてください (401/403)。';
-        } else if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network')) {
-            msg = 'ネットワークエラー。バックエンドサーバーが起動しているか確認してください。';
-        } else if (msg.includes('Invalid PDF') || msg.includes('MissingPDFException')) {
-            msg = '無効なPDFファイルです。OCR処理が完了していない可能性があります。';
+        let msg = error.message || 'PDFの解析に失敗しました';
+        if (msg.includes('Invalid PDF') || msg.includes('MissingPDF') || msg.includes('UnexpectedResponseException')) {
+            msg = '無効なPDFデータです。OCR処理が完了していないか、ファイルが壊れている可能性があります。';
         }
         setLoadError(msg);
     }
@@ -96,20 +168,15 @@ export default function PDFViewer({ url, initialPage = 1, onClose }: PDFViewerPr
         );
     }
 
-    // 認証ヘッダーを react-pdf の file prop に渡す
-    const fileWithAuth = {
-        url,
-        httpHeaders: getAuthHeaders(),
-        withCredentials: false,
-    };
+    const displayName = decodeURIComponent(url.split('/').pop()?.split('?')[0]?.split('#')[0] || 'Document');
 
     return (
         <div className="flex flex-col h-full bg-gray-100 border-l border-gray-200 relative">
             {/* Toolbar */}
             <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200 shadow-sm z-10">
                 <div className="flex items-center gap-4">
-                    <span className="text-sm font-medium text-gray-700 truncate max-w-[200px]" title={url}>
-                        {decodeURIComponent(url.split('/').pop()?.split('#')[0] || 'Document')}
+                    <span className="text-sm font-medium text-gray-700 truncate max-w-[200px]" title={displayName}>
+                        {displayName}
                     </span>
 
                     <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
@@ -182,6 +249,8 @@ export default function PDFViewer({ url, initialPage = 1, onClose }: PDFViewerPr
                                 onClick={() => {
                                     setLoadError(null);
                                     setIsLoading(true);
+                                    setBlobUrl(null);
+                                    setRetryCount(c => c + 1);
                                 }}
                                 className="text-xs bg-blue-500 text-white px-3 py-1.5 rounded hover:bg-blue-600 transition-colors"
                             >
@@ -197,15 +266,22 @@ export default function PDFViewer({ url, initialPage = 1, onClose }: PDFViewerPr
                             </a>
                         </div>
                     </div>
+                ) : !blobUrl ? (
+                    <div className="flex items-center justify-center w-[600px] min-h-[500px] bg-white rounded shadow-lg">
+                        <div className="flex flex-col items-center gap-2 text-gray-400">
+                            <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+                            <span className="text-xs">PDFを読み込み中...</span>
+                        </div>
+                    </div>
                 ) : (
                     <div className="relative shadow-lg">
                         <Document
-                            file={fileWithAuth}
+                            file={blobUrl}
                             onLoadSuccess={onDocumentLoadSuccess}
                             onLoadError={onDocumentLoadError}
                             loading={
                                 <div className="flex items-center justify-center w-[600px] min-h-[500px] bg-white">
-                                    <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+                                    <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
                                 </div>
                             }
                             className="bg-white min-h-[500px]"
