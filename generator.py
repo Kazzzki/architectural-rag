@@ -78,6 +78,37 @@ def build_system_prompt() -> str:
 # フロントから受け取る会話履歴の1件あたりの最大文字数（長い回答を切り詰めてトークン節約）
 _HISTORY_MAX_CONTENT_CHARS = 2000
 
+def extract_web_sources_from_grounding_metadata(grounding_metadata) -> List[Dict[str, str]]:
+    """Geminiのgrounding_metadataからウェブソースのタイトルとURLを抽出する"""
+    if not grounding_metadata:
+        return []
+    
+    sources = []
+    seen_urls = set()
+    
+    # attribute形式またはdict形式の両方に対応
+    chunks = getattr(grounding_metadata, 'grounding_chunks', [])
+    if not chunks and isinstance(grounding_metadata, dict):
+        chunks = grounding_metadata.get('grounding_chunks', [])
+    
+    for chunk in chunks:
+        web = getattr(chunk, 'web', None)
+        if web is None and isinstance(chunk, dict):
+            web = chunk.get('web')
+        
+        if web:
+            title = getattr(web, 'title', "") or (web.get('title') if isinstance(web, dict) else "")
+            uri = getattr(web, 'uri', "") or (web.get('uri') if isinstance(web, dict) else "")
+            
+            if uri and uri not in seen_urls:
+                sources.append({
+                    "title": title or uri or "Untitled",
+                    "url": uri
+                })
+                seen_urls.add(uri)
+    
+    return sources
+
 
 def _build_contents(
     user_prompt: str,
@@ -132,7 +163,8 @@ def generate_answer(
     project_id: Optional[str] = None,
     scope_mode: str = "auto",
     user_id: str = "mock_user",  # TODO: extract real user_id
-) -> str:
+    use_web_search: bool = False,
+) -> Any:
     """Gemini APIで回答を生成（会話履歴対応）"""
 
     try:
@@ -193,13 +225,27 @@ def generate_answer(
 
         client = get_client()
         contents = _build_contents(user_prompt, history)
+        
         config = types.GenerateContentConfig(
             system_instruction=local_system_prompt,
             temperature=TEMPERATURE,
             max_output_tokens=MAX_TOKENS,
+            tools=[types.Tool(google_search=types.GoogleSearch())] if use_web_search else None,
         )
         response = _call_gemini_generate(client, model, contents, config)
-        return response.text
+        
+        answer_text = response.text
+        if use_web_search:
+            grounding_metadata = None
+            if response.candidates and response.candidates[0].grounding_metadata:
+                grounding_metadata = response.candidates[0].grounding_metadata
+            elif getattr(response, 'grounding_metadata', None):
+                grounding_metadata = response.grounding_metadata
+                
+            web_sources = extract_web_sources_from_grounding_metadata(grounding_metadata)
+            return {"answer": answer_text, "web_sources": web_sources}
+            
+        return answer_text
 
     except Exception as e:
         logger.error(f"Gemini generation failed: {e}", exc_info=True)
@@ -210,7 +256,8 @@ def generate_answer_direct(
     history: Optional[List[Dict]] = None,
     model: str = GEMINI_MODEL_RAG,
     context_sheet: Optional[str] = None,
-) -> str:
+    use_web_search: bool = False,
+) -> Any:
     """RAGなし：知識ベースを参照せずLLMが直接回答する"""
     try:
         from context_retriever import get_relevant_personal_contexts
@@ -230,13 +277,28 @@ def generate_answer_direct(
     try:
         client = get_client()
         contents = _build_contents(user_prompt, history)
+        
         config = types.GenerateContentConfig(
             system_instruction=local_system_prompt,
             temperature=TEMPERATURE,
             max_output_tokens=MAX_TOKENS,
+            tools=[types.Tool(google_search=types.GoogleSearch())] if use_web_search else None,
         )
         response = _call_gemini_generate(client, model, contents, config)
-        return response.text
+        
+        answer_text = response.text
+        if use_web_search:
+            # candidate直下、またはresponse直下のmetadataを確認
+            grounding_metadata = None
+            if response.candidates and response.candidates[0].grounding_metadata:
+                grounding_metadata = response.candidates[0].grounding_metadata
+            elif getattr(response, 'grounding_metadata', None):
+                grounding_metadata = response.grounding_metadata
+                
+            web_sources = extract_web_sources_from_grounding_metadata(grounding_metadata)
+            return {"answer": answer_text, "web_sources": web_sources}
+            
+        return answer_text
     except Exception as e:
         logger.error(f"Gemini direct generation failed: {e}", exc_info=True)
         raise RuntimeError("AI回答生成に一時的な問題が発生しています。しばらく待ってから再試行してください。")
@@ -263,7 +325,8 @@ def generate_answer_stream(
     project_id: Optional[str] = None,
     scope_mode: str = "auto",
     user_id: str = "mock_user",  # TODO: extract real user_id
-) -> Iterator[str]:
+    use_web_search: bool = False,
+) -> Iterator[Dict[str, Any]]:
     """ストリーミング形式で回答を生成（会話履歴対応）"""
     try:
         try:
@@ -327,17 +390,42 @@ def generate_answer_stream(
 
         client = get_client()
         contents = _build_contents(user_prompt, history)
+        
+        tools = []
+        if use_web_search:
+            tools = [types.Tool(google_search=types.GoogleSearch())]
+
         config = types.GenerateContentConfig(
             system_instruction=local_system_prompt,
             temperature=TEMPERATURE,
             max_output_tokens=MAX_TOKENS,
+            tools=tools if tools else None,
         )
 
         try:
             stream_iter = _call_gemini_stream(client, model, contents, config)
+            last_valid_metadata = None
+            
             for chunk in stream_iter:
+                # metadataを保持（最後に見つかったnon-emptyなものを優先）
+                gm = None
+                if chunk.candidates and chunk.candidates[0].grounding_metadata:
+                    gm = chunk.candidates[0].grounding_metadata
+                elif getattr(chunk, 'grounding_metadata', None):
+                    gm = chunk.grounding_metadata
+                
+                if gm:
+                    last_valid_metadata = gm
+
                 if chunk.text:
-                    yield chunk.text
+                    yield {"type": "answer", "data": chunk.text}
+            
+            # 終了間際にウェブソースを送出
+            if use_web_search and last_valid_metadata:
+                web_sources = extract_web_sources_from_grounding_metadata(last_valid_metadata)
+                if web_sources:
+                    yield {"type": "web_sources", "data": web_sources}
+                    
         except Exception as e:
             logger.error(f"Stream generation failed: {e}", exc_info=True)
             raise
@@ -350,7 +438,8 @@ def generate_answer_stream_direct(
     history: Optional[List[Dict]] = None,
     model: str = GEMINI_MODEL_RAG,
     context_sheet: Optional[str] = None,
-) -> Iterator[str]:
+    use_web_search: bool = False,
+) -> Iterator[Dict[str, Any]]:
     """RAGなし：知識ベースを参照せずLLMが直接ストリーミング回答する"""
     try:
         try:
@@ -374,13 +463,29 @@ def generate_answer_stream_direct(
             system_instruction=local_system_prompt,
             temperature=TEMPERATURE,
             max_output_tokens=MAX_TOKENS,
+            tools=[types.Tool(google_search=types.GoogleSearch())] if use_web_search else None,
         )
 
         try:
             stream_iter = _call_gemini_stream(client, model, contents, config)
+            last_valid_metadata = None
             for chunk in stream_iter:
+                gm = None
+                if chunk.candidates and chunk.candidates[0].grounding_metadata:
+                    gm = chunk.candidates[0].grounding_metadata
+                elif getattr(chunk, 'grounding_metadata', None):
+                    gm = chunk.grounding_metadata
+                
+                if gm:
+                    last_valid_metadata = gm
+
                 if chunk.text:
-                    yield chunk.text
+                    yield {"type": "answer", "data": chunk.text}
+
+            if use_web_search and last_valid_metadata:
+                web_sources = extract_web_sources_from_grounding_metadata(last_valid_metadata)
+                if web_sources:
+                    yield {"type": "web_sources", "data": web_sources}
         except Exception as e:
             logger.error(f"Direct stream generation failed: {e}", exc_info=True)
             raise

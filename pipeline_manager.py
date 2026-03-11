@@ -43,9 +43,9 @@ class PipelineManager:
             )
             
         except Exception as e:
-            logger.error(f"[PipelineManager] Failed to route file {file_path}: {e}", exc_info=True)
+            logger.error(f"[PipelineManager] CRITICAL: Failed to route/enqueue file {file_path}: {e}", exc_info=True)
             from metadata_repository import MetadataRepository
-            MetadataRepository().fail_processing(str(file_path), str(e))
+            MetadataRepository().fail_processing(str(file_path), f"Routing failure: {str(e)}")
 
 def process_file_pipeline(file_path: str, source_pdf_hash: str = "", version_id: str = ""):
     """

@@ -231,13 +231,18 @@ def make_chunk_upload_name(version_id: str, chunk_index: int, ext: str) -> str:
     """外部送信用の安全なファイル名 (ASCII) を生成する。"""
     # version_id から、ASCIIの英数字、ハイフン、アンダースコア以外を除去（または置換）
     # isalnum() は日本語文字もTrueになるため、isascii() と組み合わせてチェックする
-    safe_id = "".join([c if (c.isascii() and (c.isalnum() or c in "-_")) else "_" for c in version_id])
-    if not safe_id or safe_id.strip("_") == "":
+    # さらに特殊文字も念のため置換
+    safe_id = "".join([c if (c.isascii() and (c.isalnum() or c in "-_.")) else "_" for c in version_id])
+    if not safe_id or safe_id.strip("_.") == "":
         safe_id = "unknown_version"
     
     # ext が . で始まらない場合（かつ空でない場合）は付与
     if ext and not ext.startswith("."):
         ext = "." + ext
+        
+    # 重複するアンダースコアをまとめる
+    while "__" in safe_id:
+        safe_id = safe_id.replace("__", "_")
         
     return f"ver_{safe_id}_chunk_{chunk_index:04d}{ext}"
 
@@ -514,11 +519,12 @@ def _ocr_with_adaptive_fallback(
                     "success": False,
                 })
             finally:
-                if sc.get("is_temp"):
+                # 明示的な削除（再帰中でも各ステップで確実に消す）
+                if sc.get("is_temp") and sc.get("path") and os.path.exists(sc["path"]):
                     try:
                         os.remove(sc["path"])
-                    except OSError:
-                        pass
+                    except OSError as cleanup_err:
+                        logger.warning(f"Failed to cleanup sub-chunk temp file {sc['path']}: {cleanup_err}")
         return results
 
     # 正常終了（finish_reason チェック: 警告ログ）
@@ -913,5 +919,6 @@ def process_pdf_background(
                 if c.get("is_temp") and c.get("path") and os.path.exists(c["path"]):
                     try:
                         os.remove(c["path"])
-                    except OSError:
-                        pass
+                        logger.debug(f"Cleaned up temp chunk: {c['path']}")
+                    except OSError as e:
+                        logger.warning(f"Failed to remove temp chunk {c['path']}: {e}")

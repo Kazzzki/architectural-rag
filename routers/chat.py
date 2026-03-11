@@ -34,10 +34,13 @@ class ChatRequest(BaseModel):
     use_rag: bool = True
     project_id: Optional[str] = None
     scope_mode: Optional[str] = "auto"
+    # ウェブ検索の使用可否 (False: 検索しない、True: Google Search Grounding有効)
+    use_web_search: bool = False
 
 class ChatResponse(BaseModel):
     answer: str
     sources: List[dict]
+    web_sources: Optional[List[dict]] = None
 
 def run_memory_pipeline(user_message: str, assistant_response: str, project_id: Optional[str] = None):
     """Phase1 → Phase2 を順次実行。全体をtry/exceptで包む。"""
@@ -58,7 +61,7 @@ def run_memory_pipeline(user_message: str, assistant_response: str, project_id: 
     except Exception as e:
         logger.warning(f"Memory pipeline failed (non-critical): {e}")
 
-def persist_chat_message(session_id: str, user_query: str, assistant_response: str, sources: List[dict], model: str):
+def persist_chat_message(session_id: str, user_query: str, assistant_response: str, sources: List[dict], model: str, web_sources: Optional[List[dict]] = None):
     """メッセージをDBに永続化し、セッションの更新日時を更新する"""
     from database import SessionLocal, ChatSession, ChatMessage
     db = SessionLocal()
@@ -87,6 +90,7 @@ def persist_chat_message(session_id: str, user_query: str, assistant_response: s
             role="assistant",
             content=assistant_response,
             sources=json.dumps(sources, ensure_ascii=False),
+            web_sources=json.dumps(web_sources or [], ensure_ascii=False),
             model=model
         )
 
@@ -100,71 +104,94 @@ def persist_chat_message(session_id: str, user_query: str, assistant_response: s
     finally:
         db.close()
 
-@router.post("/api/chat", response_model=ChatResponse)
+@router.post("/api/chat", response_model=ChatResponse, response_model_exclude_none=True)
 def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Optional[str] = None):
     """質問に対する回答を生成"""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="質問を入力してください")
     
     try:
-        if request.use_rag:
-            # --- RAGあり（従来の動作） ---
-            # v3: デフォルトは高精度モード（quick_mode=None → False 扱い）
-            use_advanced = not (request.quick_mode if request.quick_mode is not None else False)
-            search_results = search(
-                request.question,
-                filter_category=request.category,
-                filter_file_type=request.file_type,
-                filter_date_range=request.date_range,
-                filter_tags=request.tags,
-                tag_match_mode=request.tag_match_mode or "any",
-                use_query_expansion=use_advanced,
-                use_hyde=use_advanced,
-                use_rerank=use_advanced,
-            )
-            logger.info(f"Query: {request.question}, Results: {len(search_results.get('documents', []))}")
-            context = build_context(search_results)
-            source_files = get_source_files(search_results)
-            answer = generate_answer(
+        if request.use_rag or request.use_web_search:
+            # --- RAGあり または ウェブ検索あり ---
+            if request.use_rag:
+                # v3: デフォルトは高精度モード（quick_mode=None → False 扱い）
+                use_advanced = not (request.quick_mode if request.quick_mode is not None else False)
+                search_results = search(
+                    request.question,
+                    filter_category=request.category,
+                    filter_file_type=request.file_type,
+                    filter_date_range=request.date_range,
+                    filter_tags=request.tags,
+                    tag_match_mode=request.tag_match_mode or "any",
+                    use_query_expansion=use_advanced,
+                    use_hyde=use_advanced,
+                    use_rerank=use_advanced,
+                )
+                logger.info(f"Query: {request.question}, Results: {len(search_results.get('documents', []))}")
+                context = build_context(search_results)
+                source_files = get_source_files(search_results)
+            else:
+                # ウェブ検索のみ（RAGなし）
+                logger.info(f"Web search only query: {request.question}")
+                context = ""
+                source_files = []
+
+            result = generate_answer(
                 request.question, context, source_files,
                 history=request.history,
                 model=request.model,
                 context_sheet=request.context_sheet,
                 project_id=request.project_id,
                 scope_mode=request.scope_mode,
+                use_web_search=request.use_web_search,
             )
+            if isinstance(result, dict):
+                answer = result["answer"]
+                web_sources = result.get("web_sources")
+            else:
+                answer = result
+                web_sources = None
         else:
-            # --- RAGなし（LLM直接回答） ---
-            logger.info(f"Direct query (no RAG): {request.question}")
+            # --- RAGなし かつ ウェブ検索なし（LLM直接回答） ---
+            logger.info(f"Direct query (no RAG, no Web Search): {request.question}")
             source_files = []
-            answer = generate_answer_direct(
+            result = generate_answer_direct(
                 request.question,
                 history=request.history,
                 model=request.model,
                 context_sheet=request.context_sheet,
+                use_web_search=request.use_web_search,
             )
+            if isinstance(result, dict):
+                answer = result["answer"]
+                web_sources = result.get("web_sources")
+            else:
+                answer = result
+                web_sources = None
 
         logger.info(f"Answer generated ({len(answer)} chars)")
         
         # 永続化タスク
         if session_id:
-            background_tasks.add_task(
-                persist_chat_message,
+            # 永続化（同期）
+            persist_chat_message(
                 session_id=session_id,
                 user_query=request.question,
                 assistant_response=answer,
                 sources=source_files,
-                model=request.model
+                model=request.model,
+                web_sources=web_sources
             )
-
+        
+        # Layer A Memory
         background_tasks.add_task(
             run_memory_pipeline,
             user_message=request.question,
             assistant_response=answer,
             project_id=request.project_id
         )
-
-        return ChatResponse(answer=answer, sources=source_files)
+        
+        return ChatResponse(answer=answer, sources=source_files, web_sources=web_sources)
 
     except RuntimeError as e:
         logger.error(f"Gemini API完全失敗: {e}", exc_info=True)
@@ -180,27 +207,33 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
         raise HTTPException(status_code=400, detail="質問を入力してください")
     
     try:
-        if request.use_rag:
-            # --- RAGあり（従来の動作） ---
-            # ストリームではデフォルト quick_mode=True（リランク・拡張スキップでTTFB激減）
-            effective_quick = request.quick_mode if request.quick_mode is not None else True
-            use_advanced = not effective_quick
-            search_results = search(
-                request.question,
-                filter_category=request.category,
-                filter_file_type=request.file_type,
-                filter_date_range=request.date_range,
-                filter_tags=request.tags,
-                tag_match_mode=request.tag_match_mode or "any",
-                use_query_expansion=use_advanced,
-                use_hyde=use_advanced,
-                use_rerank=use_advanced,
-            )
-            context = build_context(search_results)
-            source_files = get_source_files(search_results)
+        if request.use_rag or request.use_web_search:
+            # --- RAGあり または ウェブ検索あり ---
+            if request.use_rag:
+                # ストリームではデフォルト quick_mode=True（リランク・拡張スキップでTTFB激減）
+                effective_quick = request.quick_mode if request.quick_mode is not None else True
+                use_advanced = not effective_quick
+                search_results = search(
+                    request.question,
+                    filter_category=request.category,
+                    filter_file_type=request.file_type,
+                    filter_date_range=request.date_range,
+                    filter_tags=request.tags,
+                    tag_match_mode=request.tag_match_mode or "any",
+                    use_query_expansion=use_advanced,
+                    use_hyde=use_advanced,
+                    use_rerank=use_advanced,
+                )
+                context = build_context(search_results)
+                source_files = get_source_files(search_results)
+            else:
+                # ウェブ検索のみ（RAGなし）
+                logger.info(f"Web search direct stream query: {request.question}")
+                context = ""
+                source_files = []
         else:
-            # --- RAGなし（LLM直接回答） ---
-            logger.info(f"Direct stream query (no RAG): {request.question}")
+            # --- RAGなし かつ ウェブ検索なし（LLM直接回答） ---
+            logger.info(f"Direct stream query (no RAG, no Web Search): {request.question}")
             context = ""
             source_files = []
 
@@ -211,7 +244,7 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
             yield f"data: {json.dumps({'type': 'sources', 'data': source_files}, ensure_ascii=False)}\n\n"
 
             try:
-                if request.use_rag:
+                if request.use_rag or request.use_web_search:
                     stream_gen = generate_answer_stream(
                         request.question, context, source_files,
                         history=history,
@@ -219,19 +252,20 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                         context_sheet=request.context_sheet,
                         project_id=request.project_id,
                         scope_mode=request.scope_mode,
-                    )
-                else:
-                    stream_gen = generate_answer_stream_direct(
-                        request.question,
-                        history=history,
-                        model=request.model,
-                        context_sheet=request.context_sheet,
+                        use_web_search=request.use_web_search,
                     )
                 
+                web_sources_collected = []
+                
                 # 2. 回答をストリーミング
-                for chunk in stream_gen:
-                    full_answer += chunk
-                    yield f"data: {json.dumps({'type': 'answer', 'data': chunk}, ensure_ascii=False)}\n\n"
+                for part in stream_gen:
+                    if part["type"] == "answer":
+                        chunk = part["data"]
+                        full_answer += chunk
+                        yield f"data: {json.dumps({'type': 'answer', 'data': chunk}, ensure_ascii=False)}\n\n"
+                    elif part["type"] == "web_sources":
+                        web_sources_collected = part["data"]
+                        yield f"data: {json.dumps({'type': 'web_sources', 'data': web_sources_collected}, ensure_ascii=False)}\n\n"
             except Exception as e:
                 logger.error(f"Stream generation exception: {e}", exc_info=True)
                 yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
@@ -247,7 +281,8 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                         user_query=request.question,
                         assistant_response=full_answer,
                         sources=source_files,
-                        model=request.model
+                        model=request.model,
+                        web_sources=web_sources_collected
                     )
 
                 background_tasks.add_task(
@@ -280,6 +315,7 @@ class SaveMessagesRequest(BaseModel):
     user: str
     assistant: str
     sources: List[dict]
+    web_sources: Optional[List[dict]] = None
     model: str
 
 @router.get("/api/chat/sessions")
@@ -310,6 +346,7 @@ def get_session_detail(session_id: str, db: Session = Depends(get_db)):
             "role": m.role,
             "content": m.content,
             "sources": json.loads(m.sources) if m.sources else [],
+            "web_sources": json.loads(m.web_sources) if getattr(m, 'web_sources', None) else [],
             "model": m.model,
             "created_at": m.created_at
         })
@@ -355,6 +392,7 @@ def save_messages(session_id: str, request: SaveMessagesRequest, db: Session = D
         role="assistant",
         content=request.assistant,
         sources=json.dumps(request.sources, ensure_ascii=False),
+        web_sources=json.dumps(request.web_sources or [], ensure_ascii=False),
         model=request.model
     )
     

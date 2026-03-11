@@ -13,8 +13,14 @@ export interface SourceFile {
     relevance_count: number;     // hit_countの後方互換エイリアス
 }
 
+export interface WebSource {
+    title: string;
+    url: string;
+}
+
 export type StreamUpdate =
     | { type: 'sources'; data: SourceFile[] }
+    | { type: 'web_sources'; data: WebSource[] }
     | { type: 'answer'; data: string }
     | { type: 'error'; data: string }
     | { type: 'truncation_warning'; data: string }
@@ -90,7 +96,8 @@ export interface SessionDetail extends SessionSummary {
         id: number;
         role: 'user' | 'assistant';
         content: string;
-        sources: SourceFile[];
+        sources?: SourceFile[];
+        web_sources?: WebSource[];
         model: string;
         created_at: string;
     }[];
@@ -100,6 +107,7 @@ export interface SaveMessagePayload {
     user: string;
     assistant: string;
     sources: SourceFile[];
+    web_sources?: WebSource[];
     model: string;
 }
 
@@ -136,6 +144,13 @@ export async function updateActiveScope(project_id: string | null, scope_mode: s
         body: JSON.stringify({ project_id, scope_mode })
     });
     if (!res.ok) throw new Error(`Failed to update active scope: ${res.statusText}`);
+}
+
+/** 利用可能なモデル一覧取得 */
+export async function fetchModels(): Promise<Record<string, string>> {
+    const res = await authFetch(`${API_BASE}/api/models`);
+    if (!res.ok) throw new Error(`Failed to fetch models: ${res.statusText}`);
+    return res.json();
 }
 
 /** セッション一覧取得 */
@@ -194,6 +209,7 @@ export async function* chatStream(params: {
     project_id?: string | null;
     scope_mode?: string;
     use_rag?: boolean;
+    use_web_search?: boolean;
     signal?: AbortSignal;
 }): AsyncGenerator<StreamUpdate> {
     const {
@@ -211,6 +227,7 @@ export async function* chatStream(params: {
         project_id,
         scope_mode,
         use_rag = true,
+        use_web_search = false,
         signal,
     } = params;
 
@@ -232,6 +249,7 @@ export async function* chatStream(params: {
             project_id: project_id || null,
             scope_mode: scope_mode || 'auto',
             use_rag: use_rag,
+            use_web_search: use_web_search,
         }),
         signal
     });
@@ -331,6 +349,8 @@ async function* _readSSEStream(stream: ReadableStream<Uint8Array>): AsyncGenerat
                         const data = JSON.parse(dataContent);
                         if (eventName === 'error') {
                             yield { type: 'error', data: data.error || 'Unknown streaming error' };
+                        } else if (data.type === 'web_sources') {
+                            yield { type: 'web_sources', data: data.data };
                         } else if (data.type && data.data) {
                             yield data as StreamUpdate;
                         } else if (data.text) {

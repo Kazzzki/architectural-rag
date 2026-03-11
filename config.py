@@ -100,6 +100,7 @@ AVAILABLE_MODELS: dict[str, str] = {
     "gemini-3-flash-preview":  "Gemini 3 Flash（高速・標準）",
     "gemini-3.1-pro-preview":  "Gemini 3.1 Pro（高精度・低速）",
     "gemini-2.0-flash":        "Gemini 2.0 Flash（安定板）",
+    "gemini-3.1-flash-lite":   "Gemini 3.1 Flash Lite（軽量・超高速）",
 }
 
 # ===== Layer A Memory v2 Feature Flags =====

@@ -22,6 +22,7 @@ DEFAULT_SETTINGS = {
         "gemini-3.1-pro-preview",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
+        "gemini-3.1-flash-lite",
     ],
 }
 

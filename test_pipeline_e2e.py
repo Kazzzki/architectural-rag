@@ -2,7 +2,7 @@ import os
 import shutil
 import time
 from sqlalchemy.orm import Session
-from database import SessionLocal, Document
+from database import SessionLocal, LegacyDocument
 from pipeline_manager import process_file_pipeline
 from indexer import get_chroma_client
 from config import COLLECTION_NAME
@@ -21,7 +21,7 @@ collection = client.get_or_create_collection(name=COLLECTION_NAME)
 db = SessionLocal()
 
 # clean old record
-old_doc = db.query(Document).filter(Document.filename == "test_e2e_input.pdf").first()
+old_doc = db.query(LegacyDocument).filter(LegacyDocument.filename == "test_e2e_input.pdf").first()
 if old_doc:
     db.delete(old_doc)
     db.commit()
@@ -58,7 +58,7 @@ if not error_files:
 else:
     print("❌ data/error/ にファイルが追加されている")
 
-status_record = db.query(Document).filter(Document.filename == "test_e2e_input.pdf").first()
+status_record = db.query(LegacyDocument).filter(LegacyDocument.filename == "test_e2e_input.pdf").first()
 if status_record:
     print(f"DB Status: {status_record.status}")
     if status_record.status == "completed":

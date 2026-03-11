@@ -137,10 +137,20 @@ class DenseIndexer:
             batch_embeddings = _embed_batch_with_retry(gemini, batch_texts)
             
             if batch_embeddings:
-                final_ids.extend(batch_ids)
-                final_embeddings.extend(batch_embeddings)
-                final_documents.extend(batch_texts)
-                final_metadatas.extend(batch_metas)
+                for i, emb in enumerate(batch_embeddings):
+                    # ゼロベクトル (またはほぼゼロ) のチェック: ノルムが極端に小さい場合はスキップ
+                    norm = sum(v*v for v in emb) ** 0.5
+                    if norm < 1e-6:
+                        logger.warning(
+                            f"[DenseIndexer] Skipping zero vector for chunk_id={batch_ids[i]} "
+                            f"in version_id={version_id} (norm={norm:.2e})"
+                        )
+                        continue
+                    
+                    final_ids.append(batch_ids[i])
+                    final_embeddings.append(emb)
+                    final_documents.append(batch_texts[i])
+                    final_metadatas.append(batch_metas[i])
             else:
                 logger.error(f"[DenseIndexer] Skipping batch {batch_start+1}–{batch_end} due to embedding failure")
 

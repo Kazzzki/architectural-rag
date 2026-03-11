@@ -1,184 +1,37 @@
 'use client';
-import React from 'react';
 
-import { authFetch, fetchSessions, createSession, fetchSessionDetail, deleteSession, saveMessages, SessionSummary } from '@/lib/api';
-import { resolvePdfUrl } from '@/lib/pdf';
-
-import { useState, useRef, useEffect, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
-import LayerPanel from './components/LayerPanel';
-import {
-    Search,
-    Send,
-    MessageSquare,
-    Plus,
-    History,
-    Upload,
-    RefreshCw,
-    Building2,
-    FileText,
-    ChevronDown,
-    Loader2,
-    X,
-    Check,
-    Cloud,
-    CloudOff,
-    ExternalLink,
-    UploadCloud,
-    Library as LibraryIcon,
-    Map,
-    Sparkles,
-    Layers,
-    Database,
-    Settings,
-    Folder
-} from 'lucide-react';
-import Link from 'next/link';
-import Library from './components/Library';
-import FileUpload from './components/FileUpload';
-import StatsPanel from './components/StatsPanel';
-import ScopeEnginePanel from './components/ScopeEnginePanel';
+import React, { useState, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
+import { 
+    Send, 
+    Loader2, 
+    Plus, 
+    BookOpen, 
+    MessageSquare, 
+    ExternalLink, 
+    FileText, 
+    Library as LibraryIcon,
+    ChevronDown,
+    Building2,
+    Sparkles,
+    Database,
+    Globe
+} from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import { 
+    SourceFile, 
+    StreamUpdate, 
+    fetchSessions as apiFetchSessions, 
+    fetchModels as apiFetchModels,
+    createSession as apiCreateSession,
+    fetchSessionDetail as apiFetchSessionDetail,
+    saveMessages as apiSaveMessages
+} from '../lib/api';
+import SourceCard from './components/SourceCard';
+const PDFViewer = dynamic(() => import('./components/PDFViewer'), { ssr: false });
+import Library from './components/Library';
 
-const PDFViewer = dynamic(() => import('./components/PDFViewer'), {
-    ssr: false,
-    loading: () => <div className="p-4 text-center">Loading PDF Viewer...</div>
-});
-
-// Types
-interface Message {
-    role: 'user' | 'assistant';
-    content: string;
-    sources?: SourceFile[];
-}
-
-interface SourceFile {
-    source_id: string;
-    filename: string;
-    original_filename?: string;
-    source_pdf_name: string;
-    source_pdf: string;
-    source_pdf_hash: string;
-    rel_path: string;
-    category: string;
-    doc_type: string;
-    pages: number[];
-    hit_count: number;
-    relevance_count: number;
-    pdf_filename?: string;
-}
-
-interface Stats {
-    file_count: number;
-    chunk_count: number;
-    last_updated: string;
-}
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
-
-// ─── doc_type バッジ ────────────────────────────────────────────────────────────
-const DOC_TYPE_BADGE: Record<string, { label: string; cls: string }> = {
-    drawing: { label: '📐 図面', cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
-    law: { label: '⚖️ 法規', cls: 'bg-red-500/15 text-red-300 border-red-500/30' },
-    spec: { label: '📋 仕様書', cls: 'bg-green-500/15 text-green-300 border-green-500/30' },
-    catalog: { label: '📦 カタログ', cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30' },
-};
-
-// ─── SourceCard コンポーネント ─────────────────────────────────────────────────
-const PAGE_CHIP_LIMIT = 5;
-
-function SourceCard({
-    src,
-    onPageClick,
-}: {
-    src: SourceFile;
-    onPageClick: (url: string, page: number) => void;
-}) {
-    const [expanded, setExpanded] = useState(false);
-    const badge = DOC_TYPE_BADGE[src.doc_type];
-    const relevanceDots = src.hit_count >= 3 ? '●●●' : src.hit_count === 2 ? '●●○' : '●○○';
-
-    const visiblePages = expanded ? src.pages : src.pages.slice(0, PAGE_CHIP_LIMIT);
-    const hiddenCount = src.pages.length - PAGE_CHIP_LIMIT;
-    const resolvedUrl = resolvePdfUrl(src);
-
-    return (
-        <div className="flex flex-col gap-1.5 bg-[var(--card)] border border-[var(--border)] px-3 py-2 rounded-lg text-xs min-w-[180px] max-w-[260px] relative">
-            {/* source_id + doc_type badge */}
-            <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-bold text-[var(--muted)] bg-[var(--background)] border border-[var(--border)] px-1.5 py-0.5 rounded">
-                    {src.source_id}
-                </span>
-                {badge && (
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${badge.cls}`}>
-                        {badge.label}
-                    </span>
-                )}
-                <span className="ml-auto text-[10px] text-[var(--muted)]" title={`ヒット数: ${src.hit_count}`}>
-                    {relevanceDots}
-                </span>
-            </div>
-
-            {/* Filename */}
-            <div className="flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-primary-500 shrink-0" />
-                <span className="font-medium text-[var(--foreground)] truncate">
-                    {src.original_filename || src.source_pdf_name || src.filename}
-                </span>
-            </div>
-
-            {/* Page chips */}
-            {src.pages.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-0.5">
-                    {visiblePages.map((p) => {
-                        return resolvedUrl ? (
-                            <button
-                                key={p}
-                                onClick={() => onPageClick(resolvedUrl, p)}
-                                className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-colors cursor-pointer"
-                            >
-                                p.{p}
-                            </button>
-                        ) : (
-                            <span key={p} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--background)] text-[var(--muted)] border border-[var(--border)]">
-                                p.{p}
-                            </span>
-                        );
-                    })}
-                    {!expanded && hiddenCount > 0 && (
-                        <button
-                            onClick={() => setExpanded(true)}
-                            className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--background)] text-[var(--muted)] border border-[var(--border)] hover:bg-[var(--card-hover)] transition-colors"
-                        >
-                            +{hiddenCount}
-                        </button>
-                    )}
-                    {expanded && hiddenCount > 0 && (
-                        <button
-                            onClick={() => setExpanded(false)}
-                            className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--background)] text-[var(--muted)] border border-[var(--border)] hover:bg-[var(--card-hover)] transition-colors"
-                        >
-                            折りたたむ
-                        </button>
-                    )}
-                </div>
-            )}
-
-            {/* Fallback: no pages, but PDF openable */}
-            {src.pages.length === 0 && resolvedUrl && (
-                <button
-                    onClick={() => onPageClick(resolvedUrl, 1)}
-                    className="text-[10px] text-blue-500 hover:text-blue-600 flex items-center gap-0.5 border border-blue-200 bg-blue-50 dark:border-blue-900/40 dark:bg-blue-900/10 px-1.5 py-0.5 rounded self-start"
-                >
-                    <ExternalLink className="w-2.5 h-2.5" />
-                    📄 PDF表示
-                </button>
-            )}
-        </div>
-    );
-}
-
-// ─── CitationBadge コンポーネント ──────────────────────────────────────────────
+// --- Citation Logic ---
 const CITATION_PATTERN = /\[S(\d+):p\.(\d+)\]/g;
 
 function CitationBadge({
@@ -193,17 +46,12 @@ function CitationBadge({
     onPageClick: (url: string, page: number) => void;
 }) {
     const src = sources.find((s) => s.source_id === sourceId);
+    if (!src) return <span>[{sourceId}:p.{page}]</span>;
 
-    if (!src) {
-        // 対応ソースが見つからない場合はプレーンテキスト
-        return <span>[{sourceId}:p.{page}]</span>;
-    }
-
-    const url = resolvePdfUrl(src);
-
+    const url = src.source_pdf ? `/api/pdf/${src.source_pdf}` : null;
     if (!url) {
         return (
-            <span className="inline-flex items-center text-[11px] px-1.5 py-0.5 mx-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">
+            <span className="inline-flex items-center text-[11px] px-1.5 py-0.5 mx-0.5 rounded bg-blue-50 text-blue-600 border border-blue-100 font-mono">
                 {sourceId} p.{page}
             </span>
         );
@@ -212,7 +60,7 @@ function CitationBadge({
     return (
         <button
             onClick={() => onPageClick(url, page)}
-            className="inline-flex items-center text-[11px] px-1.5 py-0.5 mx-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 hover:bg-blue-500/25 hover:text-blue-300 transition-colors cursor-pointer font-mono"
+            className="inline-flex items-center text-[11px] px-1.5 py-0.5 mx-0.5 rounded bg-blue-100 text-blue-700 border border-blue-200 hover:bg-blue-200 transition-colors cursor-pointer font-mono"
             title={`${src.source_pdf_name || src.filename} p.${page} を開く`}
         >
             {sourceId} p.{page}
@@ -220,7 +68,6 @@ function CitationBadge({
     );
 }
 
-// テキストノード内の [S1:p.12] パターンを CitationBadge に変換
 function transformCitations(
     text: string,
     sources: SourceFile[],
@@ -253,264 +100,90 @@ function transformCitations(
     return parts.length === 1 && typeof parts[0] === 'string' ? parts[0] : <>{parts}</>;
 }
 
-const EXAMPLE_QUESTIONS = [
-    'ALCとECPの防水性能・コスト・メンテナンス性の違いを比較して',
-    'S造事務所の外壁矩計図で確認すべきポイントは？',
-    'サッシの気密・水密・耐風圧等級の選定基準を教えて',
-    'シーリングの種類と使い分け',
-    '屋根防水でアスファルト防水と塩ビシート防水の比較',
-];
+interface Message {
+    role: 'user' | 'assistant';
+    content: string;
+    sources?: SourceFile[];
+    webSources?: { title: string; url: string }[];
+}
 
-const CATEGORIES = [
-    { value: '', label: '全て（横断検索）' },
-    { value: '01_カタログ', label: '01 カタログ' },
-    { value: '02_図面', label: '02 図面' },
-    { value: '03_技術基準', label: '03 技術基準' },
-    { value: '04_リサーチ成果物', label: '04 リサーチ成果物' },
-    { value: '05_法規', label: '05 法規' },
-    { value: '06_設計マネジメント', label: '06 設計マネジメント' },
-    { value: '07_コストマネジメント', label: '07 コストマネジメント' },
-    { value: '00_未分類', label: '00 未分類' },
-];
+interface Session {
+    id: string;
+    title: string | null;
+    updated_at: string;
+}
 
 export default function Home() {
-    // State definitions
+    // State
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-
-    // Session Management State
+    const [sessions, setSessions] = useState<Session[]>([]);
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-    const [sessions, setSessions] = useState<SessionSummary[]>([]);
-
-    // Filters
-    const [category, setCategory] = useState('');
-    const [fileType, setFileType] = useState('');
-    const [dateRange, setDateRange] = useState('');
-    const [availableTags, setAvailableTags] = useState<Record<string, string[]>>({});
-    const [selectedTags, setSelectedTags] = useState<string[]>([]);
-    const [tagMatchMode, setTagMatchMode] = useState<'any' | 'all'>('any');
-    const [isTagExpanded, setIsTagExpanded] = useState(false);
-
-    const [stats, setStats] = useState<Stats | null>(null);
-    const [isUploading, setIsUploading] = useState(false);
-    const [uploadResult, setUploadResult] = useState<string | null>(null);
-    const [isIndexing, setIsIndexing] = useState(false);
-    const [driveStatus, setDriveStatus] = useState<{ authenticated: boolean, message: string } | null>(null);
-    const [isSyncing, setIsSyncing] = useState(false);
-    const [syncResult, setSyncResult] = useState<string | null>(null);
-    const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
-
-    // --- Scope Engine ---
-    const [projectId, setProjectId] = useState<string | null>(null);
-    const [scopeMode, setScopeMode] = useState<string>('auto');
-    const [useRag, setUseRag] = useState<boolean>(true);
-
-    // --- コンテキストシート機能 ---
-    const [availableModels, setAvailableModels] = useState<Record<string, string>>({});
-    const [availableRoles, setAvailableRoles] = useState<Record<string, string>>({});
-    const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
-
-    // UI State
-    const [sidebarTab, setSidebarTab] = useState<'knowledge' | 'layers'>('knowledge');
     const [activeTab, setActiveTab] = useState<'chat' | 'library'>('chat');
+    const [useRag, setUseRag] = useState(true);
+    const [useWebSearch, setUseWebSearch] = useState(false);
+    const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+    const [availableModels, setAvailableModels] = useState<Record<string, string>>({});
+    
+    // PDF Viewer State
     const [isPdfOpen, setIsPdfOpen] = useState(false);
     const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-    const [pdfInitialPage, setPdfInitialPage] = useState(1);
-    const [showSessionList, setShowSessionList] = useState(true);
-
-    // Layer / Context State
+    const [pdfInitialPage, setPdfInitialPage] = useState<number | undefined>(undefined);
+    
+    // UI state
     const [activeLayerB, setActiveLayerB] = useState<string | null>(null);
-    const [activeLayerBTitle, setActiveLayerBTitle] = useState<string | null>(null);
-    const [activeContextRole, setActiveContextRole] = useState<string | null>(null);
-    const [isGeneratingSheet, setIsGeneratingSheet] = useState(false);
-
-    // Phase A: リクエストの競合防止とキャンセル管理
+    
+    const messagesEndRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const lastRequestIdRef = useRef<number>(0);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    };
-
+    // Initial load
     useEffect(() => {
-        scrollToBottom();
+        fetchSessions().then(setSessions);
+        fetchModels();
+    }, []);
+
+    // Scroll to bottom
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    useEffect(() => {
-        const loadInitialSession = async () => {
-            try {
-                const fetchedSessions = await fetchSessions();
-                setSessions(fetchedSessions);
-                if (fetchedSessions.length > 0) {
-                    const latestSession = fetchedSessions[0];
-                    const detail = await fetchSessionDetail(latestSession.id);
-                    setActiveSessionId(detail.id);
-                    setMessages(detail.messages.map(m => ({
-                        role: m.role as 'user' | 'assistant',
-                        content: m.content,
-                        sources: m.sources
-                    })));
-                } else {
-                    const newSession = await createSession();
-                    setActiveSessionId(newSession.id);
-                }
-            } catch (err) {
-                console.error('Failed to load sessions', err);
-            }
-        };
-        loadInitialSession();
-    }, []);
-
-    const fetchStats = useCallback(async () => {
+    const fetchSessions = async () => {
         try {
-            const res = await authFetch(`${API_BASE}/api/stats`);
-            if (res.ok) {
-                const data = await res.json();
-                setStats(data);
-            }
-        } catch (error) {
-            console.error('Stats fetch error:', error);
-        }
-    }, []);
-
-    const fetchTags = useCallback(async () => {
-        try {
-            const res = await authFetch(`${API_BASE}/api/tags`);
-            if (res.ok) {
-                const data = await res.json();
-                setAvailableTags(data);
-            }
-        } catch (error) {
-            console.error('Tags fetch error:', error);
-        }
-    }, []);
-
-    const fetchModels = useCallback(async () => {
-        try {
-            const res = await authFetch(`${API_BASE}/api/models`);
-            if (res.ok) {
-                const data = await res.json();
-                setAvailableModels(data);
-            }
-        } catch (error) {
-            console.error('Models fetch error:', error);
-        }
-    }, []);
-
-    const fetchRoles = useCallback(async () => {
-        try {
-            const res = await authFetch(`${API_BASE}/api/roles`);
-            if (res.ok) {
-                const data = await res.json();
-                setAvailableRoles(data);
-            }
-        } catch (error) {
-            console.error('Roles fetch error:', error);
-        }
-    }, []);
-
-    useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        if (params.get('auth') === 'success') {
-            alert('認証が完了しました！');
-            window.history.replaceState(null, '', window.location.pathname);
-        }
-
-        fetchStats();
-        fetchTags();
-        fetchModels();
-        fetchRoles();
-        checkDriveStatus();
-    }, [fetchStats, fetchTags, fetchModels, fetchRoles]);
-
-    const checkDriveStatus = async () => {
-        try {
-            const res = await authFetch(`${API_BASE}/api/drive/status`);
-            if (res.ok) {
-                const data = await res.json();
-                setDriveStatus(data);
-            }
-        } catch (error) {
-            setDriveStatus({ authenticated: false, message: '接続エラー' });
+            return await apiFetchSessions();
+        } catch (err) {
+            console.error(err);
+            return [];
         }
     };
 
-    const handleDriveAuth = async () => {
+    const fetchModels = async () => {
         try {
-            // Next.js proxy (/api/*) 経由でバックエンドに送信 — 相対パスで CORS を回避
-            const currentHost = window.location.host;
-            const currentProto = window.location.protocol.replace(':', '');
-
-            const res = await authFetch(`/api/drive/auth`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Forwarded-Host': currentHost,
-                    'X-Forwarded-Proto': currentProto
-                }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                if (data.auth_url) {
-                    window.location.href = data.auth_url;
-                } else {
-                    alert('auth_url が返されませんでした: ' + JSON.stringify(data));
-                }
-            } else {
-                const errText = await res.text();
-                console.error('Drive auth failed:', res.status, errText);
-                alert(`Drive認証エラー (${res.status}): ${errText.slice(0, 200)}`);
-            }
-        } catch (error) {
-            console.error('Drive auth error:', error);
-            alert(`接続エラー: ${error}`);
+            const data = await apiFetchModels();
+            setAvailableModels(data);
+        } catch (err) {
+            console.error(err);
         }
     };
 
-    const handleDriveSync = async () => {
-        setIsSyncing(true);
-        setSyncResult(null);
-        try {
-            const res = await authFetch(`${API_BASE}/api/drive/sync`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ folder_name: '建築意匠ナレッジDB' }),
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setSyncResult(`${data.downloaded}件ダウンロード`);
-                fetchStats();
-            } else {
-                const err = await res.json();
-                setSyncResult(err.detail || '同期失敗');
-            }
-        } catch (error) {
-            setSyncResult('同期エラー');
-        } finally {
-            setIsSyncing(false);
-        }
+    const createSession = async () => {
+        return await apiCreateSession();
     };
 
-    const handleDriveUpload = async () => {
-        if (!confirm('Google Driveへファイルを同期（アップロード）しますか？\n（同名ファイルは上書きされます）')) return;
-        setIsUploadingToDrive(true);
+    const loadSession = async (id: string) => {
         try {
-            const res = await authFetch(`${API_BASE}/api/sync-drive`, { method: 'POST' });
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.detail || '同期失敗');
-            }
-            const data = await res.json();
-            const stats = data.stats || {};
-            alert(`同期完了しました。\n作成: ${stats.created}, 更新: ${stats.updated}, エラー: ${stats.errors}`);
-        } catch (error: any) {
-            console.error('Sync Error:', error);
-            alert(`同期に失敗しました: ${error.message || '不明なエラー'}`);
-        } finally {
-            setIsUploadingToDrive(false);
+            setActiveSessionId(id);
+            const data = await apiFetchSessionDetail(id);
+            const msgs = data.messages || [];
+            setMessages(msgs.map((m: any) => ({
+                role: m.role,
+                content: m.content,
+                sources: m.sources,
+                webSources: m.web_sources
+            })));
+        } catch (err) {
+            console.error(err);
         }
     };
 
@@ -520,735 +193,329 @@ export default function Home() {
 
         const userMessageContent = input.trim();
         setInput('');
-
-        // 現在の会話履歴を送信前にキャプチャ（新しいメッセージを追加する前）
-        const historySnapshot = messages.map(m => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-        }));
-
-        // Add user message
+        
+        // --- Snapshot history BEFORE adding new message ---
+        const historySnapshot = [...messages];
+        
+        // Add user message to UI
         setMessages(prev => [...prev, { role: 'user', content: userMessageContent }]);
 
         // Add placeholder assistant message
-        setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: '',
-            sources: undefined
-        }]);
+        setMessages(prev => [...prev, { role: 'assistant', content: '', sources: undefined, webSources: undefined }]);
 
         setIsLoading(true);
 
-        // --- Phase A: 前回のリクエストをキャンセル ---
+        // Cancel previous request
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
         const abortController = new AbortController();
         abortControllerRef.current = abortController;
-        
         const requestId = ++lastRequestIdRef.current;
-        // ------------------------------------------
 
         try {
-            const { chatStream } = await import('../lib/api');
+            const { chatStream, saveMessages } = await import('../lib/api');
             let accumulatedAnswer = '';
             let currentSources: SourceFile[] = [];
-
-            const historyToSend = historySnapshot.length > 0 ? historySnapshot : undefined;
+            let currentWebSources: { title: string; url: string }[] = [];
 
             for await (const update of chatStream({
                 session_id: activeSessionId || undefined,
-                project_id: projectId || undefined,
-                scope_mode: scopeMode,
                 question: userMessageContent,
-                history: historyToSend,
                 model: selectedModel,
                 use_rag: useRag,
-                contextSheet: activeLayerB || undefined,
-                signal: abortController.signal // キャンセル信号を渡す
+                use_web_search: useWebSearch,
+                history: historySnapshot.length > 0 ? historySnapshot : undefined,
+                signal: abortController.signal
             })) {
-                // Phase A: 別のリクエストが開始されていたらこのストリームの処理を中断
                 if (requestId !== lastRequestIdRef.current) break;
 
-                if (update.type === 'sources') {
-                    currentSources = update.data;
-                    setMessages(prev => {
-                        const newMessages = [...prev];
-                        const lastMsg = newMessages[newMessages.length - 1];
-                        if (lastMsg.role === 'assistant') {
-                            lastMsg.sources = update.data;
-                        }
-                        return newMessages;
-                    });
-                } else if (update.type === 'answer') {
+                if (update.type === 'answer') {
                     accumulatedAnswer += update.data;
                     setMessages(prev => {
-                        const newMessages = [...prev];
-                        const lastMsg = newMessages[newMessages.length - 1];
-                        if (lastMsg.role === 'assistant') {
-                            lastMsg.content = accumulatedAnswer;
-                        }
-                        return newMessages;
+                        const next = [...prev];
+                        const last = next[next.length - 1];
+                        if (last.role === 'assistant') last.content = accumulatedAnswer;
+                        return next;
+                    });
+                } else if (update.type === 'sources') {
+                    currentSources = update.data;
+                    setMessages(prev => {
+                        const next = [...prev];
+                        const last = next[next.length - 1];
+                        if (last.role === 'assistant') last.sources = currentSources;
+                        return next;
+                    });
+                } else if (update.type === 'web_sources') {
+                    currentWebSources = update.data;
+                    setMessages(prev => {
+                        const next = [...prev];
+                        const last = next[next.length - 1];
+                        if (last.role === 'assistant') last.webSources = currentWebSources;
+                        return next;
                     });
                 } else if (update.type === 'error') {
-                    setMessages(prev => {
-                        const newMessages = [...prev];
-                        const lastMsg = newMessages[newMessages.length - 1];
-                        if (lastMsg.role === 'assistant') {
-                            lastMsg.content = `Error: ${update.data}`;
-                        }
-                        return newMessages;
-                    });
+                    throw new Error(update.data);
                 }
             }
 
-            // Stream complete. Save to DB.
+            // Persistence
             let sessionIdToSave = activeSessionId;
             if (!sessionIdToSave) {
-                const newSession = await createSession();
-                sessionIdToSave = newSession.id;
-                setActiveSessionId(newSession.id);
+                const session = await createSession();
+                sessionIdToSave = session.id;
+                setActiveSessionId(session.id);
             }
-            try {
-                await saveMessages(sessionIdToSave, {
+
+            if (sessionIdToSave) {
+                await apiSaveMessages(sessionIdToSave, {
                     user: userMessageContent,
                     assistant: accumulatedAnswer,
                     sources: currentSources,
+                    web_sources: currentWebSources,
                     model: selectedModel
                 });
-                const fetchedSessions = await fetchSessions();
-                setSessions(fetchedSessions);
-            } catch (saveErr) {
-                console.error('Failed to save message:', saveErr);
             }
+            fetchSessions().then(setSessions);
 
-        } catch (error: any) {
-            if (error.name === 'AbortError') {
-                console.log('Request aborted');
-                return;
-            }
-            console.error('Chat error:', error);
+        } catch (err: any) {
+            if (err.name === 'AbortError') return;
+            console.error(err);
             setMessages(prev => {
-                const newMessages = [...prev];
-                const lastMsg = newMessages[newMessages.length - 1];
-                if (lastMsg.role === 'assistant') {
-                    lastMsg.content = `System Error: ${error.message}`;
-                }
-                return newMessages;
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last.role === 'assistant') last.content = `Error: ${err.message}`;
+                return next;
             });
         } finally {
-            if (requestId === lastRequestIdRef.current) {
-                setIsLoading(false);
-                abortControllerRef.current = null;
-            }
-        }
-    };
-
-    const handleExampleClick = (question: string) => {
-        setInput(question);
-    };
-
-    // シート生成中のSSEチャンクをチャット画面にstreamingDisplayするハンドラー
-    const handleSheetStreamStart = () => {
-        setIsGeneratingSheet(true);
-        setMessages(prev => [...prev, { role: 'assistant', content: '', sources: undefined }]);
-    };
-
-    const handleSheetStreamChunk = (chunk: string) => {
-        setMessages(prev => {
-            const msgs = [...prev];
-            const last = msgs[msgs.length - 1];
-            if (last?.role === 'assistant') last.content += chunk;
-            return msgs;
-        });
-    };
-
-    const handleSheetStreamEnd = () => {
-        setIsGeneratingSheet(false);
-    };
-
-    const handleLayerBChange = (content: string | null, title: string | null) => {
-        setActiveLayerB(content);
-        setActiveLayerBTitle(title);
-    };
-
-    // Replaced with FileUpload component, but keeping this for legacy multiple file upload via button if needed
-    // Currently hidden in UI
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const files = e.target.files;
-        if (!files || files.length === 0) return;
-
-        setIsUploading(true);
-        setUploadResult(null);
-
-        const formData = new FormData();
-        for (let i = 0; i < files.length; i++) {
-            formData.append('files', files[i]);
-        }
-        formData.append('category', 'uploads');
-
-        try {
-            const res = await authFetch(`${API_BASE}/api/upload/multiple`, {
-                method: 'POST',
-                body: formData,
-            });
-
-            if (res.ok) {
-                const data = await res.json();
-                setUploadResult(`${data.uploaded.length}ファイルをアップロードしました`);
-                fetchStats();
-            } else {
-                setUploadResult('アップロードに失敗しました');
-            }
-        } catch (error) {
-            setUploadResult('アップロードエラー');
-        } finally {
-            setIsUploading(false);
-            if (fileInputRef.current) {
-                fileInputRef.current.value = '';
-            }
-        }
-    };
-
-    const handleReindex = async () => {
-        setIsIndexing(true);
-        try {
-            const res = await authFetch(`${API_BASE}/api/index`, { method: 'POST' });
-            if (res.ok) {
-                fetchStats();
-            }
-        } catch (error) {
-            console.error('Reindex error:', error);
-        } finally {
-            setIsIndexing(false);
+            setIsLoading(false);
+            abortControllerRef.current = null;
         }
     };
 
     return (
-        <div className="min-h-screen flex flex-col">
-            {/* Header */}
-            <header className="border-b border-[var(--border)] bg-[var(--card)]/50 backdrop-blur-sm sticky top-0 z-10">
-                <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center">
-                            <Building2 className="w-6 h-6 text-white" />
-                        </div>
-                        <div>
-                            <h1 className="text-xl font-bold bg-gradient-to-r from-primary-400 to-accent-400 bg-clip-text text-transparent">
-                                建築意匠ナレッジベース
-                            </h1>
-                            <p className="text-xs text-[var(--muted)]">PM/CM技術アドバイザー</p>
-                        </div>
-                    </div>
-
-                    {/* Navigation Links */}
-                    <div className="flex items-center gap-2">
-                        <Link
-                            href="/my-context"
-                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-teal-500/20 to-emerald-500/20 border border-teal-500/30 text-teal-300 hover:from-teal-500/30 hover:to-emerald-500/30 hover:border-teal-500/50 transition-all text-sm font-medium"
-                        >
-                            <LibraryIcon className="w-4 h-4" />
-                            My Context
-                        </Link>
-                        <Link
-                            href="/mindmap"
-                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 border border-violet-500/30 text-violet-300 hover:from-violet-500/30 hover:to-fuchsia-500/30 hover:border-violet-500/50 transition-all text-sm font-medium"
-                        >
-                            <Map className="w-4 h-4" />
-                            プロセスマップ
-                        </Link>
-
-                    </div>
-
-                    {/* Stats */}
-                    {stats && (
-                        <div className="hidden md:flex items-center gap-4 text-sm text-[var(--muted)]">
-                            <span className="flex items-center gap-1">
-                                <FileText className="w-4 h-4" />
-                                {stats.file_count}ファイル
-                            </span>
-                            <span>{stats.chunk_count}チャンク</span>
-                        </div>
-                    )}
+        <div className="flex h-screen bg-[var(--background)] text-[var(--foreground)] overflow-hidden font-sans">
+            {/* Sidebar */}
+            <div className="w-64 border-r border-[var(--border)] bg-[var(--card)] flex flex-col shrink-0">
+                <div className="p-4 border-b border-[var(--border)] flex items-center gap-2">
+                    <Building2 className="w-6 h-6 text-primary-500" />
+                    <h1 className="font-bold text-lg tracking-tight">Antigravity</h1>
                 </div>
-            </header>
+
+                <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                    <button
+                        onClick={() => {
+                            setActiveSessionId(null);
+                            setMessages([]);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-[var(--card-hover)] transition-colors text-sm font-medium mb-4 border border-[var(--border)] shadow-sm"
+                    >
+                        <Plus className="w-4 h-4" /> 新規チャット
+                    </button>
+
+                    <div className="px-3 mb-2">
+                        <p className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider">最近のチャット</p>
+                    </div>
+
+                    {sessions.map(s => (
+                        <button
+                            key={s.id}
+                            onClick={() => loadSession(s.id)}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all truncate hover:bg-[var(--card-hover)] ${activeSessionId === s.id ? 'bg-primary-50 text-primary-700 font-medium border border-primary-200' : 'text-[var(--foreground)]'}`}
+                        >
+                            {s.title || `新規チャット (${s.id.slice(0, 8)})`}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="p-4 border-t border-[var(--border)]">
+                    <button 
+                        onClick={() => setActiveTab(activeTab === 'chat' ? 'library' : 'chat')}
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-sm hover:bg-[var(--card-hover)] transition-colors shadow-sm"
+                    >
+                        <div className="flex items-center gap-2">
+                            {activeTab === 'chat' ? <LibraryIcon className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
+                            <span>{activeTab === 'chat' ? 'ライブラリ' : 'チャットに戻る'}</span>
+                        </div>
+                    </button>
+                </div>
+            </div>
 
             {/* Main Content */}
-            <div className="flex-1 max-w-6xl mx-auto w-full flex flex-col md:flex-row gap-4 p-4">
-                {/* Sidebar */}
-                <aside className="md:w-64 space-y-4 flex flex-col min-h-0">
-                    <ScopeEnginePanel onScopeChange={(pid, sm) => { setProjectId(pid); setScopeMode(sm); }} />
-
-                    {/* Sidebar Tabs */}
-                    <div className="flex p-1 bg-[var(--background)] rounded-xl border border-[var(--border)] shadow-sm">
-                        <button
-                            onClick={() => setSidebarTab('knowledge')}
-                            className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${sidebarTab === 'knowledge' ? 'bg-primary-500 text-white shadow-md' : 'text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--card-hover)]'}`}
-                        >
-                            <Database className="w-3.5 h-3.5" />
-                            Knowledge
-                        </button>
-                        <button
-                            onClick={() => setSidebarTab('layers')}
-                            className={`flex-1 py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${sidebarTab === 'layers' ? 'bg-violet-500 text-white shadow-md' : 'text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--card-hover)]'}`}
-                        >
-                            <Layers className="w-3.5 h-3.5" />
-                            Layers
-                        </button>
-                    </div>
-
-                    <div className="flex-1 space-y-4 overflow-y-auto custom-scrollbar pr-1">
-                        {sidebarTab === 'knowledge' ? (
-                            <>
-                                {/* Session List */}
-                                <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] shadow-sm">
-                                    <div className="flex items-center justify-between mb-3">
-                                        <label className="block text-sm font-medium flex items-center gap-2">
-                                            <MessageSquare className="w-4 h-4" />
-                                            チャット履歴
-                                        </label>
-                                        <button
-                                            onClick={() => setShowSessionList(!showSessionList)}
-                                            className="text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
-                                        >
-                                            <ChevronDown className={`w-4 h-4 transition-transform ${showSessionList ? 'rotate-180' : ''}`} />
-                                        </button>
-                                    </div>
-
-                                    {showSessionList && (
-                                        <div className="space-y-1 max-h-48 overflow-y-auto pr-1 animate-fade-in custom-scrollbar">
-                                            {sessions.length === 0 ? (
-                                                <div className="text-xs text-[var(--muted)] text-center py-4 bg-[var(--background)] rounded-lg border border-[var(--border)] border-dashed">履歴がありません</div>
-                                            ) : (
-                                                sessions.map(s => (
-                                                    <div key={s.id} className={`group flex items-center justify-between p-2 rounded-lg text-xs cursor-pointer transition-all border border-transparent ${activeSessionId === s.id ? 'bg-primary-500/10 text-primary-600 border-primary-500/20 shadow-sm' : 'hover:bg-[var(--card-hover)] text-[var(--foreground)] hover:border-[var(--border)]'}`} onClick={async () => {
-                                                        try {
-                                                            const detail = await fetchSessionDetail(s.id);
-                                                            setActiveSessionId(s.id);
-                                                            setMessages(detail.messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, sources: m.sources })));
-                                                        } catch (e) { console.error('Failed to load session', e); }
-                                                    }}>
-                                                        <div className="flex-1 overflow-hidden">
-                                                            <div className="truncate font-medium">{s.title || '新規チャット'}</div>
-                                                            <div className="text-[10px] text-[var(--muted)] mt-0.5">{new Date(s.updated_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
-                                                        </div>
-                                                        <button
-                                                            onClick={async (e) => {
-                                                                e.stopPropagation();
-                                                                if (confirm('この履歴を削除しますか？')) {
-                                                                    try {
-                                                                        await deleteSession(s.id);
-                                                                        if (activeSessionId === s.id) {
-                                                                            setMessages([]);
-                                                                            setActiveSessionId(null);
-                                                                        }
-                                                                        fetchSessions().then(setSessions);
-                                                                    } catch (err) { console.error(err); }
-                                                                }
-                                                            }}
-                                                            className="text-[var(--muted)] hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all p-1.5 rounded-md hover:bg-red-500/10"
-                                                            title="削除"
-                                                        >
-                                                            <X className="w-3.5 h-3.5" />
-                                                        </button>
-                                                    </div>
-                                                ))
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Stats Dashboard */}
-                                <StatsPanel stats={stats} onRefresh={fetchStats} isLoading={false} />
-
-                                {/* File Upload */}
-                                <FileUpload />
-
-                                {/* Category Filter */}
-                                <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
-                                    <label className="block text-sm font-medium mb-2">検索対象</label>
-                                    <div className="relative">
-                                        <select
-                                            value={category}
-                                            onChange={(e) => setCategory(e.target.value)}
-                                            className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
-                                        >
-                                            {CATEGORIES.map((cat) => (
-                                                <option key={cat.value} value={cat.value}>
-                                                    {cat.label}
-                                                </option>
-                                            ))}
-                                        </select>
-                                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--muted)] pointer-events-none" />
-                                    </div>
-                                </div>
-
-                                {/* Search Filters */}
-                                <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] space-y-3">
-                                    <label className="block text-sm font-medium">絞り込み</label>
-                                    <div className="relative">
-                                        <select
-                                            className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
-                                            value={fileType}
-                                            onChange={(e) => setFileType(e.target.value)}
-                                        >
-                                            <option value="">全てのファイル形式</option>
-                                            <option value=".pdf">PDFドキュメント</option>
-                                            <option value=".md">Markdown</option>
-                                            <option value=".txt">テキスト</option>
-                                        </select>
-                                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
-                                    </div>
-                                    <div className="relative">
-                                        <select
-                                            className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
-                                            value={dateRange}
-                                            onChange={(e) => setDateRange(e.target.value)}
-                                        >
-                                            <option value="">全期間</option>
-                                            <option value="7d">過去1週間</option>
-                                            <option value="1m">過去1ヶ月</option>
-                                            <option value="3m">過去3ヶ月</option>
-                                        </select>
-                                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
-                                    </div>
-                                    {/* Tag Filter */}
-                                    <div className="pt-2 border-t border-[var(--border)]">
-                                        <button
-                                            onClick={() => setIsTagExpanded(!isTagExpanded)}
-                                            className="flex items-center justify-between w-full text-xs font-medium text-[var(--foreground)] mb-2"
-                                        >
-                                            <span>タグフィルター ({selectedTags.length})</span>
-                                            <ChevronDown className={`w-3 h-3 transition-transform ${isTagExpanded ? 'rotate-180' : ''}`} />
-                                        </button>
-                                        {isTagExpanded && (
-                                            <div className="space-y-3 animate-fade-in">
-                                                <div className="max-h-60 overflow-y-auto pr-1 space-y-4">
-                                                    {Object.entries(availableTags).map(([group, tags]) => (
-                                                        <div key={group}>
-                                                            <h4 className="text-[10px] uppercase tracking-wider text-[var(--muted)] mb-1.5 font-bold">{group}</h4>
-                                                            <div className="space-y-1">
-                                                                {tags.map((tag) => (
-                                                                    <label key={tag} className="flex items-center gap-2 cursor-pointer group hover:bg-[var(--background)] p-1 rounded-md transition-colors">
-                                                                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedTags.includes(tag) ? 'bg-primary-500 border-primary-500' : 'border-[var(--border)] group-hover:border-primary-400'}`}>
-                                                                            {selectedTags.includes(tag) && <Check className="w-3 h-3 text-white" />}
-                                                                        </div>
-                                                                        <input type="checkbox" className="hidden" checked={selectedTags.includes(tag)} onChange={() => setSelectedTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])} />
-                                                                        <span className={`text-xs ${selectedTags.includes(tag) ? 'text-primary-600 font-medium' : 'text-[var(--foreground)]'}`}>{tag}</span>
-                                                                    </label>
-                                                                ))}
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Drive Sync */}
-                                <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
-                                    <label className="block text-sm font-medium mb-2 flex items-center gap-2"><Cloud className="w-4 h-4" />Google Drive</label>
-                                    {driveStatus?.authenticated ? (
-                                        <div className="space-y-2">
-                                            <button onClick={handleDriveSync} disabled={isSyncing} className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50">
-                                                {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                                                {isSyncing ? '同期中...' : 'Driveから同期'}
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <button onClick={handleDriveAuth} className="w-full flex items-center justify-center gap-2 bg-[var(--background)] hover:bg-[var(--card-hover)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm transition-colors"><CloudOff className="w-4 h-4" />認証する</button>
-                                    )}
-                                </div>
-                            </>
-                        ) : (
-                            <LayerPanel
-                                activeLayerB={activeLayerB}
-                                activeLayerBTitle={activeLayerBTitle}
-                                onLayerBChange={handleLayerBChange}
-                                availableModels={availableModels}
-                                availableRoles={availableRoles}
-                            />
-                        )}
-                    </div>
-
-                    {/* Classic Upload (Legacy Button, kept for fallback) */}
-                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)] hidden">
-                        <label className="block text-sm font-medium mb-2">旧ファイルアップロード</label>
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            multiple
-                            accept=".pdf,.md,.txt,.docx"
-                            onChange={handleFileUpload}
-                            className="hidden"
-                        />
-                        <button
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={isUploading}
-                            className="w-full flex items-center justify-center gap-2 bg-[var(--background)] hover:bg-[var(--card-hover)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm transition-colors disabled:opacity-50"
-                        >
-                            {isUploading ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                                <Upload className="w-4 h-4" />
-                            )}
-                            {isUploading ? 'アップロード中...' : 'ファイルを選択'}
-                        </button>
-                        {uploadResult && (
-                            <p className="text-xs mt-2 text-green-400 flex items-center gap-1">
-                                <Check className="w-3 h-3" />
-                                {uploadResult}
-                            </p>
-                        )}
-                    </div>
-
-                    {/* Reindex */}
-                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
-                        <label className="block text-sm font-medium mb-2">インデックス</label>
-                        <button
-                            onClick={handleReindex}
-                            disabled={isIndexing}
-                            className="w-full flex items-center justify-center gap-2 bg-primary-600 hover:bg-primary-700 rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50"
-                        >
-                            <RefreshCw className={`w-4 h-4 ${isIndexing ? 'animate-spin' : ''}`} />
-                            {isIndexing ? '更新中...' : '再構築'}
-                        </button>
-                        {stats && (
-                            <p className="text-xs mt-2 text-[var(--muted)]">
-                                最終更新: {stats.last_updated?.split('T')[0] || '未実行'}
-                            </p>
-                        )}
-                    </div>
-
-                    {/* Examples */}
-                    <div className="bg-[var(--card)] rounded-xl p-4 border border-[var(--border)]">
-                        <label className="block text-sm font-medium mb-2">💡 質問例</label>
-                        <div className="space-y-2">
-                            {EXAMPLE_QUESTIONS.map((q, i) => (
-                                <button
-                                    key={i}
-                                    onClick={() => handleExampleClick(q)}
-                                    className="w-full text-left text-xs text-[var(--muted)] hover:text-[var(--foreground)] bg-[var(--background)] hover:bg-[var(--card-hover)] rounded-lg px-3 py-2 transition-colors line-clamp-2"
-                                >
-                                    {q}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                </aside>
-
-                {/* Chat Area */}
-                <div className="flex-1 flex flex-col bg-[var(--card)] rounded-xl border border-[var(--border)] overflow-hidden relative">
-                    {/* Tabs */}
-                    <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--muted)]/5">
-                        <button
-                            onClick={() => setActiveTab('chat')}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'chat' ? 'bg-white shadow-sm text-primary-600' : 'text-[var(--muted)] hover:bg-[var(--card-hover)]'}`}
-                        >
-                            <MessageSquare className="w-4 h-4" />
-                            Chat
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('library')}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'library' ? 'bg-white shadow-sm text-primary-600' : 'text-[var(--muted)] hover:bg-[var(--card-hover)]'}`}
-                        >
-                            <LibraryIcon className="w-4 h-4" />
-                            Library
-                        </button>
-                    </div>
-
-                    {/* Chat Container (Split View) */}
-                    <div className="flex-1 flex overflow-hidden" style={{ display: activeTab === 'chat' ? 'flex' : 'none' }}>
-                        {/* Left Pane: Chat */}
-                        <div className={`flex flex-col border-r border-[var(--border)] transition-all duration-300 h-full ${isPdfOpen ? 'w-1/2' : 'w-full'}`}>
-                            {/* Messages */}
-                            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex-1 flex flex-col min-w-0 bg-[#fbfbfb]">
+                {activeTab === 'chat' ? (
+                    <div className="flex-1 flex min-h-0">
+                        {/* Chat Area */}
+                        <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${isPdfOpen ? 'w-1/2' : 'w-full'}`}>
+                            {/* Messages Container */}
+                            <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
                                 {messages.length === 0 && (
-                                    <div className="h-full flex flex-col items-center justify-center text-center text-[var(--muted)]">
-                                        <Building2 className="w-16 h-16 mb-4 opacity-50" />
-                                        <h2 className="text-lg font-medium mb-2">建築意匠ナレッジベース</h2>
-                                        <p className="text-sm max-w-md">
-                                            図面・カタログ・技術基準を横断検索し、
-                                            建築技術に関する質問に回答します。
-                                        </p>
+                                    <div className="h-full flex flex-col items-center justify-center text-[var(--muted)] opacity-60">
+                                        <Building2 className="w-16 h-16 mb-4" />
+                                        <h2 className="text-xl font-semibold mb-2">建築設計ナレッジ検索</h2>
+                                        <p className="max-w-md text-center text-sm">設計基準やカタログを横断的に検索し、高度な技術回答を生成します。</p>
                                     </div>
                                 )}
 
                                 {messages.map((msg, i) => (
-                                    <div
-                                        key={i}
-                                        className={`animate-fade-in ${msg.role === 'user' ? 'flex justify-end' : ''}`}
-                                    >
-                                        <div
-                                            className={`max-w-[85%] rounded-xl p-4 ${msg.role === 'user'
-                                                ? 'bg-primary-600 text-white'
-                                                : 'bg-[var(--background)] border border-[var(--border)]'
-                                                }`}
-                                        >
-                                            {msg.role === 'user' ? (
-                                                <p className="whitespace-pre-wrap">{msg.content}</p>
-                                            ) : (
-                                                <div className="markdown-content">
-                                                    <ReactMarkdown
-                                                        components={{
-                                                            p: ({ children }) => {
-                                                                const currentSources = msg.sources || [];
-                                                                const transformed = React.Children.map(children, (child) => {
-                                                                    if (typeof child === 'string') {
-                                                                        return transformCitations(
-                                                                            child,
-                                                                            currentSources,
-                                                                            (url, page) => {
-                                                                                setPdfUrl(url);
-                                                                                setPdfInitialPage(page);
-                                                                                setIsPdfOpen(true);
-                                                                            }
-                                                                        );
-                                                                    }
-                                                                    return child;
-                                                                });
-                                                                return <p>{transformed}</p>;
-                                                            },
-                                                        }}
-                                                    >{msg.content}</ReactMarkdown>
-                                                </div>
-                                            )}
+                                    <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
+                                        <div className={`max-w-[85%] rounded-2xl p-4 shadow-sm ${msg.role === 'user' ? 'bg-primary-600 text-white rounded-tr-none' : 'bg-white border border-[var(--border)] rounded-tl-none'}`}>
+                                            <div className="markdown-content text-sm leading-relaxed overflow-x-auto">
+                                                <ReactMarkdown
+                                                    components={{
+                                                        p: ({ children }) => {
+                                                            const currentSources = msg.sources || [];
+                                                            const transformed = React.Children.map(children, (child) => {
+                                                                if (typeof child === 'string') {
+                                                                    return transformCitations(
+                                                                        child,
+                                                                        currentSources,
+                                                                        (url, page) => {
+                                                                            setPdfUrl(url);
+                                                                            setPdfInitialPage(page);
+                                                                            setIsPdfOpen(true);
+                                                                        }
+                                                                    );
+                                                                }
+                                                                return child;
+                                                            });
+                                                            return <p>{transformed}</p>;
+                                                        },
+                                                    }}
+                                                >{msg.content}</ReactMarkdown>
+                                            </div>
 
+                                            {/* RAG Sources */}
                                             {msg.sources && msg.sources.length > 0 && (
                                                 <div className="mt-4 pt-3 border-t border-[var(--border)]">
-                                                    <p className="text-xs text-[var(--muted)] mb-2 font-medium">参照ファイル:</p>
+                                                    <p className="text-[10px] font-bold text-[var(--muted)] mb-2 uppercase tracking-tighter">参照資料</p>
                                                     <div className="flex flex-wrap gap-2">
                                                         {msg.sources.map((src, j) => (
-                                                            <SourceCard
-                                                                key={j}
-                                                                src={src}
+                                                            <SourceCard 
+                                                                key={j} 
+                                                                src={src} 
                                                                 onPageClick={(url, page) => {
                                                                     setPdfUrl(url);
                                                                     setPdfInitialPage(page);
                                                                     setIsPdfOpen(true);
-                                                                }}
+                                                                }} 
                                                             />
                                                         ))}
                                                     </div>
                                                 </div>
                                             )}
+
+                                            {/* Web Sources */}
+                                            {msg.webSources && msg.webSources.length > 0 && (
+                                                <div className="mt-4 pt-3 border-t border-[var(--border)]">                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                         {msg.webSources.map((ws, j) => (
+                                                             <a 
+                                                                 key={j} 
+                                                                 href={ws.url} 
+                                                                 target="_blank" 
+                                                                 rel="noopener noreferrer"
+                                                                 className="flex items-center gap-2.5 p-2 rounded-xl bg-blue-50/50 border border-blue-100/50 text-[11px] text-blue-700 hover:bg-blue-100 hover:border-blue-200 transition-all group shadow-sm active:scale-[0.98]"
+                                                             >
+                                                                 <div className="p-1.5 rounded-lg bg-blue-100/50 group-hover:bg-blue-200/50 transition-colors">
+                                                                     <Globe className="w-3.5 h-3.5 flex-shrink-0 text-blue-600" />
+                                                                 </div>
+                                                                 <div className="flex-1 min-w-0">
+                                                                     <p className="font-semibold truncate leading-tight">{ws.title || ws.url}</p>
+                                                                     <p className="text-[10px] text-blue-500/80 truncate mt-0.5">{new URL(ws.url).hostname}</p>
+                                                                 </div>
+                                                                 <ExternalLink className="w-2.5 h-2.5 opacity-40 group-hover:opacity-100 flex-shrink-0 transition-opacity" />
+                                                             </a>
+                                                         ))}
+                                                     </div>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 ))}
-
+                                
                                 {isLoading && (
-                                    <div className="animate-fade-in">
-                                        <div className="max-w-[85%] rounded-xl p-4 bg-[var(--background)] border border-[var(--border)]">
-                                            <div className="flex items-center gap-2 text-[var(--muted)]">
-                                                <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                                                <span className="loading-dots text-sm">回答を生成中</span>
-                                            </div>
+                                    <div className="flex justify-start animate-pulse">
+                                        <div className="bg-white border border-[var(--border)] rounded-2xl p-4 rounded-tl-none flex items-center gap-3">
+                                            <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                                            <span className="text-sm text-[var(--muted)]">
+                                                {useWebSearch ? 'ウェブ検索中...' : '考案中...'}
+                                            </span>
                                         </div>
                                     </div>
                                 )}
-
                                 <div ref={messagesEndRef} />
                             </div>
 
-                            {/* Input area */}
-                            <div className="border-t border-[var(--border)] p-4 space-y-3 bg-[var(--card)]/50 backdrop-blur-sm">
-                                <div className="flex flex-col gap-3">
-                                    <div className="flex flex-wrap items-center justify-between gap-y-2 gap-x-4">
-                                        <div className="flex flex-wrap items-center gap-2 flex-1">
-                                            {/* Model Selector */}
-                                            <div className="flex items-center gap-1.5">
-                                                <span className="text-xs text-[var(--muted)] flex-shrink-0">🤖 モデル:</span>
-                                                <div className="relative min-w-[140px]">
-                                                    <select
-                                                        value={selectedModel}
-                                                        onChange={(e) => setSelectedModel(e.target.value)}
-                                                        className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-2 py-1 text-xs appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary-500 pr-6"
-                                                    >
-                                                        {Object.keys(availableModels).length > 2
-                                                            ? Object.entries(availableModels).map(([k, v]) => (
-                                                                <option key={k} value={k}>{v}</option>
-                                                            ))
-                                                            : (
-                                                                <>
-                                                                    <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
-                                                                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
-                                                                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                                                                </>
-                                                            )
-                                                        }
-                                                    </select>
-                                                    <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--muted)] pointer-events-none" />
-                                                </div>
-                                            </div>
-
-                                            {/* RAG Toggle */}
-                                            <div className="flex items-center gap-1.5 border-l border-[var(--border)] pl-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setUseRag(prev => !prev)}
-                                                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-all font-medium ${useRag
-                                                        ? 'bg-primary-50 border-primary-300 text-primary-700 hover:bg-primary-100'
-                                                        : 'bg-[var(--card)] border-[var(--border)] text-[var(--muted)] hover:bg-[var(--card-hover)]'
-                                                        }`}
-                                                    title={useRag ? '知識ベース参照中' : '直接回答モード'}
-                                                >
-                                                    <span>{useRag ? '📚' : '💬'}</span>
-                                                    <span>{useRag ? 'RAG ON' : 'RAG OFF'}</span>
-                                                </button>
-                                            </div>
-
-                                            {activeLayerB && (
-                                                <span className="text-[10px] px-2 py-1 rounded-full bg-violet-500/15 border border-violet-500/30 text-violet-300 flex items-center gap-1 flex-shrink-0 animate-pulse-slow">
-                                                    <Sparkles className="w-2.5 h-2.5" />
-                                                    ✨ Layer B 適用中
-                                                </span>
-                                            )}
+                            {/* Input Area */}
+                            <div className="p-4 bg-white border-t border-[var(--border)]">
+                                <form onSubmit={handleSubmit} className="relative max-w-4xl mx-auto">
+                                    <div className="flex items-center gap-2 mb-3">
+                                        {/* Model Select */}
+                                        <div className="relative">
+                                            <select 
+                                                value={selectedModel}
+                                                onChange={(e) => setSelectedModel(e.target.value)}
+                                                className="appearance-none bg-[var(--background)] border border-[var(--border)] rounded-full px-4 py-1.5 pr-8 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary-400 hover:bg-[var(--card-hover)] transition-colors cursor-pointer"
+                                            >
+                                                 <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
+                                                 <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
+                                                 <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
+                                                 <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                                            </select>
+                                            <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--muted)] pointer-events-none" />
                                         </div>
 
-                                        {/* New Chat Button */}
+                                        {/* RAG Toggle */}
                                         <button
-                                            onClick={async () => {
-                                                try {
-                                                    const newSession = await createSession();
-                                                    setActiveSessionId(newSession.id);
-                                                    setMessages([]);
-                                                    fetchSessions().then(setSessions);
-                                                } catch (err) {
-                                                    console.error(err);
-                                                }
-                                            }}
-                                            className="text-xs px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-sm hover:bg-primary-50 flex items-center gap-1.5 text-primary-600 font-medium transition-all flex-shrink-0"
+                                            type="button"
+                                            onClick={() => setUseRag(!useRag)}
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${useRag ? 'bg-primary-50 border-primary-200 text-primary-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'}`}
                                         >
-                                            <Plus className="w-3.5 h-3.5" />
-                                            新規チャット
+                                            <Database className="w-3.5 h-3.5" />
+                                            RAG {useRag ? 'ON' : 'OFF'}
+                                        </button>
+
+                                        {/* Web Toggle */}
+                                        <button
+                                            type="button"
+                                            onClick={() => setUseWebSearch(!useWebSearch)}
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${useWebSearch ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm' : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'}`}
+                                        >
+                                            <Globe className="w-3.5 h-3.5" />
+                                            ウェブ検索 {useWebSearch ? 'ON' : 'OFF'}
                                         </button>
                                     </div>
-                                </div>
 
-                                <form onSubmit={handleSubmit} className="flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={input}
-                                        onChange={(e) => setInput(e.target.value)}
-                                        placeholder="質問を入力してください..."
-                                        className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary-500 placeholder:text-[var(--muted)] shadow-inner"
-                                        disabled={isLoading}
-                                    />
-                                    <button
-                                        type="submit"
-                                        disabled={isLoading || !input.trim()}
-                                        className="bg-gradient-to-r from-primary-500 to-accent-500 hover:from-primary-600 hover:to-accent-600 text-white rounded-xl px-6 py-3 font-medium transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center min-w-[80px]"
-                                    >
-                                        {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-                                    </button>
+                                    <div className="relative flex items-end gap-2 bg-[var(--background)] border border-[var(--border)] rounded-2xl p-2 focus-within:ring-2 focus-within:ring-primary-400 focus-within:border-primary-400 transition-all shadow-sm">
+                                        <textarea
+                                            value={input}
+                                            onChange={(e) => setInput(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && !e.shiftKey) {
+                                                    e.preventDefault();
+                                                    handleSubmit(e as any);
+                                                }
+                                            }}
+                                            placeholder="メッセージを入力..."
+                                            rows={1}
+                                            className="flex-1 max-h-48 resize-none bg-transparent border-none focus:ring-0 p-2 text-sm custom-scrollbar"
+                                            style={{ height: 'auto', minHeight: '40px' }}
+                                        />
+                                        <button
+                                            type="submit"
+                                            disabled={!input.trim() || isLoading}
+                                            className="bg-primary-600 hover:bg-primary-700 text-white p-2 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md active:scale-95"
+                                        >
+                                            {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                                        </button>
+                                    </div>
                                 </form>
                             </div>
                         </div>
 
-                        {/* Right Pane: PDF Viewer */}
+                        {/* PDF Viewer Pane */}
                         {isPdfOpen && (
-                            <div className="w-1/2 h-full border-l border-[var(--border)] relative bg-[var(--background)]">
+                            <div className="w-1/2 h-full border-l border-[var(--border)] bg-white animate-in slide-in-from-right duration-300">
                                 <PDFViewer
                                     url={pdfUrl!}
                                     initialPage={pdfInitialPage}
@@ -1257,15 +524,39 @@ export default function Home() {
                             </div>
                         )}
                     </div>
-
-                    {/* Library Container */}
-                    {activeTab === 'library' && (
-                        <div className="flex-1 overflow-hidden h-full">
-                            <Library />
-                        </div>
-                    )}
-                </div>
+                ) : (
+                    <Library />
+                )}
             </div>
+
+            {/* Global Styles */}
+            <style jsx global>{`
+                :root {
+                    --primary-50: #eff6ff;
+                    --primary-200: #bfdbfe;
+                    --primary-500: #3b82f6;
+                    --primary-600: #2563eb;
+                    --primary-700: #1d4ed8;
+                    --background: #fdfdfd;
+                    --foreground: #1e293b;
+                    --card: #ffffff;
+                    --card-hover: #f8fafc;
+                    --border: #e2e8f0;
+                    --muted: #64748b;
+                }
+
+                .markdown-content p { margin-bottom: 0.75rem; }
+                .markdown-content p:last-child { margin-bottom: 0; }
+                .markdown-content ul, .markdown-content ol { margin-bottom: 0.75rem; padding-left: 1.5rem; }
+                .markdown-content li { margin-bottom: 0.25rem; }
+                .markdown-content strong { font-weight: 600; }
+                .markdown-content code { background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-family: monospace; }
+                
+                .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+                .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+                .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 5px; }
+                .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+            `}</style>
         </div>
     );
 }

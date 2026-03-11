@@ -188,6 +188,7 @@ class ChatMessage(Base):
     role = Column(String, nullable=False)        # "user" または "assistant"
     content = Column(Text, nullable=False)       # 発言内容
     sources = Column(Text, nullable=True)        # JSON文字列 (参照ファイルリスト)
+    web_sources = Column(Text, nullable=True)    # JSON文字列 (ウェブ検索結果)
     model = Column(String, nullable=True)        # 使用モデル名
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -427,13 +428,15 @@ def _run_migrations():
             model      VARCHAR NOT NULL,
             file_paths TEXT    NOT NULL,
             char_limit INTEGER DEFAULT 80000,
-            truncated  BOOLEAN DEFAULT 0,
+            truncated  BOOLEAN DEFAULT 0
         )""",
         # Phase 4 (Drive Transition): Artifacts への Drive ID 追加
         "ALTER TABLE artifacts ADD COLUMN drive_file_id VARCHAR",
         "ALTER TABLE artifacts ADD COLUMN storage_type VARCHAR DEFAULT 'local'",
         # DocumentVersion への同期ステータス追加
         "ALTER TABLE document_versions ADD COLUMN drive_status VARCHAR",
+        # ChatMessage への web_sources 列追加
+        "ALTER TABLE chat_messages ADD COLUMN web_sources TEXT",
     ]
     with engine.connect() as conn:
         for sql in migrations:
