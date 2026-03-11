@@ -2,7 +2,7 @@
 
 import { memo, useRef, useState, useEffect } from 'react';
 import { Handle, Position, NodeProps, NodeToolbar } from 'reactflow';
-import { CheckSquare, Check, Clock, Minus, ChevronDown, ChevronRight, FileText, Lightbulb, Search, Sparkles } from 'lucide-react';
+import { CheckSquare, Check, Clock, Minus, ChevronDown, ChevronRight, FileText, Lightbulb, Search, Sparkles, AlertTriangle } from 'lucide-react';
 
 interface CustomNodeData {
     label: string;
@@ -10,6 +10,9 @@ interface CustomNodeData {
     category: string;
     status: string;
     checklistCount: number;
+    checklistDone?: number;
+    deliverablesCount?: number;
+    sourceType?: string;
     color: string;
     isSelected: boolean;
     isHighlighted: boolean;
@@ -23,6 +26,7 @@ interface CustomNodeData {
     // AI Action handlers
     onAiAction?: (action: 'summarize' | 'expand' | 'rag', nodeId: string, label: string) => void;
     isPulsing?: boolean;
+    structuralIssue?: 'orphan' | 'dead-end';
 }
 
 const STATUS_CONFIG: Record<string, { icon: React.ReactNode; bg: string; text: string }> = {
@@ -114,6 +118,8 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
                         : 'hover:shadow-md'
                     }
                     ${data.isPulsing ? 'animate-pulse ring-4 ring-violet-400 ring-offset-4 ring-offset-[var(--canvas-bg)]' : ''}
+                    ${data.structuralIssue === 'orphan' && !selected ? 'ring-2 ring-rose-500 bg-rose-50' : ''}
+                    ${data.structuralIssue === 'dead-end' && !selected ? 'ring-2 ring-orange-400 bg-orange-50' : ''}
                 `}
                 style={{
                     boxShadow: data.isDimmed
@@ -129,6 +135,18 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
                 <div className="absolute -top-2 right-4 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white p-1 rounded-full shadow-sm opacity-0 group-hover:opacity-100 transition-opacity z-10">
                     <Sparkles className="w-3 h-3" />
                 </div>
+
+                {/* Structural Issue Badge */}
+                {data.structuralIssue && (
+                    <div 
+                        className={`absolute -top-2.5 -left-2.5 text-white p-1.5 rounded-full shadow-lg z-10 border-2 border-white scale-110 ${
+                            data.structuralIssue === 'orphan' ? 'bg-rose-500 shadow-rose-200' : 'bg-amber-500 shadow-amber-200'
+                        }`} 
+                        title={data.structuralIssue === 'orphan' ? '孤立ノード (依存関係がありません)' : '行き止まりノード (後続の依存関係がありません)'}
+                    >
+                        <AlertTriangle className="w-3 h-3" />
+                    </div>
+                )}
 
                 {/* Collapse Toggle */}
                 {data.hasChildren && data.onCollapseToggle && (
@@ -174,7 +192,7 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
                     </div>
 
                     {/* Footer */}
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between mt-2">
                         <span
                             className="flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full"
                             style={{
@@ -185,15 +203,33 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
                             {status.icon}
                             {data.status}
                         </span>
-                        {data.checklistCount > 0 && (
-                            <span
-                                className="flex items-center gap-0.5 text-[10px]"
-                                style={{ color: data.isDimmed ? '#cbd5e1' : '#94a3b8' }}
-                            >
-                                <CheckSquare className="w-3 h-3" />
-                                {data.checklistCount}
-                            </span>
-                        )}
+                        
+                        <div className="flex items-center gap-2">
+                            {data.sourceType && data.sourceType !== 'manual' && (
+                                <span className="text-[9px] px-1 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200" title={`生成元: ${data.sourceType}`}>
+                                    {data.sourceType === 'ai_expand' ? '💡 AI' : 
+                                     data.sourceType === 'gap_advisor' ? '🔍 GAP' : 
+                                     data.sourceType === 'chat' ? '💬 Chat' : 
+                                     data.sourceType === 'template' ? '📄 Tmpl' : data.sourceType}
+                                </span>
+                            )}
+                            {(data.deliverablesCount || 0) > 0 && (
+                                <span className="flex items-center gap-0.5 text-[10px]" style={{ color: data.isDimmed ? '#cbd5e1' : '#64748b' }} title="成果物">
+                                    <FileText className="w-3 h-3" />
+                                    {data.deliverablesCount}
+                                </span>
+                            )}
+                            {data.checklistCount > 0 && (
+                                <span
+                                    className="flex items-center gap-0.5 text-[10px]"
+                                    style={{ color: data.isDimmed ? '#cbd5e1' : '#94a3b8' }}
+                                    title="チェックリスト進捗"
+                                >
+                                    <CheckSquare className="w-3 h-3" />
+                                    {data.checklistDone !== undefined ? `${data.checklistDone}/${data.checklistCount}` : data.checklistCount}
+                                </span>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>

@@ -63,6 +63,16 @@ def create_personal_context(data: PersonalContextCreate):
     }
     try:
         new_ctx = insert_context(entry)
+        
+        # --- PR-9: Index if already approved ---
+        if new_ctx.status == "approved":
+            try:
+                from personal_context_manager import PersonalContextManager
+                mgr = PersonalContextManager()
+                mgr.index_context(new_ctx.id)
+            except Exception as e:
+                logger.warning(f"Failed to index personal context {new_ctx.id}: {e}")
+                
         return {"id": new_ctx.id, "message": "created"}
     except Exception as e:
         logger.error(f"Failed to create context manually: {e}")
@@ -91,5 +101,91 @@ def delete_personal_context(context_id: int):
         session.delete(ctx)
         session.commit()
         return {"message": "deleted"}
+    finally:
+        session.close()
+
+
+# ========== Layer C 承認フロー APIs (Phase 7) ==========
+
+@router.get("/api/personal-contexts/candidates")
+def get_candidate_contexts():
+    """轜認待ちコンテキスト一覧（status=candidate）"""
+    session = SessionLocal()
+    try:
+        contexts = (
+            session.query(PersonalContext)
+            .filter(
+                PersonalContext.is_active == True,
+                PersonalContext.status == "candidate"
+            )
+            .order_by(PersonalContext.created_at.desc())
+            .all()
+        )
+        result = []
+        for c in contexts:
+            try:
+                kws = json.loads(c.trigger_keywords) if c.trigger_keywords else []
+            except Exception:
+                kws = []
+            result.append({
+                "id": c.id,
+                "type": c.type,
+                "content": c.content,
+                "trigger_keywords": kws,
+                "project_tag": c.project_tag,
+                "source_question": c.source_question,
+                "status": c.status,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            })
+        return result
+    finally:
+        session.close()
+
+
+@router.post("/api/personal-contexts/{context_id}/approve")
+def approve_personal_context(context_id: int):
+    """候補を承認し、検索対象に昇格する（candidate → approved）"""
+    session = SessionLocal()
+    try:
+        ctx = session.query(PersonalContext).filter(PersonalContext.id == context_id).first()
+        if not ctx:
+            raise HTTPException(status_code=404, detail="Not found")
+        ctx.status = "approved"
+        session.commit()
+        
+        # --- PR-9: Index on approval ---
+        try:
+            from personal_context_manager import PersonalContextManager
+            mgr = PersonalContextManager()
+            mgr.index_context(context_id)
+        except Exception as e:
+            logger.warning(f"Failed to index personal context {context_id} on approval: {e}")
+            
+        return {"id": context_id, "status": "approved", "message": "approved"}
+    finally:
+        session.close()
+
+
+@router.post("/api/personal-contexts/{context_id}/deprecate")
+def deprecate_personal_context(context_id: int):
+    """候補または承認済みコンテキストを廃止する（検索対象外）"""
+    session = SessionLocal()
+    try:
+        ctx = session.query(PersonalContext).filter(PersonalContext.id == context_id).first()
+        if not ctx:
+            raise HTTPException(status_code=404, detail="Not found")
+        ctx.status = "deprecated"
+        ctx.is_active = False
+        session.commit()
+        
+        # --- PR-9: Remove from index ---
+        try:
+            from personal_context_manager import PersonalContextManager
+            mgr = PersonalContextManager()
+            mgr.delete_from_index(context_id)
+        except Exception as e:
+            logger.warning(f"Failed to delete personal context {context_id} from index: {e}")
+            
+        return {"id": context_id, "status": "deprecated", "message": "deprecated"}
     finally:
         session.close()

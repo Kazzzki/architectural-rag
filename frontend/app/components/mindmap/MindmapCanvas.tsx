@@ -34,6 +34,10 @@ interface ProcessNode {
     key_stakeholders: string[];
     position: { x: number; y: number };
     status: string;
+    source_type?: string;
+    checklist_done?: number;
+    checklist_total?: number;
+    deliverables_count?: number;
 }
 
 interface EdgeData {
@@ -76,6 +80,8 @@ interface Props {
     onAiAction?: (action: 'summarize' | 'expand' | 'rag', nodeId: string, label: string) => void;
     onInit?: (instance: any) => void;
     allEdges?: EdgeData[];
+    editingNodeId?: string | null;
+    onClearEditingNode?: () => void;
 }
 
 const nodeTypes = { custom: AICopilotNode, aiCopilot: AICopilotNode };
@@ -114,9 +120,11 @@ function MindmapCanvasInner({
     onAiAction,
     onEdgeDoubleClick,
     onInit,
+    editingNodeId,
+    onClearEditingNode,
 }: Props) {
     const hasHighlight = highlightedNodes.size > 0;
-    const { screenToFlowPosition } = useReactFlow();
+    const { screenToFlowPosition, flowToScreenPosition } = useReactFlow();
 
     // Inline input state
     const [inlineInput, setInlineInput] = useState<{
@@ -134,6 +142,24 @@ function MindmapCanvasInner({
     const connectingNodeId = useRef<string | null>(null);
 
     const [showMiniMap, setShowMiniMap] = useState(false);
+    const [spacePressed, setSpacePressed] = useState(false);
+
+    useEffect(() => {
+        const handleDown = (e: KeyboardEvent) => {
+            if (e.code === 'Space' && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName || '')) {
+                setSpacePressed(true);
+            }
+        };
+        const handleUp = (e: KeyboardEvent) => {
+            if (e.code === 'Space') setSpacePressed(false);
+        };
+        window.addEventListener('keydown', handleDown);
+        window.addEventListener('keyup', handleUp);
+        return () => {
+            window.removeEventListener('keydown', handleDown);
+            window.removeEventListener('keyup', handleUp);
+        };
+    }, []);
 
     const cancelInlineInput = useCallback(() => {
         setInlineInput(null);
@@ -182,6 +208,25 @@ function MindmapCanvasInner({
             document.removeEventListener('mousedown', handleClickOutside);
         };
     }, [inlineInput, cancelInlineInput]);
+ 
+    useEffect(() => {
+        if (!editingNodeId || !isEditMode) return;
+
+        const node = processNodes.find(n => n.id === editingNodeId);
+        if (node) {
+            const screenPos = flowToScreenPosition({ x: node.position.x, y: node.position.y });
+            setInlineInput({
+                x: screenPos.x,
+                y: screenPos.y,
+                flowX: node.position.x,
+                flowY: node.position.y,
+                nodeId: node.id,
+                type: 'edit',
+            });
+            setInlineValue(node.label || '');
+            if (onClearEditingNode) onClearEditingNode();
+        }
+    }, [editingNodeId, isEditMode, processNodes, flowToScreenPosition, onClearEditingNode]);
 
     useEffect(() => {
         if (inlineInput && inlineRef.current) {
@@ -236,6 +281,33 @@ function MindmapCanvasInner({
         .map(n => `${n.id}:${n.status}:${n.label}:${Math.round(n.position.x)}:${Math.round(n.position.y)}`)
         .join('|');
 
+    const structuralIssues = useMemo(() => {
+        const issues = new Map<string, 'orphan' | 'dead-end'>();
+        const inDegree = new Map<string, number>();
+        const outDegree = new Map<string, number>();
+        
+        processNodes.forEach(n => {
+            inDegree.set(n.id, 0);
+            outDegree.set(n.id, 0);
+        });
+        
+        processEdges.forEach(e => {
+            if (inDegree.has(e.target)) inDegree.set(e.target, inDegree.get(e.target)! + 1);
+            if (outDegree.has(e.source)) outDegree.set(e.source, outDegree.get(e.source)! + 1);
+        });
+        
+        processNodes.forEach(n => {
+            const ind = inDegree.get(n.id) || 0;
+            const outd = outDegree.get(n.id) || 0;
+            // Only flag if it's not a start or end node by label/phase?
+            // Actually, any 0,0 is orphan. Any ind>0, outd=0 is dead-end.
+            if (ind === 0 && outd === 0) issues.set(n.id, 'orphan');
+            else if (ind > 0 && outd === 0 && n.phase !== '運用') issues.set(n.id, 'dead-end'); // 運用 phase is expected to be a dead-end
+        });
+        
+        return issues;
+    }, [processNodes, processEdges]);
+
     const rfNodes: Node[] = useMemo(() => {
         return processNodes.map(pn => ({
             id: pn.id,
@@ -247,7 +319,10 @@ function MindmapCanvasInner({
                 phase: pn.phase,
                 category: pn.category,
                 status: pn.status,
-                checklistCount: pn.checklist.length,
+                checklistCount: pn.checklist_total !== undefined ? pn.checklist_total : pn.checklist.length,
+                checklistDone: pn.checklist_done,
+                deliverablesCount: pn.deliverables_count !== undefined ? pn.deliverables_count : pn.deliverables.length,
+                sourceType: pn.source_type,
                 color: categoryColors[pn.category] || '#6b7280',
                 isSelected: pn.id === selectedNodeId,
                 isHighlighted: hasHighlight ? highlightedNodes.has(pn.id) : true,
@@ -264,10 +339,11 @@ function MindmapCanvasInner({
                 } : undefined,
                 onAiAction: onAiAction,
                 isPulsing: pn.id === pulsingNodeId,
+                structuralIssue: structuralIssues.get(pn.id),
             },
         }));
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [nodeFingerprint, selectedNodeId, highlightedNodes, hasHighlight, categoryColors, collapsedNodeIds, descendantCounts, nodeIdsWithChildren, isEditMode, onNodeLabelChange, onNodeCollapse, onNodeContextMenu, onAiAction, pulsingNodeId]);
+    }, [nodeFingerprint, selectedNodeId, highlightedNodes, hasHighlight, categoryColors, collapsedNodeIds, descendantCounts, nodeIdsWithChildren, isEditMode, onNodeLabelChange, onNodeCollapse, onNodeContextMenu, onAiAction, pulsingNodeId, structuralIssues]);
 
     // Convert to React Flow edges
     const rfEdges: RFEdge[] = useMemo(() => {
@@ -531,11 +607,11 @@ function MindmapCanvasInner({
                 maxZoom={2}
                 nodesDraggable={true}
                 nodesConnectable={isEditMode}
-                selectionOnDrag={true}
+                selectionOnDrag={!spacePressed}
                 selectionMode={SelectionMode.Partial}
-                panOnDrag={true}
+                panOnDrag={spacePressed || [1, 2].includes(0)} // Allow right-click pan or space-pan
                 panOnScroll={true}
-                multiSelectionKeyCode="Shift"
+                selectionKeyCode="Shift"
                 proOptions={{ hideAttribution: true }}
             >
                 <Background

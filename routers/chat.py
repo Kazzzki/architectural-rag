@@ -9,9 +9,28 @@ from retriever import search, build_context, get_source_files
 from generator import generate_answer, generate_answer_stream, generate_answer_direct, generate_answer_stream_direct
 from database import get_db, ChatSession, ChatMessage
 from sqlalchemy.orm import Session
+from backend.conversation_scope import ConversationScope
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
+
+
+def _resolve_model(model: str, question: str, has_rag: bool) -> str:
+    """
+    model == 'auto' の場合のみ route_model() で自動選択する。
+    それ以外は渡されたモデル名をそのまま返す（後方互換）。
+    """
+    if model != "auto":
+        return model
+    try:
+        from route_model import route_model
+        result = route_model(question=question, has_rag_context=has_rag)
+        logger.info(f"Auto model selected: {result['model']} ({result['reason']})")
+        return result["model"]
+    except Exception as e:
+        logger.warning(f"Auto model routing failed, falling back to default: {e}")
+        from config import GEMINI_MODEL_RAG
+        return GEMINI_MODEL_RAG
 
 class ChatRequest(BaseModel):
     question: str
@@ -34,6 +53,7 @@ class ChatRequest(BaseModel):
     use_rag: bool = True
     project_id: Optional[str] = None
     scope_mode: Optional[str] = "auto"
+    conversation_scope: Optional[ConversationScope] = None
     # ウェブ検索の使用可否 (False: 検索しない、True: Google Search Grounding有効)
     use_web_search: bool = False
 
@@ -139,7 +159,7 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
             result = generate_answer(
                 request.question, context, source_files,
                 history=request.history,
-                model=request.model,
+                model=_resolve_model(request.model, request.question, bool(context)),
                 context_sheet=request.context_sheet,
                 project_id=request.project_id,
                 scope_mode=request.scope_mode,
@@ -158,7 +178,7 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
             result = generate_answer_direct(
                 request.question,
                 history=request.history,
-                model=request.model,
+                model=_resolve_model(request.model, request.question, False),
                 context_sheet=request.context_sheet,
                 use_web_search=request.use_web_search,
             )
@@ -248,10 +268,18 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                     stream_gen = generate_answer_stream(
                         request.question, context, source_files,
                         history=history,
-                        model=request.model,
+                        model=_resolve_model(request.model, request.question, bool(context)),
                         context_sheet=request.context_sheet,
                         project_id=request.project_id,
                         scope_mode=request.scope_mode,
+                        use_web_search=request.use_web_search,
+                    )
+                else:
+                    stream_gen = generate_answer_stream_direct(
+                        request.question,
+                        history=history,
+                        model=_resolve_model(request.model, request.question, False),
+                        context_sheet=request.context_sheet,
                         use_web_search=request.use_web_search,
                     )
                 

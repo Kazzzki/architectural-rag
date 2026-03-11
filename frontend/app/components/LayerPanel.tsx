@@ -57,6 +57,8 @@ interface LayerPanelProps {
     onLayerBChange: (content: string | null, title: string | null) => void;
     availableModels: Record<string, string>;
     availableRoles: Record<string, string>;
+    initialTab?: 'status' | 'layer0' | 'layerA' | 'layerB';
+    className?: string;
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -160,9 +162,11 @@ export default function LayerPanel({
     activeLayerBTitle,
     onLayerBChange,
     availableModels,
-    availableRoles
+    availableRoles,
+    initialTab,
+    className
 }: LayerPanelProps) {
-    const [activeTab, setActiveTab] = useState<'status' | 'layer0' | 'layerA' | 'layerB'>('status');
+    const [activeTab, setActiveTab] = useState<'status' | 'layer0' | 'layerA' | 'layerB'>(initialTab || 'status');
     const [layerBSubTab, setLayerBSubTab] = useState<'text' | 'md'>('text');
 
     // Common State
@@ -380,7 +384,7 @@ export default function LayerPanel({
 
 
     return (
-        <div className="flex flex-col h-full bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden shadow-sm">
+        <div className={`flex flex-col h-full bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden shadow-sm ${className || ''}`}>
             {/* Tabs Header */}
             <div className="flex border-b border-[var(--border)] bg-[var(--background)]/50">
                 <button

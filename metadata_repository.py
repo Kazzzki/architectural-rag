@@ -106,6 +106,17 @@ class MetadataRepository:
                 created_at=datetime.now(timezone.utc)
             )
             session.add(upload)
+            session.flush()
+
+            # Artifact 記録 (原本)
+            artifact = Artifact(
+                version_id=doc_version.id,
+                artifact_type="original",
+                storage_path=file_path,
+                storage_type="local",
+                created_at=datetime.now(timezone.utc)
+            )
+            session.add(artifact)
 
             session.commit()
             return {
@@ -146,108 +157,127 @@ class MetadataRepository:
         finally:
             session.close()
 
-    def update_ingest_stage_by_version_id(self, version_id: str, status: str) -> None:
-        """
-        Phase 3: 新モデルベースでのステータス更新
-        """
+    def update_ingest_stage_by_version_id(self, version_id: str, stage: str, total_pages: Optional[int] = None) -> None:
+        """Unified IDベースで取り込みフェーズを更新する"""
         session = get_session()
         try:
-            doc_ver = session.query(DocumentVersion).filter(DocumentVersion.id == version_id).first()
-            if doc_ver:
-                doc_ver.ingest_status = status
-                doc_ver.updated_at = datetime.now(timezone.utc)
+            ver = session.query(DocumentVersion).filter(DocumentVersion.id == version_id).first()
+            if ver:
+                ver.ingest_status = stage
+                if total_pages is not None:
+                    ver.total_pages = total_pages
+                ver.updated_at = datetime.now(timezone.utc)
+                
+                # LegacyDocument もあれば更新
+                doc_legacy = session.query(LegacyDocument).filter(LegacyDocument.source_pdf_hash == ver.version_hash).first()
+                if doc_legacy:
+                    doc_legacy.status = stage
+                    if total_pages is not None:
+                        doc_legacy.total_pages = total_pages
+                    doc_legacy.updated_at = datetime.now(timezone.utc)
+                
                 session.commit()
         except Exception as e:
             session.rollback()
-            raise e
+            logger.error(f"Failed to update ingest stage for version {version_id}: {e}")
         finally:
             session.close()
 
-    def update_ingest_stage(self, filepath: str, next_stage: str, total_pages: int = 0) -> None:
-        """
-        OCR等の進行中ステータスを更新する (Legacy互換用)
-        """
+    def update_ingest_stage(self, filepath: str, stage: str, total_pages: Optional[int] = None) -> None:
+        """指定したパスのファイルの取り込みフェーズを更新する（Legacy + New）"""
         session = get_session()
         try:
             doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == filepath).first()
             if doc:
-                doc.status = next_stage
-                if total_pages > 0:
+                doc.status = stage
+                if total_pages is not None:
                     doc.total_pages = total_pages
                 doc.updated_at = datetime.now(timezone.utc)
+                
+                # DocumentVersion も更新
+                if doc.source_pdf_hash:
+                    ver = session.query(DocumentVersion).filter(DocumentVersion.version_hash == doc.source_pdf_hash).first()
+                    if ver:
+                        ver.ingest_status = stage
+                        if total_pages is not None:
+                            ver.total_pages = total_pages
+                        ver.updated_at = datetime.now(timezone.utc)
+                
                 session.commit()
         except Exception as e:
             session.rollback()
-            raise e
+            logger.error(f"Failed to update ingest stage for {filepath}: {e}")
         finally:
             session.close()
 
     def update_processed_pages(self, filepath: str, processed_pages: int) -> None:
-        """
-        OCRの進捗ページ数を更新する
-        """
+        """OCRの進捗（ページ数）を更新する"""
         session = get_session()
         try:
             doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == filepath).first()
             if doc:
                 doc.processed_pages = processed_pages
                 doc.updated_at = datetime.now(timezone.utc)
-                session.commit()
-        except Exception as e:
-            session.rollback()
-            raise e
-        finally:
-            session.close()
-
-    def mark_as_searchable(self, filepath: str) -> None:
-        """
-        Index構築が完全に成功した場合のみ呼び出され、searchable (completed) にする。
-        """
-        session = get_session()
-        try:
-            doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == filepath).first()
-            if doc:
-                doc.status = "completed"
-                doc.last_indexed_at = datetime.now(timezone.utc)
-                doc.updated_at = datetime.now(timezone.utc)
                 
-                # 新モデルのStatusもSearchableにできればする
-                doc_ver = session.query(DocumentVersion).filter(DocumentVersion.version_hash == doc.source_pdf_hash).first()
-                if doc_ver:
-                    doc_ver.searchable = True
-                    doc_ver.ingest_status = "searchable"
-                    doc_ver.updated_at = datetime.now(timezone.utc)
+                # DocumentVersion も更新
+                if doc.source_pdf_hash:
+                    ver = session.query(DocumentVersion).filter(DocumentVersion.version_hash == doc.source_pdf_hash).first()
+                    if ver:
+                        ver.processed_pages = processed_pages
+                        ver.updated_at = datetime.now(timezone.utc)
                 
                 session.commit()
         except Exception as e:
             session.rollback()
-            raise e
+            logger.error(f"Failed to update processed pages for {filepath}: {e}")
         finally:
             session.close()
 
-    def fail_processing(self, filepath: str, error_msg: str) -> None:
-        """
-        処理失敗時のステータス更新
-        """
+    def fail_processing(self, filepath: str, error_message: str) -> None:
+        """処理失敗ステータスを書き込む"""
         session = get_session()
         try:
             doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == filepath).first()
             if doc:
                 doc.status = "failed"
-                doc.error_message = error_msg
+                doc.error_message = error_message
                 doc.updated_at = datetime.now(timezone.utc)
                 
-                # 新モデルのErrorも更新
-                doc_ver = session.query(DocumentVersion).filter(DocumentVersion.version_hash == doc.source_pdf_hash).first()
-                if doc_ver:
-                    doc_ver.ingest_status = "failed"
-                    doc_ver.error_message = error_msg
-                    doc_ver.updated_at = datetime.now(timezone.utc)
+                if doc.source_pdf_hash:
+                    ver = session.query(DocumentVersion).filter(DocumentVersion.version_hash == doc.source_pdf_hash).first()
+                    if ver:
+                        ver.ingest_status = "failed"
+                        ver.error_message = error_message
+                        ver.updated_at = datetime.now(timezone.utc)
                 
                 session.commit()
         except Exception as e:
             session.rollback()
-            raise e
+            logger.error(f"Failed to fail processing for {filepath}: {e}")
+        finally:
+            session.close()
+
+    def mark_as_searchable(self, filepath: str) -> None:
+        """指定したファイルのステータスを searchable に更新し、検索を有効化する"""
+        session = get_session()
+        try:
+            doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == filepath).first()
+            if doc:
+                doc.status = "completed"
+                doc.updated_at = datetime.now(timezone.utc)
+                
+                # DocumentVersion も更新
+                if doc.source_pdf_hash:
+                    doc_ver = session.query(DocumentVersion).filter(DocumentVersion.version_hash == doc.source_pdf_hash).first()
+                    if doc_ver:
+                        doc_ver.searchable = True
+                        doc_ver.ingest_status = "searchable"
+                        doc_ver.updated_at = datetime.now(timezone.utc)
+                
+                session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to mark as searchable {filepath}: {e}")
         finally:
             session.close()
 

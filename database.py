@@ -49,6 +49,8 @@ class DocumentVersion(Base):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     error_message = Column(Text, nullable=True)
+    total_pages = Column(Integer, default=0)
+    processed_pages = Column(Integer, default=0)
 
 class Upload(Base):
     """
@@ -150,6 +152,7 @@ class PersonalContext(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     is_active = Column(Boolean, default=True)   # 無効化フラグ
+    status = Column(String, nullable=False, default="approved")  # candidate | reviewed | approved | deprecated (Layer C 承認フロー)
 
 
 class ContextSheet(Base):
@@ -378,6 +381,67 @@ class MemoryScopeLink(Base):
     )
 
 
+# ========== Layer B State Sources (Phase 3) ==========
+
+class ProjectJournal(Base):
+    """プロジェクトジャーナル — イベントソースログ（生事実で、そのまま注入しない）"""
+    __tablename__ = 'project_journals'
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False, default='default')
+    event_type = Column(String, nullable=False, default='event')  # event | milestone | meeting | issue | decision
+    content = Column(Text, nullable=False)
+    occurred_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index('idx_project_journals_project', 'project_id'),
+        Index('idx_project_journals_occurred', 'project_id', 'occurred_at'),
+    )
+
+
+class ProjectDecision(Base):
+    """承認済みプロジェクト決定事項 (定正テーブル)"""
+    __tablename__ = 'project_decisions'
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False, default='default')
+    title = Column(String, nullable=False)
+    detail = Column(Text, nullable=True)
+    authority_level = Column(Integer, nullable=False, default=3)  # 1＝法令 〜 6＝個人経験
+    decided_at = Column(DateTime, nullable=True)
+    status = Column(String, nullable=False, default='active')  # active | superseded | cancelled
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index('idx_project_decisions_project', 'project_id'),
+    )
+
+
+class ProjectIssue(Base):
+    """未解決課題履歴 (正規化テーブル)"""
+    __tablename__ = 'project_issues'
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False, default='default')
+    title = Column(String, nullable=False)
+    detail = Column(Text, nullable=True)
+    priority = Column(String, nullable=False, default='medium')  # high | medium | low
+    status = Column(String, nullable=False, default='open')  # open | in_progress | resolved | cancelled
+    due_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index('idx_project_issues_project', 'project_id'),
+        Index('idx_project_issues_status', 'project_id', 'status'),
+    )
+
+
 # DB接続設定
 engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -437,6 +501,8 @@ def _run_migrations():
         "ALTER TABLE document_versions ADD COLUMN drive_status VARCHAR",
         # ChatMessage への web_sources 列追加
         "ALTER TABLE chat_messages ADD COLUMN web_sources TEXT",
+        # Phase 7: PersonalContext に status 列追加（既存レコードは approved として悉起）
+        "ALTER TABLE personal_contexts ADD COLUMN status VARCHAR NOT NULL DEFAULT 'approved'",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -468,10 +534,14 @@ def get_session():
 # ========== パーソナルコンテキスト用 CRUD ==========
 
 def find_similar_contexts(keywords: list[str], limit: int = 5) -> list[PersonalContext]:
-    """trigger_keywordsのいずれかにマッチするエントリを取得（LIKE検索）"""
+    """trigger_keywordsのいずれかにマッチするエントリを取得（LIKE検索）
+    Phase 7: status='approved' のみを検索対象とする（candidate は承認前なので除外）"""
     session = SessionLocal()
     try:
-        query = session.query(PersonalContext).filter(PersonalContext.is_active == True)
+        query = session.query(PersonalContext).filter(
+            PersonalContext.is_active == True,
+            PersonalContext.status == "approved",  # Phase 7: approved のみ
+        )
         
         if keywords:
             conditions = [PersonalContext.trigger_keywords.like(f"%{kw}%") for kw in keywords]
@@ -512,13 +582,17 @@ def insert_context(entry: dict) -> PersonalContext:
     session = SessionLocal()
     try:
         project_tag = entry.get("project_id") or entry.get("project_tag")
+        # Phase 7: 自動抽出は candidate として保存（承認後に approved になる）
+        # 手動作成は approved 扱い（entry に "status" キーで明示可能）
+        initial_status = entry.get("status", "candidate")
         new_ctx = PersonalContext(
             type=entry.get("type"),
             content=entry.get("content"),
             trigger_keywords=json.dumps(entry.get("trigger_keywords", []), ensure_ascii=False),
             project_tag=project_tag,
             source_question=entry.get("source_question"),
-            merge_history=json.dumps([])
+            merge_history=json.dumps([]),
+            status=initial_status,
         )
         session.add(new_ctx)
         session.commit()
@@ -609,8 +683,8 @@ def migrate_from_json():
                     ocr_data = json.load(f)
 
                 for rel_path, info in ocr_data.items():
-                    existing = session.query(Document).filter(
-                        Document.file_path == rel_path
+                    existing = session.query(LegacyDocument).filter(
+                        LegacyDocument.file_path == rel_path
                     ).first()
 
                     if existing:
@@ -624,7 +698,7 @@ def migrate_from_json():
                         existing.estimated_remaining = info.get("estimated_remaining")
                         existing.error_message = info.get("error")
                     else:
-                        doc = Document(
+                        doc = LegacyDocument(
                             filename=Path(rel_path).name,
                             file_path=rel_path,
                             file_type=Path(rel_path).suffix.lower().lstrip('.'),
@@ -659,8 +733,8 @@ def migrate_from_json():
                     index_data = json.load(f)
 
                 for rel_path, info in index_data.get("files", {}).items():
-                    existing = session.query(Document).filter(
-                        Document.file_path == rel_path
+                    existing = session.query(LegacyDocument).filter(
+                        LegacyDocument.file_path == rel_path
                     ).first()
 
                     if existing:
@@ -674,7 +748,7 @@ def migrate_from_json():
                             except (ValueError, TypeError):
                                 pass
                     else:
-                        doc = Document(
+                        doc = LegacyDocument(
                             filename=Path(rel_path).name,
                             file_path=rel_path,
                             file_type=Path(rel_path).suffix.lower().lstrip('.'),

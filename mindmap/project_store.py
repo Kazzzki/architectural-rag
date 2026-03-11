@@ -50,7 +50,11 @@ def init_db():
                 building_type TEXT DEFAULT '',
                 status TEXT DEFAULT 'active',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                technical_conditions TEXT DEFAULT '',
+                legal_requirements TEXT DEFAULT '',
+                layer_b_project_id TEXT DEFAULT '',
+                gap_check_history TEXT DEFAULT '[]'
             );
 
             CREATE TABLE IF NOT EXISTS project_deltas (
@@ -97,9 +101,9 @@ def create_project(name: str, template: MindmapTemplate) -> str:
 
     with get_db() as conn:
         conn.execute(
-            """INSERT INTO projects (id, name, description, template_id, building_type, status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (project_id, name, f"{template.name}からフォーク", template_id, "", "active", now, now)
+            """INSERT INTO projects (id, name, description, template_id, building_type, status, created_at, updated_at, technical_conditions, legal_requirements, layer_b_project_id, gap_check_history)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (project_id, name, f"{template.name}からフォーク", template_id, "", "active", now, now, "", "", "", "[]")
         )
 
     logger.info(f"Project created: {project_id} (template={template_id}, delta mode)")
@@ -123,6 +127,13 @@ def list_projects() -> List[Dict[str, Any]]:
             ).fetchone()['cnt']
             proj['delta_count'] = delta_count
             proj['node_count'] = 0  # 後方互換
+            
+            if 'gap_check_history' in proj and isinstance(proj['gap_check_history'], str):
+                try:
+                    proj['gap_check_history'] = json.loads(proj['gap_check_history'])
+                except:
+                    proj['gap_check_history'] = []
+                    
             result.append(proj)
         return result
 
@@ -139,8 +150,15 @@ def get_project_data(project_id: str) -> Optional[Dict[str, Any]]:
             (project_id,)
         ).fetchall()
 
+        proj_dict = dict(proj)
+        if 'gap_check_history' in proj_dict and isinstance(proj_dict['gap_check_history'], str):
+            try:
+                proj_dict['gap_check_history'] = json.loads(proj_dict['gap_check_history'])
+            except:
+                proj_dict['gap_check_history'] = []
+
         return {
-            "project": dict(proj),
+            "project": proj_dict,
             "deltas": [dict(d) for d in deltas],
         }
 
@@ -182,14 +200,25 @@ def get_project_with_merged_data(project_id: str, template: MindmapTemplate) -> 
     # ProcessNode/Edgeに変換
     result_nodes = []
     for n in nodes.values():
+        checklist = n.get('checklist', [])
+        deliverables = n.get('deliverables', [])
+        
+        # 簡易なdone判定 (dictに'done'が含まれるか、文字列に[x]が含まれる等)
+        done_count = 0
+        for item in checklist:
+            if isinstance(item, dict) and item.get('done'):
+                done_count += 1
+            elif isinstance(item, str) and ('[x]' in item.lower() or '☑' in item):
+                done_count += 1
+
         result_nodes.append(ProcessNode(
             id=n['id'],
             label=n.get('label', ''),
             description=n.get('description', ''),
             phase=n.get('phase', ''),
             category=n.get('category', ''),
-            checklist=n.get('checklist', []),
-            deliverables=n.get('deliverables', []),
+            checklist=checklist,
+            deliverables=deliverables,
             key_stakeholders=n.get('key_stakeholders', []),
             position=Position(x=n.get('pos_x', n.get('position', {}).get('x', 0)),
                               y=n.get('pos_y', n.get('position', {}).get('y', 0))),
@@ -197,6 +226,10 @@ def get_project_with_merged_data(project_id: str, template: MindmapTemplate) -> 
             status=n.get('status', '未着手'),
             chatHistory=n.get('chatHistory', []),
             ragResults=n.get('ragResults', []),
+            source_type=n.get('source_type', 'manual'),
+            checklist_total=len(checklist),
+            checklist_done=done_count,
+            deliverables_count=len(deliverables),
         ))
 
     result_edges = []
@@ -221,6 +254,89 @@ def delete_project(project_id: str) -> bool:
     with get_db() as conn:
         result = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         return result.rowcount > 0
+
+
+def update_project_context(project_id: str, updates: Dict[str, Any]) -> bool:
+    """プロジェクトの文脈（前提条件等）を更新"""
+    allowed = {'technical_conditions', 'legal_requirements'}
+    filtered = {k: v for k, v in updates.items() if k in allowed}
+    if not filtered:
+        return False
+        
+    set_clause = ", ".join([f"{k} = ?" for k in filtered.keys()])
+    values = list(filtered.values()) + [project_id]
+    
+    with get_db() as conn:
+        result = conn.execute(f"UPDATE projects SET {set_clause}, updated_at = ? WHERE id = ?", values[:-1] + [datetime.now(timezone.utc).isoformat(), project_id])
+        return result.rowcount > 0
+
+
+def update_gap_check_history(project_id: str, history_item: Dict[str, Any]) -> bool:
+    """Gap Checkの履歴を追加"""
+    with get_db() as conn:
+        proj = conn.execute("SELECT gap_check_history FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if not proj:
+            return False
+            
+        history = []
+        if proj['gap_check_history']:
+            try:
+                history = json.loads(proj['gap_check_history'])
+            except:
+                pass
+                
+        # 履歴ID付与
+        if 'id' not in history_item:
+            history_item['id'] = str(uuid.uuid4())[:8]
+        history_item['timestamp'] = datetime.now(timezone.utc).isoformat()
+        
+        history.append(history_item)
+        
+        conn.execute("UPDATE projects SET gap_check_history = ?, updated_at = ? WHERE id = ?",
+                     (json.dumps(history, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), project_id))
+        return True
+
+
+def detect_structural_issues(project_id: str, template: MindmapTemplate) -> Dict[str, List[Dict[str, Any]]]:
+    """マップ構造の検証（orphan, dead-end, root判定）"""
+    merged = get_project_with_merged_data(project_id, template)
+    if not merged:
+        return {"orphans": [], "dead_ends": [], "roots": []}
+
+    nodes = {n.id: n for n in merged["nodes"]}
+    edges = merged["edges"]
+    
+    in_degree = {nid: 0 for nid in nodes}
+    out_degree = {nid: 0 for nid in nodes}
+    
+    for edge in edges:
+        if edge.target in in_degree:
+            in_degree[edge.target] += 1
+        if edge.source in out_degree:
+            out_degree[edge.source] += 1
+            
+    orphans = []
+    dead_ends = []
+    roots = []
+    
+    for nid, node in nodes.items():
+        ind = in_degree[nid]
+        outd = out_degree[nid]
+        
+        node_info = {"id": nid, "label": node.label, "phase": node.phase}
+        
+        if ind == 0 and outd == 0:
+            orphans.append(node_info)
+        elif ind == 0 and outd > 0:
+            roots.append(node_info)
+        elif ind > 0 and outd == 0:
+            dead_ends.append(node_info)
+            
+    return {
+        "orphans": orphans,
+        "dead_ends": dead_ends,
+        "roots": roots
+    }
 
 
 def get_progress(project_id: str, template: MindmapTemplate) -> Dict[str, Any]:
@@ -428,6 +544,7 @@ def _node_to_dict(node: ProcessNode) -> Dict[str, Any]:
         "status": node.status.value if hasattr(node.status, 'value') else node.status,
         "chatHistory": node.chatHistory,
         "ragResults": node.ragResults,
+        "source_type": getattr(node, 'source_type', 'manual'),
     }
 
 

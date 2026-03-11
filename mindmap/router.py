@@ -17,18 +17,31 @@ from .models import (
     CreateProjectRequest, ProjectListItem, ProjectData,
     NodeUpdate, NodeCreate, EdgeCreate, EdgeUpdate,
     KnowledgeNode, KnowledgeEntry, KnowledgeDepth,
-    ProjectImportRequest, AIActionRequest
+    ProjectImportRequest, AIActionRequest,
+    ProjectContextUpdate, GapCheckRequest, GapApplyRequest,
+    NodeFromTextRequest, UnlinkedMentionsRequest, PredictLinksRequest
 )
 from pydantic import BaseModel
 from .graph_service import GraphService
 from . import project_store
 from . import template_loader
 from . import api_settings
+from .ai_helper import call_gemini_json
 
+from .migrations import add_project_context_columns
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/mindmap", tags=["mindmap"])
+
+@router.on_event("startup")
+async def startup_event():
+    """アプリケーション起動時にマイグレーションを実行"""
+    logger.info("Running mindmap migrations...")
+    try:
+        add_project_context_columns.run_migration()
+    except Exception as e:
+        logger.error(f"Migration failed during startup: {e}")
 
 # 知識キャッシュ（template_loader + 旧knowledge/のフォールバック）
 _knowledge_cache: Dict[str, KnowledgeNode] = {}
@@ -202,6 +215,38 @@ async def get_critical_path(template_id: str, from_id: str, to_id: str):
     try:
         path = gs.get_critical_path(from_id, to_id)
         return {"path": path}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/projects/{project_id}/reverse-tree/{node_id}", response_model=ReverseTreeResponse)
+async def get_project_reverse_tree(project_id: str, node_id: str):
+    """
+    プロジェクト内の特定のノードから逆方向に依存関係を遡り、
+    RAGの文脈として利用可能なツリー構造を返す。
+    """
+    raw = project_store.get_project_data(project_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    template_id = raw["project"]["template_id"]
+    template = _load_template(template_id)
+    
+    # マージ済みデータをマインドマップモデルへ変換
+    merged = project_store.get_project_with_merged_data(project_id, template)
+    
+    # GraphService用に MindmapTemplate 互換オブジェクトを構築
+    from .models import MindmapTemplate as TemplateModel
+    compat_template = TemplateModel(
+        id=project_id,
+        name=raw["project"]["name"],
+        nodes=merged["nodes"],
+        edges=merged["edges"]
+    )
+    
+    gs = GraphService(compat_template)
+    try:
+        return gs.get_reverse_tree(node_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -418,6 +463,224 @@ async def undo_action(project_id: str):
     if not result:
         raise HTTPException(status_code=404, detail="Undo不可（履歴なし）")
     return result
+
+
+# --- Chat to Node ---
+@router.post("/projects/{project_id}/nodes/from-text")
+async def create_nodes_from_text(project_id: str, req: NodeFromTextRequest):
+    """チャットなどのテキストからノードを抽出・作成する"""
+    raw = project_store.get_project_data(project_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    prompt = f"""
+    あなたは設計プロセスの専門家です。
+    ユーザーの以下のテキストから、プロジェクトマップに追加すべきタスクやプロセス（ノード）を抽出してください。
+    
+    【対象テキスト】
+    {req.text}
+    
+    以下のJSON形式で結果を返してください。複数抽出可能です。
+    {{"nodes": [
+        {{"label": "タスク名（短く体言止め）", "description": "詳細説明", "phase": "基本設計", "category": "意匠", "checklist": ["確認事項1", "確認事項2"]}}
+    ]}}
+    """
+    
+    try:
+        settings = api_settings.load_settings()
+        api_key = settings.get("gemini_api_key")
+        model = settings.get("gemini_model", "gemini-2.5-flash")
+        
+        result_json = await call_gemini_json(prompt, api_key=api_key, model_name=model)
+        created_nodes = []
+        
+        for node_def in result_json.get("nodes", []):
+            node_data = {
+                "label": node_def.get("label", "新規ノード"),
+                "description": node_def.get("description", ""),
+                "phase": node_def.get("phase", "基本設計"),
+                "category": node_def.get("category", "その他"),
+                "checklist": node_def.get("checklist", []),
+                "status": "未着手",
+                "source_type": req.source_type
+            }
+            node_id = project_store.add_node(project_id, node_data)
+            created_nodes.append({"id": node_id, **node_data})
+            
+        return {
+            "message": f"{len(created_nodes)}個のノードを作成しました",
+            "created_nodes": created_nodes
+        }
+    except Exception as e:
+        logger.error(f"Node from text extraction failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Auto Link Prediction / Unlinked Mentions ---
+@router.post("/projects/{project_id}/unlinked-mentions")
+async def get_unlinked_mentions(project_id: str, req: UnlinkedMentionsRequest):
+    project_data = project_store.get_project_data(project_id)
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+        
+    nodes = project_data.get("nodes", [])
+    edges = project_data.get("edges", [])
+    
+    target_node = next((n for n in nodes if n["id"] == req.node_id), None)
+    if not target_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+        
+    text_to_check = f"{target_node.get('label', '')} {target_node.get('description', '')} {' '.join(target_node.get('checklist', []))}"
+    
+    linked_nodes = set()
+    for e in edges:
+        if e.get("source") == req.node_id:
+            linked_nodes.add(e.get("target"))
+        if e.get("target") == req.node_id:
+            linked_nodes.add(e.get("source"))
+            
+    unlinked = []
+    for n in nodes:
+        if n["id"] == req.node_id or n["id"] in linked_nodes:
+            continue
+        if n.get("label") and n["label"] in text_to_check:
+            unlinked.append({"id": n["id"], "label": n["label"]})
+            
+    return {"mentions": unlinked}
+
+@router.post("/projects/{project_id}/ai/predict-links")
+async def predict_links(project_id: str, req: PredictLinksRequest):
+    project_data = project_store.get_project_data(project_id)
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+        
+    nodes = project_data.get("nodes", [])
+    target_node = next((n for n in nodes if n["id"] == req.new_node_id), None)
+    if not target_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+        
+    other_nodes = [n for n in nodes if n["id"] != req.new_node_id]
+    other_labels = [f"ID:{n['id']} タスク名:{n.get('label', '')}" for n in other_nodes]
+    
+    prompt = f"""
+    新しいノード「{target_node.get('label')}」が追加されました。
+    以下の既存ノードから、この新ノードの「親になるべきノード（先行タスク）」を最大3つ推測し、そのIDを返してください。
+    関連がない場合は空リストを返してください。
+    
+    【既存ノード一覧】
+    {chr(10).join(other_labels)}
+    
+    出力フォーマット(JSON):
+    {{"parent_ids": ["id_string"]}}
+    """
+    
+    try:
+        settings = api_settings.load_settings()
+        api_key = settings.get("gemini_api_key")
+        model = settings.get("gemini_model", "gemini-2.5-flash")
+        
+        result_json = await call_gemini_json(prompt, api_key=api_key, model_name=model)
+        return {"predictions": result_json.get("parent_ids", [])}
+    except Exception as e:
+        logger.error(f"Link prediction failed: {e}")
+        return {"predictions": []}
+
+
+# --- Gap Advisor API Endpoints ---
+@router.patch("/projects/{project_id}/context")
+async def update_project_context(project_id: str, payload: ProjectContextUpdate):
+    """プレジェクト文脈（前提条件等）を更新"""
+    updates = payload.model_dump(exclude_none=True)
+    if not project_store.update_project_context(project_id, updates):
+        raise HTTPException(status_code=400, detail="Failed to update context")
+    return {"message": "Project context updated"}
+
+
+@router.post("/projects/{project_id}/ai/gap-check")
+async def run_gap_check(project_id: str, req: GapCheckRequest):
+    """プロジェクトの文脈と現在の構造を基にGap Check（不足ノード提案等）を実行"""
+    raw = project_store.get_project_data(project_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    template = template_loader.load_template(raw["project"]["template_id"])
+    context_str = req.project_context_override
+    if not context_str:
+        cond = raw["project"].get("technical_conditions", "")
+        reqs = raw["project"].get("legal_requirements", "")
+        context_str = f"技術条件: {cond}\n法規: {reqs}"
+        
+    structural_issues = project_store.detect_structural_issues(project_id, template)
+    merged = project_store.get_project_with_merged_data(project_id, template)
+    nodes = {n.id: n.label for n in merged["nodes"]}
+    
+    prompt = f"""
+    あなたは設計プロセスの専門家（Gap Advisor）です。
+    以下のプロジェクトの文脈と現在のマインドマップの構成を評価し、追加すべきプロセス（ノード）や依存関係の提案（Gap）を行ってください。
+
+    【プロジェクトの文脈】
+    {context_str}
+
+    【現在のノード一覧】
+    {list(nodes.values())}
+
+    【構造的課題（OrphanやDead-endなど）】
+    {structural_issues}
+
+    以下のJSON形式で、3〜5個の提案を返してください:
+    {{"suggestions": [
+        {{"type": "add_node" | "add_edge" | "modify_node", "target": "関連ノード名または新しいノード名", "description": "提案の理由や詳細な内容"}}
+    ]}}
+    """
+    
+    try:
+        settings = api_settings.load_settings()
+        api_key = settings.get("gemini_api_key")
+        model = settings.get("gemini_model", "gemini-2.5-flash")
+        
+        result_json = await call_gemini_json(prompt, api_key=api_key, model_name=model)
+        
+        # 履歴として保存
+        history_item = {
+            "context": context_str,
+            "structural_issues": structural_issues,
+            "suggestions": result_json.get("suggestions", [])
+        }
+        project_store.update_gap_check_history(project_id, history_item)
+        
+        return {
+            "issues": structural_issues,
+            "suggestions": result_json.get("suggestions", []),
+            "history_id": history_item.get("id")
+        }
+    except Exception as e:
+        logger.error(f"Gap check failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/projects/{project_id}/gap-suggestions/apply")
+async def apply_gap_suggestions(project_id: str, req: GapApplyRequest):
+    """Gap Checkの提案をマップに適用する"""
+    for suggestion in req.suggestions:
+        s_type = suggestion.get("type")
+        target = suggestion.get("target", "")
+        desc = suggestion.get("description", "")
+        
+        if s_type == "add_node":
+            project_store.add_node(project_id, {
+                "label": target, 
+                "description": desc,
+                "status": "未着手",
+                "source_type": "gap_advisor"
+            })
+        elif s_type == "add_edge":
+            # 簡略化して理由だけを保存するEdgeとして仮実装
+            pass
+        elif s_type == "modify_node":
+            # 指定が曖昧なのでここではスキップ
+            pass
+            
+    return {"message": "Suggestions applied"}
 
 
 # ── Knowledge API Endpoints ──
@@ -1078,7 +1341,10 @@ class AIActionRequest(BaseModel):
 
 @router.post("/ai/action")
 async def ai_action_endpoint(req: AIActionRequest):
-    """AI Copilot Action Handler"""
+    """
+    マインドマップ上のAIアクション（要約・拡張・RAG・調査）を実行する。
+    Phase 2: RAGアクションにて統一メタデータ（version_id）を考慮する。
+    """
     from google import genai as _genai
     import json
 
@@ -1093,56 +1359,55 @@ async def ai_action_endpoint(req: AIActionRequest):
     try:
         # 2. Handle Actions
         if req.action == "summarize":
-            prompt = f"以下のテキストを要約してください。文脈: {req.context}\n\nテキスト: {req.content}"
+            prompt = f"あなたは建築プロジェクトのPMです。\n指定されたプロセスマップのノード「{req.content}」について、一般的にどのような作業が求められるか、重要なポイントを3点程度で簡潔に要約してください。"
             resp = _client.models.generate_content(model=model_name, contents=prompt)
             return {"text": resp.text.strip()}
 
         elif req.action == "expand":
+            from google.genai import types as _types
             prompt = f"""
-            あなたは建築・設計・プロジェクト管理の専門家のリサーチアシスタントです。
-            ユーザーがマインドマップのノード「{req.content}」について情報を深めるべく、次の意思決定を行おうとしています。
+            あなたはチーフアーキテクトです。
+            プロセスマップのノード「{req.content}」をさらに細分化する場合、どのようなサブタスクや具体的な検討事項（子ノード）が考えられますか？
+            以下のJSON形式で3〜5個出力してください。
             
-            目的: このノードの意思決定を確実なものにするため「何を調べるべきか」「どういうキーワードでリサーチすべきか」「関係者や専門家に具体的に何を聞くべきか」という【リサーチプロンプト（調査指示書）】を5〜7件作成してください。
-            単なるアイデアの羅列ではなく、具体的なアクションや調査行動につながる「問い」を重視してください。
-
-            プロジェクト文脈: {req.context}
-            
-            出力フォーマット:
-            Markdown形式のリストで出力してください。
-            各項目には、リサーチの観点と、そのままコピーして使える具体的な質問文・検索クエリを含めてください。
-            
-            例:
-            * **【〇〇の調査】**: 関連法令や基準を確認する
-              * 検索キーワード例: `...`
-              * 専門家への質問例: 「〜〜の場合、...はどうなりますか？」
+            {{
+              "children": [
+                {{
+                  "label": "サブタスク名",
+                  "phase": "フェーズ名（例: 基本設計, 実施設計, 施工など）",
+                  "category": "カテゴリ名（例: 意匠, 構造, 設備, 管理など）"
+                }}
+              ]
+            }}
             """
-            resp = _client.models.generate_content(model=model_name, contents=prompt)
-            return {"text": resp.text.strip()}
+            resp = _client.models.generate_content(
+                model=model_name, 
+                contents=prompt,
+                config=_types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            data = json.loads(resp.text)
+            return data
 
         elif req.action == "rag":
-            # RAG implementation requires imports from root
+            # RAG implementation
             try:
                 import sys
                 import os
                 
-                # Add parent directory to path if not present (for accessing retriever.py from mindmap/router.py)
-                # This handles cases where we are running from root but mindmap is treated as a package
                 current_dir = os.path.dirname(os.path.abspath(__file__))
                 parent_dir = os.path.dirname(current_dir)
                 if parent_dir not in sys.path:
                     sys.path.append(parent_dir)
 
-                # Try absolute imports (assuming running from root)
                 try:
                     import retriever
                     import generator
                 except ImportError:
-                    # Try relative imports if loaded as a package
                     from .. import retriever
                     from .. import generator
                 
                 # 1. Search
-                query = f"{req.content}に関連する重要な情報は？"
+                query = f"{req.content}に関連する重要な設計情報、法規制、トラブル事例は？"
                 search_results = retriever.search(query)
                 
                 # 2. Context
@@ -1153,14 +1418,12 @@ async def ai_action_endpoint(req: AIActionRequest):
                 return {"text": answer}
                 
             except ImportError as e:
-                # Fallback if RAG modules not available
                 logger.warning(f"RAG modules not found ({e}), falling back to pure LLM")
-                prompt = f"以下のトピックについて、一般的知識に基づいて解説してください: {req.content}"
+                prompt = f"「{req.content}」に関連して、過去のプロジェクトで起きがちなトラブル、注意すべき法規制、または参考となるベストプラクティスを一般的知識に基づいて解説してください。"
                 resp = _client.models.generate_content(model=model_name, contents=prompt)
                 return {"text": "【注意: RAGモジュール利用不可のため、一般知識回答です】\n" + resp.text.strip()}
 
         elif req.action == "investigate":
-            # Research Assistant: Generate verification items
             prompt = f"""
             あなたは建築のプロフェッショナルです。
             以下のノードについて、設計・施工・管理の観点から「確認すべきこと」「調査すべきこと」「検討すべきリスク」をリストアップしてください。
@@ -1182,169 +1445,3 @@ async def ai_action_endpoint(req: AIActionRequest):
     except Exception as e:
         logger.error(f"AI Action Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-class AutoLinkRequest(BaseModel):
-    nodeId: str
-    label: str
-    description: Optional[str] = ""
-    projectContext: Optional[str] = ""
-
-@router.post("/ai/auto-link")
-async def ai_auto_link_endpoint(req: AutoLinkRequest):
-    """
-    バックグラウンドでノードの内容に関連する知識を検索し、リンク候補を返す
-    """
-    try:
-        # Check API key configuration
-        api_key = api_settings.get_api_key()
-        if not api_key:
-            raise HTTPException(status_code=400, detail="API Key not configured")
-
-        # Configure Generative AI
-        from google import genai as _genai
-        _client = _genai.Client(api_key=api_key)
-
-        # 1. Extract Keywords using Gemini (lightweight model)
-        model_name = api_settings.get_analysis_model() or "gemini-2.0-flash"
-
-        prompt = f"""
-        以下のノード情報から、建築知識データベースを検索するための重要なキーワードを3つ抽出してください。
-        JSON形式で `keywords` 配列として返してください。
-
-        ノードラベル: {req.label}
-        説明: {req.description}
-        プロジェクト文脈: {req.projectContext}
-        """
-        
-        # Use JSON generation if possible, or parse text
-        try:
-            resp = _client.models.generate_content(model=model_name, contents=prompt)
-            text = resp.text.strip()
-            # Cleanup code blocks
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("\n", 1)[0]
-            if text.startswith("json"):
-                text = text[4:]
-            
-            import json
-            import re
-            # Try direct JSON parse first
-            try:
-                keywords = json.loads(text).get("keywords", [])
-            except json.JSONDecodeError as e:
-                logger.debug(f"JSON parse failed, falling back to regex: {e}")
-                # Fallback regex
-                json_match = re.search(r'\{.*\}', text, re.DOTALL)
-                if json_match:
-                    keywords = json.loads(json_match.group(0)).get("keywords", [])
-                else:
-                    keywords = [req.label]
-        except Exception as e:
-            logger.warning(f"Keyword extraction failed: {e}")
-            keywords = [req.label]
-
-        # 2. Search RAG (Retriever)
-        query = " ".join(keywords)
-        results = []
-        
-        try:
-            import sys
-            import os
-            
-            # Setup path for imports (same as ai_action_endpoint)
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            parent_dir = os.path.dirname(current_dir)
-            if parent_dir not in sys.path:
-                sys.path.append(parent_dir)
-
-            try:
-                import retriever
-            except ImportError:
-                from .. import retriever
-            
-            # Perform search
-            search_data = retriever.search(query, n_results=3)
-            search_hits = search_data.get("hits", [])
-            
-            # Format results
-            for hit in search_hits:
-                meta = hit.get("metadata", {})
-                results.append({
-                    "id": meta.get("chunk_id", "unknown"),
-                    "source": meta.get("source_pdf_name") or meta.get("filename", "Unknown Source"),
-                    "content": hit.get("document", "")[:200] + "...", # Truncate for preview
-                    "relevance": hit.get("score", 0.0), # or distance
-                    "full_content": hit.get("document", "")
-                })
-
-        except ImportError as e:
-            logger.error(f"RAG module import failed: {e}")
-        except Exception as e:
-            logger.error(f"RAG search failed: {e}")
-
-        return {
-            "nodeId": req.nodeId,
-            "keywords": keywords,
-            "results": results
-        }
-
-    except Exception as e:
-        logger.error(f"Auto-link error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/ai/action")
-async def ai_action(req: AIActionRequest):
-    """マインドマップ上のAIアクション（要約・拡張・RAG補完）を実行する"""
-    import json
-    from google import genai as _genai
-    from google.genai import types as _types
-
-    api_key = api_settings.get_api_key()
-    if not api_key:
-        raise HTTPException(status_code=400, detail="APIキーが設定されていません。設定画面からGemini APIキーを入力してください。")
-
-    _client = _genai.Client(api_key=api_key)
-    _model_name = "gemini-2.0-flash"
-
-    label = req.content or req.nodeId
-    action = req.action
-
-    try:
-        if action == "summarize":
-            prompt = f"あなたは建築プロジェクトのPMです。\n指定されたプロセスマップのノード「{label}」について、一般的にどのような作業が求められるか、重要なポイントを3点程度で簡潔に要約してください。"
-            res = _client.models.generate_content(model=_model_name, contents=prompt)
-            return {"text": f"【AI要約】\n{res.text}"}
-
-        elif action == "expand":
-            prompt = f'''あなたはチーフアーキテクトです。
-プロセスマップのノード「{label}」をさらに細分化する場合、どのようなサブタスクや具体的な検討事項（子ノード）が考えられますか？
-以下のJSON形式で3〜5個出力してください。
-
-{{
-  "children": [
-    {{
-      "label": "サブタスク名",
-      "phase": "フェーズ名（例: 基本設計, 実施設計, 施工など）",
-      "category": "カテゴリ名（例: 意匠, 構造, 設備, 管理など）"
-    }}
-  ]
-}}'''
-            res = _client.models.generate_content(
-                model=_model_name, contents=prompt,
-                config=_types.GenerateContentConfig(response_mime_type="application/json")
-            )
-            data = json.loads(res.text)
-            return data
-
-        elif action == "rag":
-            prompt = f"あなたは熟練の建築技術者です。\nプロセスマップのノード「{label}」に関連して、過去のプロジェクトで起きがちなトラブル、注意すべき法規制、または参考となるベストプラクティスを簡潔に教えてください。"
-            res = _client.models.generate_content(model=_model_name, contents=prompt)
-            return {"text": f"【RAG/AI知見補完】\n{res.text}"}
-            
-        else:
-            raise HTTPException(status_code=400, detail="Invalid action")
-            
-    except Exception as e:
-        logger.error(f"AI Action Error: {e}")
-        raise HTTPException(status_code=500, detail=f"AIアクション実行中にエラーが発生しました: {str(e)}")

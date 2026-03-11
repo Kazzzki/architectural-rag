@@ -15,7 +15,8 @@ import {
     Building2,
     Sparkles,
     Database,
-    Globe
+    Globe,
+    X
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { 
@@ -30,6 +31,13 @@ import {
 import SourceCard from './components/SourceCard';
 const PDFViewer = dynamic(() => import('./components/PDFViewer'), { ssr: false });
 import Library from './components/Library';
+import FileUpload from './components/FileUpload';
+import LayerPanel from './components/LayerPanel';
+import Link from 'next/link';
+import NavRail, { NavItemId } from './components/NavRail';
+import SecondaryPanel from './components/SecondaryPanel';
+import LibraryPanel from './components/LibraryPanel';
+import MindmapPanel from './components/MindmapPanel';
 
 // --- Citation Logic ---
 const CITATION_PATTERN = /\[S(\d+):p\.(\d+)\]/g;
@@ -120,19 +128,21 @@ export default function Home() {
     const [isLoading, setIsLoading] = useState(false);
     const [sessions, setSessions] = useState<Session[]>([]);
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<'chat' | 'library'>('chat');
+    const [activeNavItem, setActiveNavItem] = useState<NavItemId | null>('chat');
+    const [isPanelOpen, setIsPanelOpen] = useState(true);
     const [useRag, setUseRag] = useState(true);
     const [useWebSearch, setUseWebSearch] = useState(false);
     const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
     const [availableModels, setAvailableModels] = useState<Record<string, string>>({});
     
-    // PDF Viewer State
-    const [isPdfOpen, setIsPdfOpen] = useState(false);
+    // Right Panel State
+    const [rightPanel, setRightPanel] = useState<'pdf' | 'layers' | null>(null);
     const [pdfUrl, setPdfUrl] = useState<string | null>(null);
     const [pdfInitialPage, setPdfInitialPage] = useState<number | undefined>(undefined);
     
     // UI state
     const [activeLayerB, setActiveLayerB] = useState<string | null>(null);
+    const [activeLayerBTitle, setActiveLayerBTitle] = useState<string | null>(null);
     
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
@@ -142,7 +152,24 @@ export default function Home() {
     useEffect(() => {
         fetchSessions().then(setSessions);
         fetchModels();
+        const saved = localStorage.getItem('antigravity_panel_open');
+        if (saved !== null) {
+            setIsPanelOpen(saved === 'true');
+        }
     }, []);
+
+    const handleNavSelect = (id: NavItemId | null) => {
+        if (id === null) {
+            setIsPanelOpen(false);
+            localStorage.setItem('antigravity_panel_open', 'false');
+        } else {
+            setActiveNavItem(id);
+            if (!isPanelOpen) {
+                setIsPanelOpen(true);
+                localStorage.setItem('antigravity_panel_open', 'true');
+            }
+        }
+    };
 
     // Scroll to bottom
     useEffect(() => {
@@ -225,6 +252,7 @@ export default function Home() {
                 model: selectedModel,
                 use_rag: useRag,
                 use_web_search: useWebSearch,
+                contextSheet: activeLayerB,
                 history: historySnapshot.length > 0 ? historySnapshot : undefined,
                 signal: abortController.signal
             })) {
@@ -295,58 +323,105 @@ export default function Home() {
 
     return (
         <div className="flex h-screen bg-[var(--background)] text-[var(--foreground)] overflow-hidden font-sans">
-            {/* Sidebar */}
-            <div className="w-64 border-r border-[var(--border)] bg-[var(--card)] flex flex-col shrink-0">
-                <div className="p-4 border-b border-[var(--border)] flex items-center gap-2">
-                    <Building2 className="w-6 h-6 text-primary-500" />
-                    <h1 className="font-bold text-lg tracking-tight">Antigravity</h1>
-                </div>
+            <NavRail activeItem={isPanelOpen ? activeNavItem : null} onSelect={handleNavSelect} />
+            <SecondaryPanel 
+                activeItem={activeNavItem} 
+                isOpen={isPanelOpen} 
+                onClose={() => handleNavSelect(null)} 
+            >
+                {/* Temporary Chat History wrapper for Thread-1 */}
+                <div className="flex-1 flex flex-col h-full w-full">
+                    {activeNavItem === 'chat' && (
+                        <div className="flex-1 overflow-y-auto p-4 space-y-1 custom-scrollbar w-full">
+                            <button
+                                onClick={() => {
+                                    setActiveSessionId(null);
+                                    setMessages([]);
+                                }}
+                                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-[var(--card-hover)] transition-colors text-sm font-medium mb-4 border border-[var(--border)] shadow-sm"
+                            >
+                                <Plus className="w-4 h-4" /> 新規チャット
+                            </button>
 
-                <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                    <button
-                        onClick={() => {
-                            setActiveSessionId(null);
-                            setMessages([]);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-[var(--card-hover)] transition-colors text-sm font-medium mb-4 border border-[var(--border)] shadow-sm"
-                    >
-                        <Plus className="w-4 h-4" /> 新規チャット
-                    </button>
+                            <div className="px-3 mb-2 mt-4">
+                                <p className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider">最近のチャット</p>
+                            </div>
 
-                    <div className="px-3 mb-2">
-                        <p className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider">最近のチャット</p>
-                    </div>
+                            {sessions.map(s => (
+                                <button
+                                    key={s.id}
+                                    onClick={() => loadSession(s.id)}
+                                    className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all truncate hover:bg-[var(--card-hover)] ${activeSessionId === s.id ? 'bg-primary-50 text-primary-700 font-medium border border-primary-200' : 'text-[var(--foreground)]'}`}
+                                >
+                                    {s.title || `新規チャット (${s.id.slice(0, 8)})`}
+                                </button>
+                            ))}
 
-                    {sessions.map(s => (
-                        <button
-                            key={s.id}
-                            onClick={() => loadSession(s.id)}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all truncate hover:bg-[var(--card-hover)] ${activeSessionId === s.id ? 'bg-primary-50 text-primary-700 font-medium border border-primary-200' : 'text-[var(--foreground)]'}`}
-                        >
-                            {s.title || `新規チャット (${s.id.slice(0, 8)})`}
-                        </button>
-                    ))}
-                </div>
-
-                <div className="p-4 border-t border-[var(--border)]">
-                    <button 
-                        onClick={() => setActiveTab(activeTab === 'chat' ? 'library' : 'chat')}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-sm hover:bg-[var(--card-hover)] transition-colors shadow-sm"
-                    >
-                        <div className="flex items-center gap-2">
-                            {activeTab === 'chat' ? <LibraryIcon className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
-                            <span>{activeTab === 'chat' ? 'ライブラリ' : 'チャットに戻る'}</span>
+                            <div className="pt-6 pb-2 px-3">
+                                <p className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider">ナレッジ登録</p>
+                            </div>
+                            <div className="px-2">
+                                <FileUpload />
+                            </div>
                         </div>
-                    </button>
+                    )}
+                    {activeNavItem === 'library' && <LibraryPanel />}
+                    {activeNavItem === 'mindmap' && <MindmapPanel />}
+                    {activeNavItem === 'layers' && (
+                        <div className="h-full bg-white flex flex-col">
+                            <LayerPanel 
+                                className="!border-0 flex-1"
+                                initialTab="layerB"
+                                activeLayerB={activeLayerB}
+                                activeLayerBTitle={activeLayerBTitle}
+                                onLayerBChange={(content, title) => {
+                                    setActiveLayerB(content);
+                                    setActiveLayerBTitle(title);
+                                }}
+                                availableModels={availableModels}
+                                availableRoles={{
+                                    pmcm: 'PMCM',
+                                    designer: '設計者',
+                                    cost: 'コスト管理者'
+                                }}
+                            />
+                        </div>
+                    )}
+                    {activeNavItem === 'settings' && (
+                        <div className="p-4 text-sm text-[var(--muted)]">設定機能は準備中です</div>
+                    )}
                 </div>
-            </div>
+            </SecondaryPanel>
 
             {/* Main Content */}
-            <div className="flex-1 flex flex-col min-w-0 bg-[#fbfbfb]">
-                {activeTab === 'chat' ? (
-                    <div className="flex-1 flex min-h-0">
-                        {/* Chat Area */}
-                        <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${isPdfOpen ? 'w-1/2' : 'w-full'}`}>
+            <main className="flex-1 flex min-w-0 bg-[#fbfbfb] overflow-hidden">
+                <div className="flex-1 flex min-w-0 overflow-hidden">
+                    {/* Chat Area */}
+                    <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${rightPanel ? 'lg:w-1/2' : 'w-full'}`}>
+                        {/* Chat Header */}
+                            <div className="px-6 py-3 bg-white border-b border-[var(--border)] flex items-center justify-between shrink-0">
+                                <div className="flex items-center gap-2">
+                                    <MessageSquare className="w-4 h-4 text-primary-500" />
+                                    <span className="text-sm font-bold truncate">
+                                        {activeSessionId ? (sessions.find(s => s.id === activeSessionId)?.title || 'チャット履歴') : '新規チャット'}
+                                    </span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    {activeLayerB && (
+                                        <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-violet-50 text-violet-600 border border-violet-100 text-[10px] font-bold animate-in fade-in zoom-in duration-300">
+                                            <Sparkles className="w-3 h-3" />
+                                            <span className="max-w-[120px] truncate">{activeLayerBTitle}</span>
+                                        </div>
+                                    )}
+                                    <button 
+                                        onClick={() => setRightPanel(rightPanel === 'layers' ? null : 'layers')}
+                                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${rightPanel === 'layers' ? 'bg-violet-600 border-violet-600 text-white' : 'bg-white border-[var(--border)] text-[var(--muted)] hover:border-violet-300 hover:text-violet-600'}`}
+                                    >
+                                        <Sparkles className={`w-3.5 h-3.5 ${activeLayerB ? 'animate-pulse' : ''}`} />
+                                        Context
+                                    </button>
+                                </div>
+                            </div>
                             {/* Messages Container */}
                             <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
                                 {messages.length === 0 && (
@@ -371,10 +446,10 @@ export default function Home() {
                                                                         child,
                                                                         currentSources,
                                                                         (url, page) => {
-                                                                            setPdfUrl(url);
-                                                                            setPdfInitialPage(page);
-                                                                            setIsPdfOpen(true);
-                                                                        }
+                                                                              setPdfUrl(url);
+                                                                              setPdfInitialPage(page);
+                                                                              setRightPanel('pdf');
+                                                                          }
                                                                     );
                                                                 }
                                                                 return child;
@@ -395,10 +470,10 @@ export default function Home() {
                                                                 key={j} 
                                                                 src={src} 
                                                                 onPageClick={(url, page) => {
-                                                                    setPdfUrl(url);
-                                                                    setPdfInitialPage(page);
-                                                                    setIsPdfOpen(true);
-                                                                }} 
+                                                                      setPdfUrl(url);
+                                                                      setPdfInitialPage(page);
+                                                                      setRightPanel('pdf');
+                                                                  }} 
                                                             />
                                                         ))}
                                                     </div>
@@ -447,7 +522,7 @@ export default function Home() {
                             </div>
 
                             {/* Input Area */}
-                            <div className="p-4 bg-white border-t border-[var(--border)]">
+                            <div className="flex-shrink-0 p-4 bg-white border-t border-[var(--border)]">
                                 <form onSubmit={handleSubmit} className="relative max-w-4xl mx-auto">
                                     <div className="flex items-center gap-2 mb-3">
                                         {/* Model Select */}
@@ -484,6 +559,16 @@ export default function Home() {
                                             <Globe className="w-3.5 h-3.5" />
                                             ウェブ検索 {useWebSearch ? 'ON' : 'OFF'}
                                         </button>
+
+                                        {/* Layer B Button (Mobile/Small) */}
+                                        <button
+                                            type="button"
+                                            onClick={() => setRightPanel(rightPanel === 'layers' ? null : 'layers')}
+                                            className={`flex md:hidden items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${rightPanel === 'layers' ? 'bg-violet-50 border-violet-200 text-violet-700' : 'bg-gray-50 border-gray-200 text-gray-500'}`}
+                                        >
+                                            <Sparkles className="w-3.5 h-3.5" />
+                                            Context
+                                        </button>
                                     </div>
 
                                     <div className="relative flex items-end gap-2 bg-[var(--background)] border border-[var(--border)] rounded-2xl p-2 focus-within:ring-2 focus-within:ring-primary-400 focus-within:border-primary-400 transition-all shadow-sm">
@@ -513,21 +598,48 @@ export default function Home() {
                             </div>
                         </div>
 
-                        {/* PDF Viewer Pane */}
-                        {isPdfOpen && (
-                            <div className="w-1/2 h-full border-l border-[var(--border)] bg-white animate-in slide-in-from-right duration-300">
-                                <PDFViewer
-                                    url={pdfUrl!}
-                                    initialPage={pdfInitialPage}
-                                    onClose={() => setIsPdfOpen(false)}
-                                />
+                        {/* Right Side Panel Pane */}
+                        {rightPanel && (
+                            <div className="w-full lg:w-1/2 h-full border-l border-[var(--border)] bg-white animate-in slide-in-from-right duration-300 flex flex-col">
+                                {rightPanel === 'pdf' && (
+                                    <PDFViewer
+                                        url={pdfUrl!}
+                                        initialPage={pdfInitialPage}
+                                        onClose={() => setRightPanel(null)}
+                                    />
+                                )}
+                                {rightPanel === 'layers' && (
+                                    <div className="h-full flex flex-col relative">
+                                        <div className="absolute top-4 right-4 z-10">
+                                            <button 
+                                                onClick={() => setRightPanel(null)}
+                                                className="p-1.5 bg-white/80 backdrop-blur rounded-full border border-[var(--border)] text-[var(--muted)] hover:text-red-500 transition-colors shadow-sm"
+                                            >
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                        <LayerPanel 
+                                            className="!rounded-none !border-0 flex-1"
+                                            initialTab="layerB"
+                                            activeLayerB={activeLayerB}
+                                            activeLayerBTitle={activeLayerBTitle}
+                                            onLayerBChange={(content, title) => {
+                                                setActiveLayerB(content);
+                                                setActiveLayerBTitle(title);
+                                            }}
+                                            availableModels={availableModels}
+                                            availableRoles={{
+                                                pmcm: 'PMCM',
+                                                designer: '設計者',
+                                                cost: 'コスト管理者'
+                                            }}
+                                        />
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
-                ) : (
-                    <Library />
-                )}
-            </div>
+            </main>
 
             {/* Global Styles */}
             <style jsx global>{`

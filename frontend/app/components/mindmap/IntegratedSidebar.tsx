@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, FileText, MessageSquare, BookOpen, Database, Loader2 } from 'lucide-react';
+import { Send, FileText, MessageSquare, BookOpen, Database, Loader2, Plus } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import NodeDetailPanel from './NodeDetailPanel';
 import KnowledgePanel from './KnowledgePanel';
@@ -46,6 +46,8 @@ interface IntegratedSidebarProps {
     phases: string[];
     categories: string[];
     forceChatTab?: boolean;
+    onSendToMap?: (message: string) => void;
+    projectId?: string;
 }
 
 type SidebarTab = 'detail' | 'knowledge' | 'rag' | 'chat';
@@ -68,7 +70,9 @@ export default function IntegratedSidebar({
     categoryColors,
     phases,
     categories,
-    forceChatTab
+    forceChatTab,
+    onSendToMap,
+    projectId
 }: IntegratedSidebarProps) {
     const [prompt, setPrompt] = useState("");
     const [activeTab, setActiveTab] = useState<SidebarTab>('detail');
@@ -192,6 +196,7 @@ export default function IntegratedSidebar({
                             categories={categories}
                             onUpdate={onUpdate}
                             onChecklistToggle={onChecklistToggle}
+                            projectId={projectId}
                         />
                     </div>
                 )}
@@ -256,6 +261,18 @@ export default function IntegratedSidebar({
                                         : 'bg-white border border-slate-200 text-slate-700 markdown-content'
                                         }`}>
                                         <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                        {msg.role === 'assistant' && onSendToMap && (
+                                            <div className="mt-2 pt-2 border-t border-slate-100 flex justify-end">
+                                                <button
+                                                    onClick={() => onSendToMap(msg.content)}
+                                                    className="flex items-center gap-1.5 px-2 py-1.5 text-[10px] font-bold text-violet-600 bg-violet-50 hover:bg-violet-100 rounded-md transition-colors shadow-sm"
+                                                    title="この内容からノードを抽出してマップに追加します"
+                                                >
+                                                    <Plus className="w-3.5 h-3.5" />
+                                                    マップへ送る
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             ))}

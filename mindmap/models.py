@@ -5,6 +5,12 @@ from enum import Enum
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 
+# --- Phase 1: Shared Constants ---
+SOURCE_TYPES = ['manual', 'template', 'chat', 'gap_advisor', 'ai_expand']
+FOCUS_AREAS = ['全体', '法規', '技術', '管理']
+PHASE_OPTIONS = ["基本計画", "基本設計", "実施設計", "施工準備", "施工", "運用", "未設定"]
+CATEGORY_OPTIONS = ["構造", "意匠", "設備", "外装", "土木", "管理", "法規", "その他"]
+
 
 # v1後方互換用 Enum（主にproject_storeで継続使用）
 class Phase(str, Enum):
@@ -79,6 +85,12 @@ class ProcessNode(BaseModel):
     status: NodeStatus = NodeStatus.NOT_STARTED
     ragResults: Optional[List[Dict[str, Any]]] = []
     chatHistory: Optional[List[Dict[str, Any]]] = []
+    
+    # Phase 1 additions
+    source_type: str = "manual"
+    checklist_total: int = 0
+    checklist_done: int = 0
+    deliverables_count: int = 0
 
 
 class Edge(BaseModel):
@@ -138,6 +150,12 @@ class ProjectListItem(BaseModel):
     created_at: str
     updated_at: str
     node_count: int = 0
+    
+    # Phase 1 additions
+    technical_conditions: str = ""
+    legal_requirements: str = ""
+    layer_b_project_id: str = ""
+    gap_check_history: list = []
 
 
 class ProjectData(BaseModel):
@@ -147,6 +165,13 @@ class ProjectData(BaseModel):
     template_id: str
     created_at: str
     updated_at: str
+    
+    # Phase 1 additions
+    technical_conditions: str = ""
+    legal_requirements: str = ""
+    layer_b_project_id: str = ""
+    gap_check_history: list = []
+    
     nodes: List[ProcessNode]
     edges: List[Edge]
 
@@ -165,6 +190,7 @@ class NodeUpdate(BaseModel):
     notes: Optional[str] = None
     ragResults: Optional[List[Dict[str, Any]]] = None
     chatHistory: Optional[List[Dict[str, Any]]] = None
+    source_type: Optional[str] = None
 
 
 class NodeCreate(BaseModel):
@@ -177,6 +203,7 @@ class NodeCreate(BaseModel):
     checklist: List[str] = []
     deliverables: List[str] = []
     key_stakeholders: List[str] = []
+    source_type: str = "manual"
 
 
 class EdgeCreate(BaseModel):
@@ -225,3 +252,26 @@ class AIActionRequest(BaseModel):
     nodeId: str
     content: str
     context: Optional[Dict[str, Any]] = None
+
+
+# --- Phase 1: Gap Advisor Models ---
+class ProjectContextUpdate(BaseModel):
+    technical_conditions: Optional[str] = None
+    legal_requirements: Optional[str] = None
+
+
+class GapCheckRequest(BaseModel):
+    project_context_override: Optional[str] = None
+    focus_areas: Optional[List[str]] = None
+
+
+class GapApplyRequest(BaseModel):
+    suggestions: List[Dict[str, Any]]
+
+
+# --- AI Link Prediction / Mentions ---
+class UnlinkedMentionsRequest(BaseModel):
+    node_id: str
+
+class PredictLinksRequest(BaseModel):
+    new_node_id: str

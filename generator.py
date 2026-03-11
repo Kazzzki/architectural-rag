@@ -9,14 +9,24 @@ from gemini_client import get_client
 from utils.retry import sync_retry
 import logging
 
+# モデル名のマッピング（フロントエンドでの表示用IDを実際のAPIモデル名に変換）
+MODEL_MAPPING = {
+    "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+}
+
+def _resolve_model(model_name: str) -> str:
+    """内部用のモデル名に変換する（マッピングがあれば適用、なければそのまま）"""
+    return MODEL_MAPPING.get(model_name, model_name)
+
 # --- Layer 0: 外部ファイルからシステムプロンプトを読み込む ---
 from pathlib import Path
 
 _LAYER0_PATH = Path(__file__).parent / "prompts" / "layer0_principles.md"
+_LAYER_A1_PATH = Path(__file__).parent / "prompts" / "layer_a1_role_principles.md"
 _FALLBACK_PROMPT = """あなたは建築意匠設計の技術アドバイザーです。（Layer 0ファイルが見つかりません）"""
 
 def _load_layer0() -> str:
-    """Layer 0ファイルを読み込む。存在しない場合はフォールバック文字列を返す。"""
+    """参っLayer 0ファイルを読み込む。存在しない場合はフォールバック文字列を返す。"""
     try:
         if _LAYER0_PATH.exists():
             content = _LAYER0_PATH.read_text(encoding="utf-8").strip()
@@ -27,16 +37,30 @@ def _load_layer0() -> str:
         logger.error(f"Failed to load Layer 0 file: {e}")
     return _FALLBACK_PROMPT
 
+def _load_layer_a1() -> str:
+    """「Layer A1」（安定役割原則）ファイルを読み込む。存在しない場合は空文字列を返す。"""
+    try:
+        if _LAYER_A1_PATH.exists():
+            content = _LAYER_A1_PATH.read_text(encoding="utf-8").strip()
+            if content:
+                return content
+        logger.warning(f"Layer A1 file not found or empty: {_LAYER_A1_PATH}. Skipping.")
+    except Exception as e:
+        logger.error(f"Failed to load Layer A1 file: {e}")
+    return ""
+
 logger = logging.getLogger(__name__)
 
 # 起動時に一度読み込み、メモリにキャッシュ
 _layer0_cache: str = _load_layer0()
+_layer_a1_cache: str = _load_layer_a1()
 
 def reload_layer0() -> str:
     """Layer 0キャッシュをディスクから再読み込みする。API経由で呼び出す。"""
-    global _layer0_cache
+    global _layer0_cache, _layer_a1_cache
     _layer0_cache = _load_layer0()
-    logger.info(f"Layer 0 reloaded. chars={len(_layer0_cache)}")
+    _layer_a1_cache = _load_layer_a1()
+    logger.info(f"Layer 0 reloaded. chars={len(_layer0_cache)}, A1 chars={len(_layer_a1_cache)}")
     return _layer0_cache
 
 # 互換性のため
@@ -72,8 +96,29 @@ def build_system_prompt_direct() -> str:
     return SYSTEM_PROMPT_DIRECT
 
 def build_system_prompt() -> str:
-    """Layer 0キャッシュを返す。Layer Bはuser_prompt側で注入する。"""
-    return _layer0_cache
+    """
+    system_instruction に展開するコンテンツを返す。
+    構成: Layer 0（常設・不変）+ Layer A1（安定役割原則）
+    注意: A2（動的経験知）はここに含めず、user_prompt 側の build_a2_block() で注入する。
+    """
+    parts = [_layer0_cache]
+    if _layer_a1_cache:
+        parts.append(f"\n\n---\n## Layer A1: 安定役割原則\n{_layer_a1_cache}")
+    return "\n".join(parts)
+
+def build_a2_block(personal_contexts: list) -> str:
+    """
+    Layer A2（動的経験知）を user_prompt 向けブロックとして整形する。
+    system_instruction 側には入れない。
+    """
+    if not personal_contexts:
+        return ""
+    items = "\n".join([f"- [{c['type']}] {c['content']}" for c in personal_contexts])
+    return (
+        "\n\n[参考: Layer A2 — 関連する過去の経験・判断基準（実経手履から取得）]\n"
+        "以下は各質問に関連する過去の判断・学びです。回答の参考にしてください。\n"
+        f"{items}\n]"
+    )
 
 # フロントから受け取る会話履歴の1件あたりの最大文字数（長い回答を切り詰めてトークン節約）
 _HISTORY_MAX_CONTENT_CHARS = 2000
@@ -218,13 +263,14 @@ def generate_answer(
         from context_retriever import get_relevant_personal_contexts
         personal_contexts = get_relevant_personal_contexts(question)
 
-        local_system_prompt = build_system_prompt()
-        if personal_contexts:
-            items = "\n".join([f"- [{c['type']}] {c['content']}" for c in personal_contexts])
-            local_system_prompt += f"\n\n## あなた（Kazuki）の関連する経験・判断基準\n以下はこの質問に関連する、あなた自身の過去の判断や学びです。\n回答の参考にし、必要に応じて言及してください：\n\n{items}\n"
+        local_system_prompt = build_system_prompt()  # Layer 0 + A1
+        a2_block = build_a2_block(personal_contexts)  # A2 → user_prompt 側
 
         client = get_client()
-        contents = _build_contents(user_prompt, history)
+        # A2ブロックを user_prompt 末尾に追加
+        final_user_prompt = user_prompt + a2_block
+        contents = _build_contents(final_user_prompt, history)
+        model = _resolve_model(model)
         
         config = types.GenerateContentConfig(
             system_instruction=local_system_prompt,
@@ -270,13 +316,13 @@ def generate_answer_direct(
     user_prompt = f"{context_sheet_block}{question}"
 
     local_system_prompt = build_system_prompt_direct()
-    if personal_contexts:
-        items = "\n".join([f"- [{c['type']}] {c['content']}" for c in personal_contexts])
-        local_system_prompt += f"\n\n## あなた（Kazuki）の関連する経験・判断基準\n以下はこの質問に関連する、あなた自身の過去の判断や学びです。\n回答の参考にし、必要に応じて言及してください：\n\n{items}\n"
+    a2_block = build_a2_block(personal_contexts)  # A2 → user_prompt
 
     try:
         client = get_client()
-        contents = _build_contents(user_prompt, history)
+        final_user_prompt = f"{context_sheet_block}{question}{a2_block}"
+        contents = _build_contents(final_user_prompt, history)
+        model = _resolve_model(model)
         
         config = types.GenerateContentConfig(
             system_instruction=local_system_prompt,
@@ -383,13 +429,14 @@ def generate_answer_stream(
             logger.warning(f"Personal context retrieval failed (non-critical): {e}")
             personal_contexts = []
 
-        local_system_prompt = build_system_prompt()
-        if personal_contexts:
-            items = "\n".join([f"- [{c['type']}] {c['content']}" for c in personal_contexts])
-            local_system_prompt += f"\n\n## あなた（Kazuki）の関連する経験・判断基準\n以下はこの質問に関連する、あなた自身の過去の判断や学びです。\n回答の参考にし、必要に応じて言及してください：\n\n{items}\n"
+        local_system_prompt = build_system_prompt()  # Layer 0 + A1
+        a2_block = build_a2_block(personal_contexts)  # A2 → user_prompt
 
         client = get_client()
-        contents = _build_contents(user_prompt, history)
+        # A2ブロックを user_prompt 末尾に追加
+        final_user_prompt = user_prompt + a2_block
+        contents = _build_contents(final_user_prompt, history)
+        model = _resolve_model(model)
         
         tools = []
         if use_web_search:
@@ -450,15 +497,14 @@ def generate_answer_stream_direct(
             personal_contexts = []
 
         context_sheet_block = build_layer_b_manual_block(context_sheet)
-        user_prompt = f"{context_sheet_block}{question}"
+        a2_block = build_a2_block(personal_contexts)  # A2 → user_prompt
+        user_prompt = f"{context_sheet_block}{question}{a2_block}"
 
-        local_system_prompt = build_system_prompt_direct()
-        if personal_contexts:
-            items = "\n".join([f"- [{c['type']}] {c['content']}" for c in personal_contexts])
-            local_system_prompt += f"\n\n## あなた（Kazuki）の関連する経験・判断基準\n以下はこの質問に関連する、あなた自身の過去の判断や学びです。\n回答の参考にし、必要に応じて言及してください：\n\n{items}\n"
+        local_system_prompt = build_system_prompt_direct()  # Layer 0 + A1のみ
 
         client = get_client()
         contents = _build_contents(user_prompt, history)
+        model = _resolve_model(model)
         config = types.GenerateContentConfig(
             system_instruction=local_system_prompt,
             temperature=TEMPERATURE,

@@ -1,6 +1,6 @@
 'use client';
 
-import { Plus, Trash2, Undo2, Edit3, Eye, Search, CheckCircle2, Circle, Layout } from 'lucide-react';
+import { Plus, Trash2, Undo2, Edit3, Eye, Search, CheckCircle2, Circle, Layout, Activity } from 'lucide-react';
 
 interface Props {
     isEditMode: boolean;
@@ -10,6 +10,7 @@ interface Props {
     onDeleteNode: () => void;
     onUndo: () => void;
     onInvestigate: () => void;
+    onGapCheck: () => void;
     onBatchStatusChange: (status: string) => void;
     onLayout?: (direction: string) => void;
     hasSelectedNode: boolean;
@@ -25,6 +26,7 @@ export default function EditToolbar({
     onDeleteNode,
     onUndo,
     onInvestigate,
+    onGapCheck,
     onBatchStatusChange,
     onLayout,
     hasSelectedNode,
@@ -80,10 +82,19 @@ export default function EditToolbar({
                                 ? 'hover:bg-indigo-50 text-indigo-600'
                                 : 'text-slate-300 opacity-40 cursor-not-allowed'
                                 }`}
-                            title="AI調査"
+                            title={hasSelectedNode ? "AI調査" : "ノードを選択してください"}
                         >
                             <Search className="w-3.5 h-3.5" />
                             <span className="hidden lg:inline">調査</span>
+                        </button>
+
+                        <button
+                            onClick={(e) => { e.stopPropagation(); onGapCheck(); }}
+                            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs hover:bg-fuchsia-50 text-fuchsia-600 transition-colors font-medium`}
+                            title="全体Gapチェック"
+                        >
+                            <Activity className="w-3.5 h-3.5" />
+                            <span className="hidden lg:inline">Gap Check</span>
                         </button>
 
                         {selectedCount > 0 && (

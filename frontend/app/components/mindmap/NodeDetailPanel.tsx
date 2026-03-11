@@ -1,7 +1,8 @@
 'use client';
 
-import { X, CheckSquare, FileText, Users, ArrowRight, ArrowLeft, ExternalLink, BookOpen } from 'lucide-react';
+import { X, CheckSquare, FileText, Users, ArrowRight, ArrowLeft, ExternalLink, BookOpen, Link2 } from 'lucide-react';
 import KnowledgePanel from './KnowledgePanel';
+import { authFetch } from '@/lib/api';
 
 interface ProcessNode {
     id: string;
@@ -37,6 +38,7 @@ interface Props {
     categories?: string[];
     onUpdate?: (nodeId: string, updates: Partial<ProcessNode>) => void;
     onChecklistToggle?: (nodeId: string, index: number, checked: boolean) => void;
+    projectId?: string;
 }
 
 const STATUS_OPTIONS = ['未着手', '検討中', '決定済み'];
@@ -64,9 +66,31 @@ export default function NodeDetailPanel({
     categories = [],
     onUpdate,
     onChecklistToggle,
+    projectId,
 }: Props) {
     const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG['未着手'];
     const [checkedItems, setCheckedItems] = useState<Set<number>>(new Set());
+    const [unlinkedMentions, setUnlinkedMentions] = useState<{id: string, label: string}[]>([]);
+
+    useEffect(() => {
+        if (!node?.id || !projectId) return;
+        const fetchMentions = async () => {
+            try {
+                const res = await authFetch(`/api/mindmap/projects/${projectId}/unlinked-mentions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ node_id: node.id })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    setUnlinkedMentions(data.mentions || []);
+                }
+            } catch (err) {
+                console.error("Failed to fetch unlinked mentions", err);
+            }
+        };
+        fetchMentions();
+    }, [node.id, projectId]);
 
     useEffect(() => {
         try {
@@ -176,6 +200,29 @@ export default function NodeDetailPanel({
                 </section>
 
 
+                {/* Unlinked Mentions */}
+                {unlinkedMentions.length > 0 && (
+                    <section>
+                        <h3 className="flex items-center gap-2 text-sm font-bold mb-2 text-violet-600">
+                            <Link2 className="w-4 h-4" />
+                            未リンクの関連候補
+                        </h3>
+                        <div className="space-y-1.5">
+                            {unlinkedMentions.map(mention => (
+                                <button
+                                    key={mention.id}
+                                    onClick={() => onNavigate(mention.id)}
+                                    className="w-full text-left bg-violet-50 hover:bg-violet-100 border border-violet-100 hover:border-violet-300 rounded-lg px-3 py-2 transition-colors group flex items-center justify-between"
+                                >
+                                    <span className="text-xs font-medium text-violet-800 transition-colors">
+                                        {mention.label}
+                                    </span>
+                                    <ExternalLink className="w-3 h-3 text-violet-400 group-hover:text-violet-600" />
+                                </button>
+                            ))}
+                        </div>
+                    </section>
+                )}
 
                 {/* Checklist */}
                 {node.checklist.length > 0 && (

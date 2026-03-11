@@ -14,6 +14,11 @@ from gemini_client import get_client
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# doc_type 推論用キーワード
+_LAW_KEYWORDS = ["法規", "法令", "建築基準", "消防法", "e-Gov", "基準法", "告示", "法律", "条例"]
+_DRAWING_KEYWORDS = ["図面", "図", "drawing", "配置図", "平面図", "断面図", "立面図", "詳細図", "設備図"]
+_SPEC_KEYWORDS = ["仕様", "技術基準", "spec", "施工", "工法", "JASS", "JIS"]
+
 class DocumentClassifier:
     def __init__(self, rules_path: str = "classification_rules.yaml"):
         self.rules_path = rules_path
@@ -153,3 +158,14 @@ class DocumentClassifier:
         # YAMLとしてダンプ
         yaml_str = yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)
         return f"---\n{yaml_str}---\n"
+
+    def infer_doc_type(self, category: str, filename: str) -> str:
+        """カテゴリとファイル名から doc_type (law, drawing, spec, catalog) を推定"""
+        combined = (category + " " + filename).lower()
+        if any(k.lower() in combined for k in _LAW_KEYWORDS):
+            return "law"
+        if any(k.lower() in combined for k in _DRAWING_KEYWORDS):
+            return "drawing"
+        if any(k.lower() in combined for k in _SPEC_KEYWORDS):
+            return "spec"
+        return "catalog"

@@ -38,9 +38,26 @@ def get_relevant_personal_contexts(question: str, max_items: int = 3) -> List[Di
                     "content": full_text,
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 }]
-                
-        # シンプルに2文字以上の単語（漢字・カタカナ・英数字など）を抽出して検索キーワードとする
-        # 簡易的な実装だが、SQLiteのLIKE検索とは相性が良い
+
+        # --- Phase 2: Similarity Search for Personal Contexts ---
+        try:
+            from personal_context_manager import PersonalContextManager
+            mgr = PersonalContextManager()
+            similar_contexts = mgr.search_similar(question, limit=max_items)
+            
+            if similar_contexts:
+                logger.info(f"Similarity search found {len(similar_contexts)} personal contexts for '{question}'")
+                return [{
+                    "id": c["id"],
+                    "type": c["type"],
+                    "content": c["content"],
+                    "updated_at": None  # Manager does not return updated_at by default
+                } for c in similar_contexts]
+        except Exception as e:
+            logger.warning(f"Similarity search failed, falling back to keyword search: {e}")
+
+        # --- Fallback: Keyword Search (SQLite LIKE) ---
+        # 簡易的な単語抽出
         words = re.findall(r'[一-龠ぁ-んァ-ヶa-zA-Z0-9]{2,}', question)
         if not words:
             words = [question.strip()]
@@ -57,7 +74,7 @@ def get_relevant_personal_contexts(question: str, max_items: int = 3) -> List[Di
             })
             
         if results:
-            logger.info(f"Personal context injected: {len(results)} entries for question '{question}'")
+            logger.info(f"Personal context injected (Keyword search): {len(results)} entries for question '{question}'")
             
         return results
         

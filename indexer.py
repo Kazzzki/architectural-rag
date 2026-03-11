@@ -19,6 +19,12 @@ from google.genai import types
 import chromadb
 from chromadb import EmbeddingFunction
 
+from classifier import DocumentClassifier
+from chunk_builder import ChunkBuilder
+from dense_indexer import DenseIndexer
+from lexical_indexer import LexicalIndexer
+from metadata_repository import MetadataRepository
+
 logger = logging.getLogger(__name__)
 
 from config import (
@@ -70,15 +76,23 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
 
     def __call__(self, input: List[str]) -> List[List[float]]:
         client = get_client()
+        # Batch size for Gemini is 100
+        batch_size = 100
         embeddings = []
-        for text in input:
-            result = _call_embed_content(
-                client,
-                model=EMBEDDING_MODEL,
-                contents=text,
-                config=types.EmbedContentConfig(task_type="retrieval_document")
-            )
-            embeddings.append(result.embeddings[0].values)
+        for i in range(0, len(input), batch_size):
+            batch = input[i : i + batch_size]
+            try:
+                result = _call_embed_content(
+                    client,
+                    model=EMBEDDING_MODEL,
+                    contents=batch,
+                    config=types.EmbedContentConfig(task_type="retrieval_document")
+                )
+                for emb in result.embeddings:
+                    embeddings.append(emb.values)
+            except Exception as e:
+                logger.error(f"Batch embedding error: {e}")
+                raise e
         return embeddings
 
 
@@ -94,22 +108,13 @@ def get_query_embedding(text: str) -> List[float]:
     return result.embeddings[0].values
 
 
-# ─── doc_type 自動判定 ──────────────────────────────────────────────────────────
-# カテゴリ名 / ファイル名のキーワードで判定する
-_LAW_KEYWORDS   = ["法規", "法令", "建築基準", "消防法", "e-Gov", "基準法", "告示", "法律", "条例"]
-_DRAWING_KEYWORDS = ["図面", "図", "drawing", "配置図", "平面図", "断面図", "立面図", "詳細図", "設備図"]
-_SPEC_KEYWORDS  = ["仕様", "技術基準", "spec", "施工", "工法", "JASS", "JIS"]
+# (GeminiEmbeddingFunction and get_query_embedding remain for backward compatibility if needed, 
+# but DenseIndexer is preferred for new code)
 
+# ─── doc_type 自動判定 (classifier.py に移行済み。互換性のためのラッパー) ──────────
 def _infer_doc_type(category: str, filename: str) -> str:
-    """カテゴリとファイル名から doc_type を推定"""
-    combined = (category + " " + filename).lower()
-    if any(k.lower() in combined for k in _LAW_KEYWORDS):
-        return "law"
-    if any(k.lower() in combined for k in _DRAWING_KEYWORDS):
-        return "drawing"
-    if any(k.lower() in combined for k in _SPEC_KEYWORDS):
-        return "spec"
-    return "catalog"
+    """カテゴリとファイル名から doc_type を推定 (DocumentClassifierに委譲)"""
+    return DocumentClassifier().infer_doc_type(category, filename)
 
 
 # ─── ファイルスキャン ────────────────────────────────────────────────────────────
@@ -357,86 +362,42 @@ def chunk_for_indexing(
     drawing_type: Optional[str] = None,
     scale: Optional[str] = None,
     drive_file_id: Optional[str] = None,
+    version_id: str = "legacy"
 ) -> List[Dict[str, Any]]:
     """
-    テキストを Small-to-Big チャンクに分割し、
-    ChromaDB 登録用チャンクのリストを返す。
-
-    各チャンクは:
-      - text: 小チャンク（検索用、ChromaDB に格納）
-      - metadata: 必須スキーマを満たすメタデータ
+    [Legacy Wrapper] 
+    新しい ChunkBuilder は Markdown 全体を受け取るため、この関数は内部で
+    簡略化されたメタデータ付与を行う。
     """
-    if not text or not text.strip():
-        return []
-
-    small_size = SMALL_CHUNK_SIZES.get(doc_type, SMALL_CHUNK_SIZES["_default"])
-    small_chunks_text = _split_into_small_chunks(text, small_size, CHUNK_OVERLAP)
-    parent_chunks_text = _split_into_parent_chunks(text)
-
-    # 親チャンクを保存
-    parent_ids = []
-    for i, pchunk in enumerate(parent_chunks_text):
-        pid = f"p{i}_{uuid.uuid4().hex[:8]}"
-        save_parent_chunk(source_pdf_hash, pid, pchunk)
-        parent_ids.append(f"{source_pdf_hash}/{pid}")
-
-    # 小チャンクを親チャンクにマッピング（小チャンク位置で最近傍の親を選ぶ）
-    n_parents = len(parent_ids)
-    result_chunks = []
-    for idx, small_text in enumerate(small_chunks_text):
-        if not small_text.strip():
-            continue
-        # 単純に均等に割り当てる
-        parent_idx = min(int(idx * n_parents / max(len(small_chunks_text), 1)), n_parents - 1) if n_parents else 0
-        parent_id = parent_ids[parent_idx] if parent_ids else ""
-
-        metadata = {
-            # --- 必須フィールド ---
-            "source_pdf_hash":  source_pdf_hash,
-            "source_pdf_name":  source_pdf_name,
-            "page_no":          page_number if page_number is not None else 0,
-            "category":         category,
-            "doc_type":         doc_type,
-            "has_image":        has_image,
-            "chunk_index":      idx,
-            "parent_chunk_id":  parent_id,
-            "drive_file_id":    drive_file_id or "",
-            # --- オプションフィールド（後方互換） ---
-            "drawing_type":     drawing_type or "",
-            "scale":            scale or "",
-            "filename":         filename,
-            "rel_path":         rel_path,
-            "file_type":        file_type,
-            "modified_at":      modified_at,
-            "tags_str":         tags_str,
-            # 後方互換エイリアス
-            "page_number":      page_number if page_number is not None else 0,
-            "source_pdf":       source_pdf_hash,
-        }
-
-        # ─── メタデータ必須バリデーション ──────────────────────────────────────
-        missing = []
-        if not metadata["source_pdf_hash"]:
-            missing.append("source_pdf_hash")
-        if not metadata["source_pdf_name"]:
-            missing.append("source_pdf_name")
-        if not metadata["category"]:
-            missing.append("category")
-        if not metadata["doc_type"]:
-            missing.append("doc_type")
-        # drive_file_id はオプション（Google Drive未接続環境でも動作させるため）
-
-        if missing:
-            logger.error(
-                f"Metadata validation failed — missing required fields {missing} "
-                f"for rel_path={rel_path} chunk_index={idx}. Skipping chunk."
-            )
-            continue
-        # ──────────────────────────────────────────────────────────────────────
-
-        result_chunks.append({"text": small_text, "metadata": metadata})
-
-    return result_chunks
+    # 互換性のための簡易実装
+    from chunk_builder import ChunkBuilder
+    builder = ChunkBuilder()
+    
+    # 単一ページ/ブロックを処理する場合のダミー OCR 形式
+    ocr_results = [{"text": text, "start_page": page_number or 1, "label": f"Page {page_number or 1}"}]
+    source_metadata = {
+        "source_pdf_hash": source_pdf_hash,
+        "source_pdf_name": source_pdf_name,
+        "category": category,
+        "doc_type": doc_type,
+        "rel_path": rel_path,
+        "filename": filename,
+        "file_type": file_type,
+        "version_id": version_id,
+        "tags_str": tags_str,
+        "drive_file_id": drive_file_id or ""
+    }
+    
+    chunks = builder.build(text, ocr_results, source_metadata)
+    
+    # 旧形式 (ChromaDB 内部メタデータ) に変換
+    output = []
+    for c in chunks:
+        output.append({
+            "text": c["content"],
+            "metadata": {**c["metadata"], "chunk_id": c["id"]}
+        })
+    return output
 
 
 # ─── ID 生成 ─────────────────────────────────────────────────────────────────────
@@ -447,17 +408,22 @@ def generate_doc_id(source_pdf_hash: str, rel_path: str, chunk_index: int) -> st
 
 # ─── DB 操作 ─────────────────────────────────────────────────────────────────────
 def _upsert_doc_index(rel_path: str, file_info: Dict[str, Any], chunk_count: int):
-    from database import get_session, Document as DbDocument
+    from metadata_repository import MetadataRepository
+    from database import get_session, LegacyDocument
+    repo = MetadataRepository()
+    
+    # 1. Update Legacy Status for historical compatibility
     session = get_session()
     try:
-        doc = session.query(DbDocument).filter(DbDocument.file_path == rel_path).first()
+        doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == rel_path).first()
         if not doc:
-            doc = DbDocument(
+            doc = LegacyDocument(
                 filename=Path(rel_path).name,
                 file_path=rel_path,
                 file_type=Path(rel_path).suffix.lower().lstrip("."),
             )
             session.add(doc)
+        
         doc.file_hash    = file_info.get("modified_at", "")
         doc.chunk_count  = chunk_count
         doc.last_indexed_at = datetime.now(timezone.utc)
@@ -468,36 +434,147 @@ def _upsert_doc_index(rel_path: str, file_info: Dict[str, Any], chunk_count: int
         doc.source_pdf_hash = file_info.get("source_pdf_hash", "")
         doc.source_pdf_name = file_info.get("source_pdf_name", "")
         doc.drive_file_id = file_info.get("drive_file_id", "")
+        doc.status       = "completed"
         doc.updated_at   = datetime.now(timezone.utc)
         session.commit()
     except Exception as e:
         session.rollback()
-        logger.error(f"DB upsert error for {rel_path}: {e}", exc_info=True)
+        logger.error(f"Legacy DB upsert error for {rel_path}: {e}")
     finally:
         session.close()
+
+    # 2. Update Unified Metadata via Repository
+    try:
+        # Create or update document version entry
+        repo.create_document_version(
+            filename=file_info.get("filename", ""),
+            file_path=rel_path,
+            source_pdf_hash=file_info.get("source_pdf_hash", ""),
+            file_size=int(file_info.get("file_size_kb", 0) * 1024)
+        )
+        # Mark as searchable
+        repo.mark_as_searchable(rel_path)
+    except Exception as e:
+        logger.error(f"Unified Metadata update error for {rel_path}: {e}")
 
 
 def _delete_doc_index(rel_path: str) -> bool:
-    from database import get_session, Document as DbDocument
+    """DBからインデックス情報を削除"""
+    from database import get_session, LegacyDocument, Document as DbDocument
     session = get_session()
     try:
-        doc = session.query(DbDocument).filter(DbDocument.file_path == rel_path).first()
+        # Legacy
+        doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == rel_path).first()
         if doc:
             session.delete(doc)
-            session.commit()
-            return True
-        return False
+        
+        # New
+        new_doc = session.query(DbDocument).filter(DbDocument.file_path == rel_path).first()
+        if new_doc:
+            session.delete(new_doc)
+            
+        session.commit()
+        return True
     except Exception as e:
         session.rollback()
-        logger.error(f"DB delete error for {rel_path}: {e}", exc_info=True)
+        logger.error(f"DB deletion error for {rel_path}: {e}")
         return False
     finally:
         session.close()
+
+
+def process_and_index_file(
+    file_info: Dict[str, Any],
+    stats: Dict[str, int],
+) -> bool:
+    """単一ファイル情報を受け取ってインデックスする（統一パイプライン）"""
+    rel_path  = file_info["rel_path"]
+    full_path = file_info["full_path"]
+    
+    classifier = DocumentClassifier()
+    doc_type = classifier.infer_doc_type(file_info.get("category", ""), file_info.get("filename", ""))
+    file_info["doc_type"] = doc_type
+
+    pages = extract_text(full_path)
+    if not pages:
+        stats["skipped"] += 1
+        return False
+
+    frontmatter = parse_frontmatter(full_path) if file_info["file_type"] == "md" else {}
+
+    # source_pdf_hash 解決
+    source_pdf_hash = (
+        frontmatter.get("source_pdf")
+        or file_info.get("source_pdf_rel", "")
+        or file_info.get("source_pdf_hash", "")
+    )
+    if not source_pdf_hash:
+        try:
+            source_pdf_hash = hashlib.sha256(Path(full_path).read_bytes()).hexdigest()[:16]
+        except Exception:
+            source_pdf_hash = "unknown"
+    
+    file_info["source_pdf_hash"] = source_pdf_hash
+    source_pdf_name = (
+        frontmatter.get("pdf_filename") or frontmatter.get("source_pdf_name") or file_info.get("filename", "")
+    )
+    file_info["source_pdf_name"] = source_pdf_name
+
+    # MetadataRepository を通じて初期登録 (Status: accepted -> processing)
+    repo = MetadataRepository()
+    ids = repo.create_document_version(
+        filename=file_info["filename"],
+        file_path=rel_path,
+        source_pdf_hash=source_pdf_hash,
+        file_size=int(file_info.get("file_size_kb", 0) * 1024)
+    )
+    version_id = ids["version_id"]
+    repo.update_ingest_stage_by_version_id(version_id, "indexing", total_pages=len(pages))
+
+    # チャンク生成 (Unified ChunkBuilder)
+    builder = ChunkBuilder()
+    ocr_results = []
+    full_text = ""
+    for p in pages:
+        ocr_results.append({
+            "text": p["text"],
+            "start_page": p.get("page_number", 0),
+            "label": f"Page {p.get('page_number', 0)}"
+        })
+        full_text += p["text"] + "\n\n"
+
+    source_metadata = {
+        "version_id": version_id,
+        "source_pdf_hash": source_pdf_hash,
+        "source_pdf_name": source_pdf_name,
+        "rel_path": rel_path,
+        "filename": file_info["filename"],
+        "category": frontmatter.get("primary_category") or file_info["category"],
+        "doc_type": doc_type,
+        "tags_str": ",".join(frontmatter.get("tags", []))
+    }
+
+    chunks = builder.build(full_text, ocr_results, source_metadata)
+    
+    # インデックス登録
+    dense = DenseIndexer()
+    dense.upsert_chunks(version_id, chunks)
+    
+    lexical = LexicalIndexer()
+    lexical.upsert_chunks(version_id, chunks)
+
+    # 完了更新
+    _upsert_doc_index(rel_path, file_info, len(chunks)) # Legacy DB Sync
+    repo.mark_as_searchable(rel_path)
+    
+    stats["indexed"] += 1
+    stats["chunks"] += len(chunks)
+    return True
 
 
 # ─── メインインデックス構築 ─────────────────────────────────────────────────────
 def build_index(force_rebuild: bool = False) -> Dict[str, int]:
-    """knowledge_base をスキャンして ChromaDB にインデックスを構築"""
+    """knowledge_base をスキャンして ChromaDB/SQLite にインデックスを構築"""
     from database import init_db
     init_db()
 
@@ -506,13 +583,6 @@ def build_index(force_rebuild: bool = False) -> Dict[str, int]:
     logger.info(f"発見したファイル数: {len(files)}")
 
     indexed_files = load_file_index().get("files", {})
-    client = get_chroma_client()
-    embedding_function = GeminiEmbeddingFunction()
-    collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=embedding_function,
-    )
-
     stats = {"total_files": len(files), "indexed": 0, "skipped": 0, "errors": 0, "chunks": 0}
 
     for file_info in files:
@@ -523,92 +593,13 @@ def build_index(force_rebuild: bool = False) -> Dict[str, int]:
                 continue
 
         try:
-            _index_single_file_info(file_info, collection, stats)
+            process_and_index_file(file_info, stats)
         except Exception as e:
             logger.error(f"インデックスエラー ({rel_path}): {e}", exc_info=True)
             stats["errors"] += 1
 
     logger.info(f"インデックス完了: {stats['indexed']}ファイル, {stats['chunks']}チャンク")
     return stats
-
-
-def _index_single_file_info(
-    file_info: Dict[str, Any],
-    collection,
-    stats: Dict[str, int],
-):
-    """単一ファイル情報を受け取ってインデックスする（内部共通処理）"""
-    rel_path  = file_info["rel_path"]
-    full_path = file_info["full_path"]
-    doc_type  = file_info.get("doc_type") or _infer_doc_type(
-        file_info.get("category", ""), file_info.get("filename", "")
-    )
-
-    pages = extract_text(full_path)
-    if not pages:
-        stats["skipped"] += 1
-        return
-
-    frontmatter = {}
-    if file_info["file_type"] == "md":
-        frontmatter = parse_frontmatter(full_path)
-
-    # source_pdf_hash 解決
-    source_pdf_hash = (
-        frontmatter.get("source_pdf")
-        or file_info.get("source_pdf_rel", "")
-        or file_info.get("source_pdf_hash", "")
-    )
-    if not source_pdf_hash and file_info.get("file_type") == "pdf":
-        source_pdf_hash = hashlib.sha256(Path(full_path).read_bytes()).hexdigest()[:16]
-    elif not source_pdf_hash:
-        source_pdf_hash = ""
-
-    source_pdf_name = (
-        frontmatter.get("pdf_filename")
-        or frontmatter.get("source_pdf_name")
-        or file_info.get("filename", "")
-    )
-
-    tags_str = ",".join(frontmatter.get("tags", []))
-    category = frontmatter.get("primary_category") or file_info["category"]
-    drive_file_id = file_info.get("drive_file_id", "")
-
-    chunk_total = 0
-    for page in pages:
-        chunks = chunk_for_indexing(
-            text=page["text"],
-            page_number=page.get("page_number"),
-            has_image=page.get("has_image", False),
-            doc_type=doc_type,
-            source_pdf_hash=source_pdf_hash,
-            source_pdf_name=source_pdf_name,
-            category=category,
-            rel_path=rel_path,
-            filename=file_info["filename"],
-            file_type=file_info["file_type"],
-            modified_at=file_info.get("modified_at", ""),
-            tags_str=tags_str,
-            drive_file_id=drive_file_id,
-        )
-        # Populate these so _upsert_doc_index has them later if needed
-        file_info["source_pdf_hash"] = source_pdf_hash
-        file_info["source_pdf_name"] = source_pdf_name
-        file_info["doc_type"] = doc_type
-
-        for chunk in chunks:
-            chunk["metadata"]["chunk_index"] = chunk_total
-            doc_id = generate_doc_id(source_pdf_hash, rel_path, chunk_total)
-            collection.upsert(
-                ids=[doc_id],
-                documents=[chunk["text"]],
-                metadatas=[chunk["metadata"]],
-            )
-            stats["chunks"] += 1
-            chunk_total += 1
-
-    _upsert_doc_index(rel_path, file_info, chunk_total)
-    stats["indexed"] += 1
 
 
 # ─── 全件再インデックス (data/pdfs/ から) ──────────────────────────────────────
@@ -620,13 +611,6 @@ def reindex_from_pdfs(progress_interval: int = 10) -> Dict[str, Any]:
     """
     from database import init_db
     init_db()
-
-    client = get_chroma_client()
-    embedding_function = GeminiEmbeddingFunction()
-    collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=embedding_function,
-    )
 
     pdfs = scan_pdfs_dir()
     total = len(pdfs)
@@ -643,55 +627,21 @@ def reindex_from_pdfs(progress_interval: int = 10) -> Dict[str, Any]:
             logger.info(f"  再インデックス進捗: {i}/{total} — {pdf_name}")
 
         try:
-            doc_type = _infer_doc_type("", pdf_name)
-            pages = _extract_pdf(str(pdf_path))
-            if not pages:
-                logger.warning(f"  テキスト抽出0件: {pdf_name} — スキップ")
-                stats["skipped"] += 1
-                continue
-
             file_info = {
                 "rel_path":        f"pdfs/{pdf_name}",
                 "full_path":       str(pdf_path),
                 "filename":        pdf_name,
-                "category":        doc_type,
+                "category":        "reindex",
                 "subcategory":     "",
                 "sub_subcategory": "",
                 "file_type":       "pdf",
-                "file_size_kb":    round(pdf_path.stat().st_size / 1024, 2),
+                "file_size_kb":    float(pdf_path.stat().st_size) / 1024.0,
                 "modified_at":     datetime.fromtimestamp(pdf_path.stat().st_mtime, tz=timezone.utc).isoformat(),
-                "doc_type":        doc_type,
                 "source_pdf_hash": pdf_hash,
                 "source_pdf_name": pdf_name,
             }
 
-            chunk_total = 0
-            for page in pages:
-                chunks = chunk_for_indexing(
-                    text=page["text"],
-                    page_number=page.get("page_number"),
-                    has_image=page.get("has_image", False),
-                    doc_type=doc_type,
-                    source_pdf_hash=pdf_hash,
-                    source_pdf_name=pdf_name,
-                    category=doc_type,
-                    rel_path=f"pdfs/{pdf_name}",
-                    filename=pdf_name,
-                    file_type="pdf",
-                    modified_at=file_info["modified_at"],
-                )
-                for chunk in chunks:
-                    doc_id = generate_doc_id(pdf_hash, f"pdfs/{pdf_name}", chunk["metadata"]["chunk_index"])
-                    collection.upsert(
-                        ids=[doc_id],
-                        documents=[chunk["text"]],
-                        metadatas=[chunk["metadata"]],
-                    )
-                    stats["chunks"] += 1
-                    chunk_total += 1
-
-            _upsert_doc_index(f"pdfs/{pdf_name}", file_info, chunk_total)
-            stats["indexed"] += 1
+            process_and_index_file(file_info, stats)
 
         except Exception as e:
             logger.error(f"  エラー ({pdf_name}): {e}", exc_info=True)
@@ -744,10 +694,10 @@ def index_file(filepath: str) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"既存インデックス削除エラー (無視可能) ({rel_path}): {e}")
 
-    stats = {"chunks": 0, "indexed": False}
+    stats = {"chunks": 0, "indexed": 0, "skipped": 0, "errors": 0}
     try:
-        _index_single_file_info(file_info, collection, stats)  # type: ignore
-        stats["indexed"] = True
+        process_and_index_file(file_info, stats)
+        stats["indexed"] = 1
         logger.info(f"単一ファイルインデックス完了: {stats['chunks']}チャンク ({path.name})")
     except Exception as e:
         logger.error(f"インデックスエラー ({path.name}): {e}", exc_info=True)
@@ -794,7 +744,7 @@ def delete_file_completely(file_path: str) -> dict:
     from config import KNOWLEDGE_BASE_DIR, PARENT_CHUNKS_DIR, PDF_STORAGE_DIR, COLLECTION_NAME
     import hashlib
 
-    results = {
+    results: Dict[str, Any] = {
         "chroma_chunks": 0,
         "parent_chunks": 0,
         "pdf_storage": False,
@@ -892,9 +842,14 @@ def delete_file_completely(file_path: str) -> dict:
 
     # --- 6. Document テーブル（SQLite）削除 ---
     try:
-        result = _delete_doc_index(str(md_path.relative_to(Path(KNOWLEDGE_BASE_DIR))))
-        if not result:
-            _delete_doc_index(file_path)  # 元のパスでも試みる
+        base_kb = Path(KNOWLEDGE_BASE_DIR)
+        try:
+            rel_md = str(md_path.relative_to(base_kb))
+            _delete_doc_index(rel_md)
+        except ValueError:
+            pass
+        
+        _delete_doc_index(file_path)  # 元のパスでも試みる
         results["doc_index"] = True
     except Exception as e:
         results["errors"].append(f"Document削除エラー: {e}")

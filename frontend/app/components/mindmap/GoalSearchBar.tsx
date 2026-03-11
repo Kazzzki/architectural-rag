@@ -59,9 +59,9 @@ export default function GoalSearchBar({
         try {
             setIsLoading(true);
             setError(null);
-            // Call reverse tree API
+            // Call reverse tree API - updated to use project-specific endpoint
             const res = await authFetch(
-                `${API_BASE}/api/mindmap/tree/${templateId}/${nodeId}`
+                `${API_BASE}/api/mindmap/projects/${templateId}/reverse-tree/${nodeId}`
             );
             if (!res.ok) throw new Error('依存関係の取得に失敗しました');
             const data = await res.json();
@@ -100,6 +100,7 @@ export default function GoalSearchBar({
             <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--muted)]" />
                 <input
+                    id="goal-search-input"
                     type="text"
                     value={query}
                     onChange={(e) => {

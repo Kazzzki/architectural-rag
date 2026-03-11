@@ -370,15 +370,35 @@ def get_files_tree():
     """ファイルツリーを取得"""
     try:
         from config import KNOWLEDGE_BASE_DIR, SUPPORTED_EXTENSIONS
-        # 新体系ではファイルツリー構築時にDB状態をマージする
-        from database import get_session, DocumentVersion
+        # 新体系では Artifact から現在のストレージ上のパスとステータスの対応を取得
+        from database import get_session, DocumentVersion, Artifact as DbArtifact
         session = get_session()
-        versions = session.query(DocumentVersion).all()
-        # version_hash をキーにした辞書を作成
-        progress_data = {v.version_hash: {"status": v.ingest_status} for v in versions}
-        session.close()
         
-        return build_tree_recursive(Path(KNOWLEDGE_BASE_DIR), Path(KNOWLEDGE_BASE_DIR), progress_data, SUPPORTED_EXTENSIONS)
+        # Artifact と DocumentVersion を結合して、original タイプのアーティファクトのステータスを取得
+        # storage_path は絶対パスなので注意
+        artifacts = session.query(DbArtifact, DocumentVersion).join(
+            DocumentVersion, DbArtifact.version_id == DocumentVersion.id
+        ).filter(DbArtifact.artifact_type == 'original').all()
+        
+        progress_data = {}
+        kb_root = Path(KNOWLEDGE_BASE_DIR).resolve()
+        for art, ver in artifacts:
+            try:
+                # storage_path を knowledge_base からの相対パスに変換
+                art_path = Path(art.storage_path).resolve()
+                rel_path = str(art_path.relative_to(kb_root))
+                progress_data[rel_path] = {
+                    "status": ver.ingest_status,
+                    "processed_pages": ver.processed_pages,
+                    "total_pages": ver.total_pages,
+                    "error": ver.error_message
+                }
+            except ValueError:
+                # KNOWLEDGE_BASE_DIR配下でないものはスキップ
+                continue
+                
+        session.close()
+        return build_tree_recursive(kb_root, kb_root, progress_data, SUPPORTED_EXTENSIONS)
     except Exception as e:
         logger.error(f"Failed to generate file tree: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="File tree generation failed")

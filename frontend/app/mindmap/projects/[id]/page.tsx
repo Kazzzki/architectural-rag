@@ -17,6 +17,8 @@ import IntegratedSidebar from '../../../components/mindmap/IntegratedSidebar'; /
 import FilterPanel from '../../../components/mindmap/FilterPanel';
 import MobileMindmapControls from '../../../components/mindmap/MobileMindmapControls';
 import SaveStatusOverlay from '../../../components/mindmap/SaveStatusOverlay';
+import KeyboardShortcutsModal from '../../../components/mindmap/KeyboardShortcutsModal'; // New
+import GapAdvisorModal from '../../../components/mindmap/GapAdvisorModal'; // New
 import { useAutoRag } from '../../../hooks/useAutoRag'; // New
 import { Building2, ArrowLeft, Filter, ChevronDown, Plus, Edit2, Trash2, CornerDownRight, Minimize2, Maximize2, Sidebar, X, GitBranch, Loader2 } from 'lucide-react';
 import Link from 'next/link';
@@ -55,6 +57,8 @@ interface ProjectData {
     template_id: string;
     created_at: string;
     updated_at: string;
+    technical_conditions?: string;
+    legal_requirements?: string;
     nodes: ProcessNode[];
     edges: EdgeData[];
 }
@@ -93,6 +97,9 @@ export default function ProjectMapPage() {
     const [forceChatTab, setForceChatTab] = useState<string | null>(null);
     const [searchResults, setSearchResults] = useState<string[]>([]);
     const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
+    const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+    const [showGapAdvisorModal, setShowGapAdvisorModal] = useState(false);
+    const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
 
     // Sidebar state
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -104,7 +111,7 @@ export default function ProjectMapPage() {
         const handleMouseMove = (e: MouseEvent) => {
             if (!isDraggingSidebarRef.current) return;
             const newWidth = document.body.clientWidth - e.clientX;
-            const clampedWidth = Math.max(320, Math.min(newWidth, 450));
+            const clampedWidth = Math.max(320, Math.min(newWidth, 480));
             setSidebarWidth(clampedWidth);
         };
         const handleMouseUp = () => {
@@ -294,6 +301,73 @@ export default function ProjectMapPage() {
         }
     };
 
+    const handleSendToMap = async (message: string) => {
+        try {
+            const res = await authFetch(`/api/mindmap/projects/${projectId}/nodes/from-text`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: message, source_type: 'chat' })
+            });
+            if (!res.ok) throw new Error('Failed to create node from text');
+            const data = await res.json();
+            if (data.created_nodes && data.created_nodes.length > 0) {
+                setProject(prev => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        nodes: [...prev.nodes, ...data.created_nodes]
+                    };
+                });
+                window.dispatchEvent(new CustomEvent('mindmap:node-added', { detail: data.created_nodes }));
+                markDirty();
+
+                // --- Link Prediction (PR-6) ---
+                for (const newNode of data.created_nodes) {
+                    try {
+                        const predictRes = await authFetch(`/api/mindmap/projects/${projectId}/ai/predict-links`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ new_node_id: newNode.id })
+                        });
+                        if (predictRes.ok) {
+                            const predictData = await predictRes.json();
+                            const predictions = predictData.predictions || [];
+                            if (predictions.length > 0) {
+                                const parentLabels = predictions.map((pid: string) => {
+                                    const pNode = project?.nodes.find(n => n.id === pid);
+                                    return pNode ? pNode.label : pid;
+                                }).join(', ');
+                                
+                                if (window.confirm(`「${newNode.label}」の親として以下が推測されました。自動で関連付け（エッジ作成）を行いますか？\n\n予測された親: ${parentLabels}`)) {
+                                    for (const parentId of predictions) {
+                                        await authFetch(`/api/mindmap/projects/${projectId}/edges`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                                source: parentId,
+                                                target: newNode.id,
+                                                type: 'soft',
+                                                reason: 'AIによる自動関連付け予測'
+                                            }),
+                                        });
+                                    }
+                                    loadProject(false);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Link prediction failed", err);
+                    }
+                }
+            } else {
+                alert('ノードを抽出できませんでした。');
+            }
+        } catch (err) {
+            console.error(err);
+            alert('ノードの抽出・追加に失敗しました');
+        }
+    };
+
     // Drag & Drop Knowledge to Canvas
     const onDragStartKnowledge = (event: React.DragEvent, item: any) => {
         event.dataTransfer.setData('application/json', JSON.stringify({
@@ -329,18 +403,25 @@ export default function ProjectMapPage() {
     const handleGoalSearch = async (nodeId: string) => {
         if (!project) return;
         try {
-            const res = await authFetch(`/api/mindmap/tree/${project.template_id}/${nodeId}`);
+            const res = await authFetch(`/api/mindmap/projects/${projectId}/reverse-tree/${nodeId}`);
+            if (!res.ok) throw new Error('依存関係の取得に失敗しました');
             const data = await res.json();
-            setHighlightedNodes(new Set(data.path_order));
-            const edgeIds = new Set<string>();
-            activeEdges.forEach(e => {
-                if (data.path_order.includes(e.source) && data.path_order.includes(e.target)) {
-                    edgeIds.add(e.id);
-                }
-            });
-            setHighlightedEdges(edgeIds);
+            
+            // トポロジカル順のノードIDリストがある場合はそれを使用
+            const nodeIds = data.path_order || (data.nodes ? data.nodes.map((n: any) => n.id) : [nodeId]);
+            const edgeIds = data.edges ? data.edges.map((e: any) => e.id) : [];
+
+            setHighlightedNodes(new Set(nodeIds));
+            setHighlightedEdges(new Set(edgeIds));
+            setSearchResults(nodeIds);
+            setCurrentSearchIndex(0);
+            
+            if (nodeIds.length > 0) jumpToNode(nodeIds[0]);
         } catch (err) {
             console.error('Search error:', err);
+            // Fallback: 該当ノードのみハイライト
+            setHighlightedNodes(new Set([nodeId]));
+            jumpToNode(nodeId);
         }
     };
 
@@ -992,37 +1073,69 @@ export default function ProjectMapPage() {
                 setSelectedNodeIds(new Set());
                 setSelectedEdgeId(null);
                 setContextMenu(null);
+                // フォーカスを外す（検索バー等）
+                if (document.activeElement instanceof HTMLElement) {
+                    document.activeElement.blur();
+                }
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                handleSearchNavigation(e.shiftKey ? 'prev' : 'next');
+                if (searchResults.length > 0) {
+                    handleSearchNavigation(e.shiftKey ? 'prev' : 'next');
+                } else if (selectedNodeId) {
+                    // Sibling node creation
+                    const node = activeNodes.find(n => n.id === selectedNodeId);
+                    if (node) {
+                        const incomingEdge = activeEdges.find(ed => ed.target === selectedNodeId);
+                        const parentId = incomingEdge?.source;
+                        handleAddNodeAt('新規ノード', node.position.x, node.position.y + 120, parentId);
+                    }
+                }
+            } else if (e.key === 'Tab') {
+                if (selectedNodeId) {
+                    e.preventDefault();
+                    const node = activeNodes.find(n => n.id === selectedNodeId);
+                    if (node) {
+                        handleAddNodeAt('新規ノード', node.position.x + 280, node.position.y, selectedNodeId);
+                    }
+                }
+            } else if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+                e.preventDefault();
+                setSelectedNodeIds(new Set(activeNodes.map(n => n.id)));
+                setSelectedNodeId(null);
             } else if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
                 e.preventDefault();
                 handleUndo();
             } else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
                 e.preventDefault();
                 showSaveStatus();
-            } else if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-                e.preventDefault();
-                const searchInput = document.getElementById('goal-search-input');
-                if (searchInput) searchInput.focus();
-            } else if (e.key === '0') {
-                if (rfInstance) rfInstance.fitView({ duration: 800 });
-            } else if (e.key === '?' || e.key === 'h' || e.key === 'H') {
-                alert('Keyboard Shortcuts:\n\n' +
-                    'N: Add Node\n' +
-                    'F2: Edit Node\n' +
-                    'Del/Backspace: Delete Selection\n' +
-                    'Ctrl+Z: Undo\n' +
-                    'Ctrl+S: Save Status\n' +
-                    'Ctrl+K: Search\n' +
-                    'Ctrl+B: Toggle Sidebar\n' +
-                    '0: Fit View\n' +
-                    'Enter: Next Match\n' +
-                    'Esc: Clear Selection');
             } else if (e.key === 'f' || e.key === 'F' || e.key === 'F2') {
+                e.preventDefault();
+                if (selectedNodeIds.size === 1) {
+                    const nodeId = Array.from(selectedNodeIds)[0];
+                    setEditingNodeId(nodeId);
+                }
+                return;
+            } else if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'f')) {
+                e.preventDefault();
+                const searchInput = document.getElementById('goal-search-input') as HTMLInputElement;
+                if (searchInput) {
+                    searchInput.focus();
+                    searchInput.select();
+                }
+            } else if (e.key === '0') {
+                e.preventDefault();
+                if (rfInstance) rfInstance.fitView({ duration: 800 });
+            } else if (e.key === 'F' && e.shiftKey) {
+                e.preventDefault();
+                if (rfInstance) rfInstance.fitView({ duration: 800 });
+            } else if (e.key === '?' || e.key === 'h') {
+                e.preventDefault();
+                setShowShortcutsModal(true);
+            } else if (!e.shiftKey && (e.key === 'f' || e.key === 'F' || e.key === 'F2')) {
                 if (selectedNodeId) {
                     const node = activeNodes.find(n => n.id === selectedNodeId);
                     if (node) {
+                        e.preventDefault();
                         setNodeToEdit(node);
                         setShowEditDialog(true);
                     }
@@ -1288,7 +1401,7 @@ export default function ProjectMapPage() {
                     </div>
                 </aside>
 
-                <main className="flex-1 relative bg-dot-pattern"
+                <main className="flex-1 overflow-hidden relative bg-white min-w-[320px]"
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={async (e) => {
                         e.preventDefault();
@@ -1347,6 +1460,8 @@ export default function ProjectMapPage() {
                             onPaneContextMenu={handlePaneContextMenu}
                             onPaneClick={handlePaneClick}
                             onAiAction={handleAiAction}
+                            editingNodeId={editingNodeId}
+                            onClearEditingNode={() => setEditingNodeId(null)}
                         />
                         <div className="absolute top-4 right-4 flex flex-col gap-2">
                             <EditToolbar
@@ -1355,6 +1470,7 @@ export default function ProjectMapPage() {
                                 onToggleEditMode={() => setIsEditMode(!isEditMode)}
                                 onAddNode={() => setShowAddDialog(true)}
                                 onDeleteNode={handleDeleteNode}
+                                onGapCheck={() => setShowGapAdvisorModal(true)}
                                 onInvestigate={() => {
                                     if (selectedNodeId) return handleAiAction('investigate', selectedNodeId, '');
                                     if (selectedNodeIds.size > 0) return handleAiAction('investigate', Array.from(selectedNodeIds)[0], '');
@@ -1427,6 +1543,8 @@ export default function ProjectMapPage() {
                                 phases={PHASES}
                                 categories={CATEGORIES}
                                 forceChatTab={forceChatTab === selectedNode?.id}
+                                onSendToMap={handleSendToMap}
+                                projectId={projectId}
                             />
                         </div>
                     </aside>
@@ -1466,6 +1584,19 @@ export default function ProjectMapPage() {
                 />
             )}
 
+            {showGapAdvisorModal && project && (
+                <GapAdvisorModal
+                    isOpen={showGapAdvisorModal}
+                    onClose={() => setShowGapAdvisorModal(false)}
+                    projectId={projectId}
+                    initialContext={{
+                        technical_conditions: project.technical_conditions || '',
+                        legal_requirements: project.legal_requirements || ''
+                    }}
+                    onApplySuggestions={() => loadProject(false)}
+                />
+            )}
+
             <SaveStatusOverlay
                 status={saveStatus}
                 lastSavedAt={lastSavedAt}
@@ -1473,6 +1604,11 @@ export default function ProjectMapPage() {
                     setSaveStatus('saving');
                     loadProject(false);
                 }}
+            />
+
+            <KeyboardShortcutsModal 
+                isOpen={showShortcutsModal} 
+                onClose={() => setShowShortcutsModal(false)} 
             />
 
             <MobileMindmapControls

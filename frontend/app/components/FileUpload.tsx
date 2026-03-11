@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { authFetch } from '@/lib/api';
 import { useDropzone } from 'react-dropzone';
 
-interface OcrJob {
+export interface OcrJob {
     file_path: string;
     filename: string;
     status: 'processing' | 'completed' | 'failed' | 'dismissed' | string;
@@ -48,7 +48,7 @@ const SpinnerIcon = () => (
     <span className="inline-block w-3 h-3 rounded-full border-2 border-current border-t-transparent animate-spin shrink-0" />
 );
 
-function OcrJobCard({
+export function OcrJobCard({
     job,
     onDismiss,
     dismissing,

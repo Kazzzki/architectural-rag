@@ -13,7 +13,7 @@ export default function SaveStatusOverlay({ status, lastSavedAt, onRetry }: Prop
     if (status === 'idle' && !lastSavedAt) return null;
 
     return (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] animate-in fade-in slide-in-from-top-4 duration-300">
+        <div className="fixed bottom-6 left-6 z-[100] animate-in fade-in slide-in-from-bottom-4 duration-300">
             <div className={`
                 flex items-center gap-2 px-4 py-2 rounded-full shadow-lg border backdrop-blur-md
                 ${status === 'saving' ? 'bg-amber-50/90 border-amber-200 text-amber-600' : ''}

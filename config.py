@@ -89,6 +89,12 @@ GEMINI_MODEL_RAG = "gemini-3-flash-preview"  # RAG用
 GEMINI_MODEL_OCR = "gemini-3-flash-preview"  # OCR用
 GEMINI_MODEL_EMBEDDING = "models/gemini-embedding-001"
 
+# ===== モデルルーティング定数 =====
+# route_model.py / route_classifier.py で使用
+GEMINI_MODEL_FLASH         = "gemini-3-flash-preview"          # 高速・軽量
+GEMINI_MODEL_FLASH_THINKING = "gemini-2.5-flash-preview"       # 中精度・分析
+GEMINI_MODEL_PRO            = "gemini-3.1-pro-preview"         # 高精度・判断支援
+
 # 互換性定数（古いコード用）
 GEMINI_MODEL = GEMINI_MODEL_RAG
 VISION_ANALYSIS_MODEL = GEMINI_MODEL_OCR
@@ -97,6 +103,7 @@ EMBEDDING_MODEL = GEMINI_MODEL_EMBEDDING
 
 # 利用可能なモデル（フロントエンドのセレクターに使用）
 AVAILABLE_MODELS: dict[str, str] = {
+    "auto":                    "Auto（質問に応じて自動選択）",
     "gemini-3-flash-preview":  "Gemini 3 Flash（高速・標準）",
     "gemini-3.1-pro-preview":  "Gemini 3.1 Pro（高精度・低速）",
     "gemini-2.0-flash":        "Gemini 2.0 Flash（安定板）",
@@ -118,6 +125,7 @@ MEMORY_MONTHLY_RETENTION_MONTHS = int(os.environ.get("MEMORY_MONTHLY_RETENTION_M
 
 # ChromaDBコレクション名
 COLLECTION_NAME = "architectural_knowledge"
+PERSONAL_CONTEXT_COLLECTION = "personal_contexts"
 
 # 除外フォルダ（インデックス対象外）
 EXCLUDE_FOLDERS = [
@@ -137,6 +145,7 @@ _default_cors_list = [
 ]
 if os.environ.get("ALLOW_LOCALHOST", "false").lower() == "true":
     _default_cors_list.append("http://localhost:3000")
+    _default_cors_list.append("http://localhost:3001")
 
 _default_cors = ",".join(_default_cors_list)
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", _default_cors).split(",")

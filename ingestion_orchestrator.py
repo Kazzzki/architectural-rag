@@ -107,63 +107,24 @@ class IngestionOrchestrator:
                 self.repo.update_ingest_stage(original_filepath, "indexing")
                 
                 try:
-                    # 1. チャンク生成 (Hierarchical Chunking)
-                    from chunk_builder import ChunkBuilder
-                    builder = ChunkBuilder()
+                    # Use unified indexing logic from indexer.py
+                    from indexer import process_and_index_file
                     
-                    with open(final_md_path, 'r', encoding='utf-8') as f:
-                        markdown_text = f.read()
-                    
-                    ocr_results = []
-                    if output_blocks_path and Path(output_blocks_path).exists():
-                        import json
-                        with open(output_blocks_path, 'r', encoding='utf-8') as bj:
-                            ocr_results = json.load(bj)
-
-                    # source_metadata を構築
-                    # Bug fix: build() の引数順序は (md_text, ocr_results, source_metadata)
-                    # 以前は (version_id, markdown_text, ocr_results) と間違えていたため
-                    # version_id が md_text として渡され、全チャンクに source_pdf_hash 等が欠落していた
-                    from config import KNOWLEDGE_BASE_DIR
-                    _rel_path = ""
-                    try:
-                        _rel_path = str(Path(final_md_path).relative_to(Path(KNOWLEDGE_BASE_DIR)))
-                    except ValueError:
-                        _rel_path = Path(final_md_path).name
-
-                    # LegacyDocument から source_pdf_hash と source_pdf_name を取得
-                    _source_pdf_hash = kwargs.get("source_pdf_hash", "")
-                    _source_pdf_name = Path(original_filepath).name if original_filepath else ""
-                    # Frontmatter から補完を試みる
-                    try:
-                        from indexer import parse_frontmatter
-                        fm = parse_frontmatter(final_md_path)
-                        _source_pdf_hash = _source_pdf_hash or fm.get("source_pdf", "")
-                        _source_pdf_name = fm.get("pdf_filename") or fm.get("source_pdf_name") or _source_pdf_name
-                    except Exception:
-                        pass
-
-                    source_metadata = {
-                        "version_id":       version_id,
-                        "source_pdf_hash":  _source_pdf_hash,
-                        "source_pdf_name":  _source_pdf_name,
-                        "rel_path":         _rel_path,
-                        "filename":         Path(final_md_path).name,
+                    # We need file_info for process_and_index_file
+                    file_info = {
+                        "filename":        Path(final_md_path).name,
+                        "full_path":       final_md_path,
+                        "rel_path":        original_filepath, # Use original for mapping
+                        "category":        "ingestion", # Will be refined by frontmatter/classifier
+                        "file_type":       "md",
+                        "source_pdf_hash": kwargs.get("source_pdf_hash", ""),
+                        "source_pdf_rel":  original_filepath,
                     }
-
-                    chunks = builder.build(markdown_text, ocr_results, source_metadata)
                     
-                    # 2. Dense Indexing (ChromaDB)
-                    from dense_indexer import DenseIndexer
-                    dense = DenseIndexer()
-                    dense.upsert_chunks(version_id, chunks)
+                    stats = {"indexed": 0, "chunks": 0, "skipped": 0, "errors": 0}
+                    process_and_index_file(file_info, stats)
                     
-                    # 3. Lexical Indexing (SQLite FTS5)
-                    from lexical_indexer import LexicalIndexer
-                    lexical = LexicalIndexer()
-                    lexical.upsert_chunks(version_id, chunks)
-                    
-                    # 4. Completion - DB には元のアップロードパスで更新する
+                    # 4. Completion
                     self.repo.update_ingest_stage(original_filepath, "completed")
                     self.repo.update_ingest_stage_by_version_id(version_id, "completed")
                     self.repo.mark_as_searchable(original_filepath)
