@@ -1,0 +1,20 @@
+[project]
+name = "excelflow"
+version = "0.1.0"
+description = "Universal Excel processing framework (PoC)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openpyxl>=3.1.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "mcp>=1.2.0",
+    "jsonschema>=4.0.0"
+]
+
+[project.scripts]
+excelflow = "interfaces.cli:main"
+
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"

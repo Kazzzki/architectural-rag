@@ -1,0 +1,7 @@
+google-genai
+playwright
+python-dotenv
+python-slugify
+pypdf
+aiohttp
+flask

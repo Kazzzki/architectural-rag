@@ -1,0 +1,37 @@
+{
+  "nodes": [
+    {
+      "id": "0da9d930c4caa30a2cecec28b351e491",
+      "type": "issueNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Summary of test_alpha.md",
+        "priority": 0.9,
+        "source_file": "test_alpha.md",
+        "category": "Fact",
+        "user_decision": "",
+        "is_user_edited": false
+      }
+    },
+    {
+      "id": "eaf545dd9086f3df57cc8d342bcb4944",
+      "type": "issueNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "Issue in test_alpha.md",
+        "priority": 0.5,
+        "source_file": "test_alpha.md",
+        "category": "Technical",
+        "user_decision": "",
+        "is_user_edited": false
+      }
+    }
+  ],
+  "edges": []
+}

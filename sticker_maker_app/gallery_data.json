@@ -1,0 +1,66 @@
+{
+    "f0666f88-ea46-4ae7-86de-4826622e07bb": {
+        "id": "f0666f88-ea46-4ae7-86de-4826622e07bb",
+        "filename": "a57542d7-af73-46d7-8a11-14b354001f9b_IMG_7219.JPG",
+        "filepath": "/static/uploads/a57542d7-af73-46d7-8a11-14b354001f9b_IMG_7219.JPG",
+        "tags": [
+            "cat",
+            "grey cat",
+            "laying down"
+        ],
+        "appearance": "grey fur, yellow eyes",
+        "description": "The grey cat is laying on a rug with its paws stretched out in front of it.",
+        "uploaded_at": 1768204471.352726
+    },
+    "d1a974c5-8c1d-47a2-a49f-05cc0031fa38": {
+        "id": "d1a974c5-8c1d-47a2-a49f-05cc0031fa38",
+        "filename": "4d77730b-fc94-4bb8-a21a-d6f22a351d76_IMG_7070.JPG",
+        "filepath": "/static/uploads/4d77730b-fc94-4bb8-a21a-d6f22a351d76_IMG_7070.JPG",
+        "tags": [
+            "cat",
+            "grey_cat",
+            "pet"
+        ],
+        "appearance": "grey fur, yellow eyes, British Shorthair",
+        "description": "The grey cat sits by the door, looking directly at the camera with its head tilted slightly.",
+        "uploaded_at": 1768204494.58814
+    },
+    "0aec8903-ca66-4381-aa68-a2fb041991d0": {
+        "id": "0aec8903-ca66-4381-aa68-a2fb041991d0",
+        "filename": "24437822-6503-4587-aa82-a53ad456c41f_IMG_7159.JPG",
+        "filepath": "/static/uploads/24437822-6503-4587-aa82-a53ad456c41f_IMG_7159.JPG",
+        "tags": [
+            "cat",
+            "grey_cat",
+            "sunglasses",
+            "cool"
+        ],
+        "appearance": "grey fur, gold sunglasses",
+        "description": "A grey cat is being held and wearing sunglasses, looking cool and relaxed.",
+        "uploaded_at": 1768204499.618952
+    },
+    "16912649-7486-4a4d-a012-660d14261180": {
+        "id": "16912649-7486-4a4d-a012-660d14261180",
+        "filename": "832ccc62-a634-435f-bb32-e99cd8e63f1b_IMG_6935.JPG",
+        "filepath": "/static/uploads/832ccc62-a634-435f-bb32-e99cd8e63f1b_IMG_6935.JPG",
+        "tags": [
+            "cat",
+            "sleeping"
+        ],
+        "appearance": "brown tabby fur, brown eyes",
+        "description": "The tabby cat is lying down with its eyes closed.",
+        "uploaded_at": 1768204523.259098
+    },
+    "d854f0ec-70fe-4105-a381-fd6136775229": {
+        "id": "d854f0ec-70fe-4105-a381-fd6136775229",
+        "filename": "c8c56cd5-a657-48f5-9801-1ae026285f90_IMG_6849.JPG",
+        "filepath": "/static/uploads/c8c56cd5-a657-48f5-9801-1ae026285f90_IMG_6849.JPG",
+        "tags": [
+            "cat",
+            "grey_cat"
+        ],
+        "appearance": "grey fur, yellow eyes, short hair",
+        "description": "The grey cat is sitting upright, looking directly at the camera with a slightly annoyed expression.",
+        "uploaded_at": 1768204533.920671
+    }
+}

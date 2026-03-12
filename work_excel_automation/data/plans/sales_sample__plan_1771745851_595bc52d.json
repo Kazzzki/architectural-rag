@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "run_id": "1771745851_595bc52d",
+  "input_file": "samples/sales_sample.xlsx",
+  "output_file": "",
+  "matched_profile": "sales_report_v1",
+  "mode": "safe",
+  "preconditions": [
+    {
+      "type": "sheet_exists",
+      "value": true,
+      "sheet": "売上管理"
+    }
+  ],
+  "operations": [
+    {
+      "op": "insert_column",
+      "sheet": "売上管理",
+      "params": {
+        "idx": 6,
+        "header_name": "消費税"
+      },
+      "reason": "税額計算列の追加"
+    },
+    {
+      "op": "fill_down",
+      "sheet": "売上管理",
+      "params": {
+        "col": 6,
+        "start_row": 2,
+        "end_row": 3,
+        "formula": "=C{row}*0.1"
+      },
+      "reason": "10%の税率計算"
+    }
+  ],
+  "validations": [
+    {
+      "type": "no_unintended_sheet_changes",
+      "params": {}
+    }
+  ],
+  "created_at": "2026-02-22T16:37:31.414981"
+}

@@ -1,0 +1,19 @@
+{
+  "run_id": "1771747226_ad2890d3",
+  "events": [
+    {
+      "timestamp": "2026-02-22T17:04:23.660484",
+      "op": "add_sheet",
+      "sheet": "データベース化",
+      "status": "success",
+      "detail": "集計用シートの作成"
+    },
+    {
+      "timestamp": "2026-02-22T17:04:23.710023",
+      "op": "write_range",
+      "sheet": "データベース化",
+      "status": "success",
+      "detail": "3つのシートの統計データを一元化"
+    }
+  ]
+}

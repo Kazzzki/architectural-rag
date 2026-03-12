@@ -1,0 +1,22 @@
+[
+    {
+        "op": "insert_column",
+        "sheet": "売上管理",
+        "params": {
+            "idx": 6,
+            "header_name": "消費税"
+        },
+        "reason": "税額計算列の追加"
+    },
+    {
+        "op": "fill_down",
+        "sheet": "売上管理",
+        "params": {
+            "col": 6,
+            "start_row": 2,
+            "end_row": 3,
+            "formula": "=C{row}*0.1"
+        },
+        "reason": "10%の税率計算"
+    }
+]

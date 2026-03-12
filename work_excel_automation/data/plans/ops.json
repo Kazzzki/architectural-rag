@@ -1,0 +1,1 @@
+[{"op": "insert_column", "sheet": "売上管理", "params": {"idx": 6, "header_name": "利益率"}, "reason": "利益率列の追加"}, {"op": "set_formula", "sheet": "売上管理", "params": {"row": 2, "col": 6, "formula": "=C2*0.2"}, "reason": "利益率20%の計算"}, {"op": "fill_down", "sheet": "売上管理", "params": {"col": 6, "start_row": 2, "end_row": 3, "formula": "=C{row}*0.2"}, "reason": "数式コピー"}]

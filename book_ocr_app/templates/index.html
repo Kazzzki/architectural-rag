@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>書籍 OCR & Markdown 変換</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent: #8b5cf6;
+            /* Violet */
+            --accent-hover: #7c3aed;
+            --border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            background-image:
+                radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(56, 189, 248, 0.15) 0px, transparent 50%);
+            color: var(--text-primary);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        header {
+            width: 100%;
+            padding: 1.5rem 0;
+            text-align: center;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #a78bfa, #38bdf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 1200px;
+            margin: 3rem auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            align-items: start;
+        }
+
+        @media (max-width: 860px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 500px;
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        /* Upload Area */
+        .upload-area {
+            border: 2px dashed rgba(255, 255, 255, 0.2);
+            border-radius: 16px;
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: rgba(255, 255, 255, 0.02);
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .upload-area:hover,
+        .upload-area.dragover {
+            border-color: var(--accent);
+            background: rgba(139, 92, 246, 0.1);
+            transform: scale(1.01);
+        }
+
+        .upload-icon {
+            font-size: 3.5rem;
+            margin-bottom: 1rem;
+            background: rgba(255, 255, 255, 0.1);
+            width: 80px;
+            height: 80px;
+            line-height: 80px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        #preview-container {
+            display: none;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        /* Hidden initially via JS, but styled here */
+        #preview-container.hidden {
+            display: none !important;
+        }
+
+        #preview-content {
+            width: 100%;
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            padding: 1rem;
+        }
+
+        /* Result Area */
+        textarea {
+            width: 100%;
+            flex-grow: 1;
+            padding: 1.2rem;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.6);
+            color: #e2e8f0;
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            resize: none;
+            margin-top: 0.5rem;
+            box-sizing: border-box;
+            transition: border-color 0.2s;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .actions {
+            margin-top: 1.5rem;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        button {
+            padding: 0.8rem 1.5rem;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), #6366f1);
+            color: white;
+            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.4);
+            grid-column: 1 / -1;
+            /* Full width for scan button */
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(139, 92, 246, 0.6);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .loading {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(5px);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            border-radius: 20px;
+            z-index: 10;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            border-top-color: var(--accent);
+            animation: spin 1s infinite ease-in-out;
+            margin-bottom: 1rem;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <h1>✨ Magic Book OCR</h1>
+    </header>
+
+    <div class="container">
+        <!-- Left: Input -->
+        <div class="card">
+            <h2>📷 画像をアップロード</h2>
+
+            <!-- Model Selection Dropdown -->
+            <div style="margin-bottom: 1.5rem;">
+                <label for="model-select"
+                    style="display: block; margin-bottom: 0.5rem; color: var(--text-secondary); font-size: 0.85rem; font-weight: 500;">
+                    Model
+                </label>
+                <select id="model-select" style="
+                    width: 100%; 
+                    padding: 0.9rem 1rem; 
+                    border-radius: 10px; 
+                    border: 1px solid var(--border); 
+                    background: rgba(40, 40, 50, 0.95); 
+                    color: #f1f5f9; 
+                    font-size: 1rem; 
+                    cursor: pointer;
+                    font-family: 'Inter', sans-serif;
+                    -webkit-appearance: none;
+                    appearance: none;
+                    background-image: url('data:image/svg+xml;utf8,<svg fill=\" gray\" height=\"24\" viewBox=\"0 0 24
+                    24\" width=\"24\" xmlns=\"http://www.w3.org/2000/svg\">
+                    <path d=\"M7 10l5 5 5-5z\" /></svg>');
+                    background-repeat: no-repeat;
+                    background-position: right 10px center;
+                    ">
+                    <option value="gemini-3-flash" selected>Gemini 3 Flash ✨ Latest</option>
+                    <option value="gemini-3-pro">Gemini 3 Pro (Reasoning)</option>
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (Balanced)</option>
+                    <option disabled>──────────</option>
+                    <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp</option>
+                    <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                    <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                </select>
+            </div>
+
+            <div class="upload-area" id="drop-zone">
+                <span class="upload-icon">📖</span>
+                <p>ここに 画像 or PDF をドロップ<br><span style="color:var(--text-secondary); font-size:0.9rem;">(複数ファイル可 /
+                        クリックで選択)</span>
+                </p>
+                <!-- Added "multiple" attribute -->
+                <input type="file" id="file-input" accept="image/*,application/pdf" multiple hidden>
+            </div>
+
+            <!-- Cost Estimation Display -->
+            <div id="cost-display"
+                style="display: none; margin-top: 1rem; padding: 1rem; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #38bdf8; font-weight: 600; font-size: 0.9rem;">📊 概算 (Tokens & Cost)</span>
+                    <span id="token-count" style="font-family: monospace; color: white; font-weight: 600;">---</span>
+                </div>
+                <div id="cost-value"
+                    style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.3rem; text-align: right;">
+                    ---
+                </div>
+            </div>
+
+            <div id="preview-container" class="hidden">
+                <div id="preview-content">
+                    <!-- Preview Injected Here -->
+                </div>
+
+                <div class="actions">
+                    <button id="scan-btn" class="btn-primary">
+                        <span>⚡</span> AIで Markdown に変換
+                    </button>
+                    <button id="reset-btn" class="btn-secondary" style="grid-column: 1 / -1; margin-top: 0.5rem;">
+                        選び直し
+                    </button>
+                </div>
+            </div>
+
+            <!-- Loading Overlay -->
+            <div class="loading" id="loading-overlay">
+                <div class="spinner"></div>
+                <p>AIが本の内容を読んでいます...<br>レイアウトを解析中 🧠</p>
+            </div>
+        </div>
+
+        <!-- Right: Output -->
+        <div class="card">
+            <h2>📝 変換結果 (Markdown)</h2>
+            <textarea id="result-box" placeholder="ここに変換されたテキストがMarkdown形式で表示されます..." readonly></textarea>
+
+            <!-- Save Options -->
+            <div
+                style="margin-top: 1rem; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid var(--border);">
+                <div style="font-size: 0.9rem; margin-bottom: 0.5rem; color: var(--text-secondary);">PC内に直接保存 (Server
+                    Side)</div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="save-path" placeholder="例: book_chapter1.md または /Users/docs/note.md"
+                        style="flex-grow: 1; padding: 0.6rem; border-radius: 8px; border: 1px solid var(--border); background: rgba(255,255,255,0.05); color: white;">
+                    <button id="server-save-btn" class="btn-primary" style="font-size: 0.9rem;">💾 保存</button>
+                </div>
+            </div>
+
+            <div class="actions">
+                <button id="copy-btn" class="btn-secondary">📋 コピー</button>
+                <button id="download-btn" class="btn-secondary">📥 ダウンロード (.md)</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const previewContainer = document.getElementById('preview-container');
+        const previewContent = document.getElementById('preview-content');
+        const scanBtn = document.getElementById('scan-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const resultBox = document.getElementById('result-box');
+        const copyBtn = document.getElementById('copy-btn');
+        const downloadBtn = document.getElementById('download-btn');
+
+        // New Save Elements
+        const savePathInput = document.getElementById('save-path');
+        const serverSaveBtn = document.getElementById('server-save-btn');
+
+        // Model Selection & Cost Elements
+        const modelSelect = document.getElementById('model-select');
+        const costDisplay = document.getElementById('cost-display');
+        const tokenCountEl = document.getElementById('token-count');
+        const costValueEl = document.getElementById('cost-value');
+        const loadingText = document.querySelector('#loading-overlay p');
+
+        // Changed from currentFile to currentFiles
+        let currentFiles = [];
+
+        // Helper: Get selected model value
+        function getSelectedModel() {
+            return modelSelect.value;
+        }
+
+        // Helper: Get selected model label
+        function getSelectedModelLabel() {
+            return modelSelect.options[modelSelect.selectedIndex].text;
+        }
+
+        // Cost Calculation Function (Sums up tokens for all files)
+        async function checkCost(files) {
+            if (!files || files.length === 0) return;
+
+            costDisplay.style.display = 'block';
+            tokenCountEl.innerText = '計算中... ⏳';
+            costValueEl.innerText = '';
+
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) {
+                formData.append('image', files[i]);
+            }
+            formData.append('model_name', getSelectedModel());
+
+            try {
+                const res = await fetch('/api/count_tokens', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    tokenCountEl.innerText = data.tokens.toLocaleString() + ' Tokens';
+                    if (data.cost === 0) {
+                        costValueEl.innerHTML = '<span style="color: #a78bfa;">無料 (Preview/Beta)</span>';
+                    } else {
+                        costValueEl.innerText = '概算: $' + data.cost.toFixed(5) + ' USD';
+                    }
+                } else {
+                    tokenCountEl.innerText = 'エラー';
+                    costValueEl.innerText = (data.message || '計算失敗').substring(0, 60) + '...';
+                }
+            } catch (e) {
+                console.error(e);
+                tokenCountEl.innerText = '計算失敗';
+                costValueEl.innerText = '';
+            }
+        }
+
+        // Model change handler
+        modelSelect.addEventListener('change', () => {
+            if (currentFiles.length > 0) checkCost(currentFiles);
+        });
+
+
+        // Drag & Drop
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) handleFiles(e.target.files);
+        });
+
+        function handleFiles(files) {
+            currentFiles = Array.from(files); // Convert FileList to Array
+
+            dropZone.style.display = 'none';
+            previewContainer.classList.remove('hidden');
+            previewContainer.style.display = 'flex'; // Force flex layout
+
+            // Preview UI Logic
+            if (currentFiles.length === 1) {
+                // Single file view
+                const file = currentFiles[0];
+                if (file.type === 'application/pdf') {
+                    previewContent.innerHTML = `<img src="https://upload.wikimedia.org/wikipedia/commons/8/87/PDF_file_icon.svg" style="max-height:200px; margin:auto;"><p class="mt-2 text-sm text-slate-300 text-center">${file.name}</p>`;
+                } else {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        previewContent.innerHTML = `<img src="${e.target.result}" style="max-height:300px; width:100%; object-fit:contain; border-radius:12px;"><p class="mt-2 text-sm text-slate-300 text-center">${file.name}</p>`;
+                    };
+                    reader.readAsDataURL(file);
+                }
+                savePathInput.value = file.name.split('.')[0] + '.md';
+            } else {
+                // Multiple files list view
+                let listHtml = `<div class="text-left bg-slate-800/50 p-4 rounded-xl border border-slate-700 w-full max-h-60 overflow-y-auto"><ul class="space-y-2">`;
+                currentFiles.forEach(f => {
+                    let icon = f.type === 'application/pdf' ? '📄' : '🖼️';
+                    listHtml += `<li class="text-sm text-slate-300 flex items-center gap-2 border-b border-slate-700/50 pb-1 last:border-0"><span>${icon}</span> <span class="truncate">${f.name}</span></li>`;
+                });
+                listHtml += `</ul></div><p class="mt-3 font-bold text-accent text-center">📚 ${currentFiles.length} files selected</p>`;
+                previewContent.innerHTML = listHtml;
+                savePathInput.value = `bulk_scan_${new Date().toISOString().slice(0, 10)}.md`;
+            }
+
+            // Trigger Cost Check
+            checkCost(currentFiles);
+        }
+
+        resetBtn.addEventListener('click', () => {
+            currentFiles = [];
+            fileInput.value = '';
+            dropZone.style.display = 'flex'; // Restore flex
+            previewContainer.classList.add('hidden');
+            resultBox.value = '';
+            savePathInput.value = '';
+            costDisplay.style.display = 'none';
+        });
+
+        // Scan
+        scanBtn.addEventListener('click', async () => {
+            if (currentFiles.length === 0) return;
+
+            // Get selected model
+            const modelValue = getSelectedModel();
+            const modelLabel = getSelectedModelLabel();
+
+            loadingOverlay.style.display = 'flex';
+            loadingText.innerHTML = `${modelLabel} で解析中... 🧠✨<br><span style="font-size:0.8em">${currentFiles.length}ファイルを並列処理しています...</span>`;
+            resultBox.value = '';
+
+            // 4. Send to Backend (Async)
+            const formData = new FormData();
+            currentFiles.forEach(file => {
+                formData.append('image', file);
+            });
+            formData.append('model_name', modelSelect.value);
+
+            loadingOverlay.style.display = 'flex';
+            loadingText.innerText = 'AI処理を開始しています...';
+
+            try {
+                // Start Job
+                const response = await fetch('/ocr', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'error') {
+                    throw new Error(data.message);
+                }
+
+                const jobId = data.job_id;
+                loadingText.innerText = 'AIが読書中... \n準備しています...';
+
+                // Start Polling
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const statusRes = await fetch(`/job/${jobId}`);
+                        const statusData = await statusRes.json();
+
+                        if (statusData.status === 'processing') {
+                            const progress = statusData.progress;
+                            if (progress.total > 0) {
+                                loadingText.innerText = `AIが読書中... \nページ解読: ${progress.current} / ${progress.total} チャンク`;
+                            } else {
+                                loadingText.innerText = 'AIが読書中... \nPDFを解析しています...';
+                            }
+                        } else if (statusData.status === 'completed') {
+                            clearInterval(pollInterval);
+                            loadingOverlay.style.display = 'none';
+                            const result = statusData.result;
+
+                            // Show Result
+                            resultBox.value = result.markdown;
+                            let msg = `✅ ${result.files_processed}ファイルの変換完了！`;
+
+                            if (result.total_pages_all && result.processed_pages_all) {
+                                msg += `\n(ページ処理: ${result.processed_pages_all} / ${result.total_pages_all})`;
+                                if (result.processed_pages_all < result.total_pages_all) {
+                                    msg += `\n⚠️ 【警告】 ${result.total_pages_all - result.processed_pages_all} ページの欠落が検出されました！再実行を推奨します。`;
+                                }
+                            }
+
+                            if (result.truncated) {
+                                msg += '\n⚠️ 注意: テキストが一部途切れている可能性があります。';
+                            }
+
+                            alert(msg);
+
+                        } else if (statusData.status === 'failed') {
+                            clearInterval(pollInterval);
+                            throw new Error(statusData.result.message || '不明なエラー');
+                        }
+                    } catch (e) {
+                        clearInterval(pollInterval);
+                        loadingOverlay.style.display = 'none';
+                        console.error(e);
+                        alert('通信エラー（ポーリング中）: ' + e.message);
+                    }
+                }, 2000); // Poll every 2 seconds
+
+            } catch (e) {
+                loadingOverlay.style.display = 'none';
+                console.error(e);
+                alert('開始エラー: ' + e.message);
+            }
+        });
+
+        // Server Save
+        serverSaveBtn.addEventListener('click', async () => {
+            const text = resultBox.value;
+            const path = savePathInput.value;
+            if (!text) { alert('テキストが空です'); return; }
+            if (!path) { alert('ファイル名を入力してください'); return; }
+
+            serverSaveBtn.disabled = true;
+            serverSaveBtn.innerText = '保存中...';
+
+            try {
+                const res = await fetch('/api/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, path })
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    alert(`保存しました！\n場所: ${data.path}`);
+                } else {
+                    alert('エラー: ' + data.message);
+                }
+            } catch (e) {
+                alert('保存に失敗しました');
+            } finally {
+                serverSaveBtn.disabled = false;
+                serverSaveBtn.innerText = '💾 保存';
+            }
+        });
+
+        // Copy
+        copyBtn.addEventListener('click', () => {
+            if (!resultBox.value) return;
+            resultBox.select();
+            document.execCommand('copy');
+
+            const originalText = copyBtn.innerText;
+            copyBtn.innerText = '✅ コピー完了';
+            setTimeout(() => copyBtn.innerText = originalText, 2000);
+        });
+
+        // Download
+        downloadBtn.addEventListener('click', () => {
+            if (!resultBox.value) return;
+            const text = resultBox.value;
+            const blob = new Blob([text], { type: 'text/markdown' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = savePathInput.value || 'book_content.md';
+            a.click();
+        });
+    </script>
+
+</body>
+
+</html>

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart PDF Archive</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .glass {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .monitor-log {
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+
+    <div class="container mx-auto px-4 py-8 max-w-5xl">
+
+        <!-- Header -->
+        <header class="mb-10 text-center">
+            <h1
+                class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300 mb-2">
+                📂 Smart Archive
+            </h1>
+            <p class="text-slate-400">URLリストから自動でPDF保存 & AIリネーム</p>
+        </header>
+
+        <!-- Main Input -->
+        <div class="glass rounded-2xl p-6 mb-8 shadow-2xl">
+            <label class="block text-sm font-semibold text-slate-300 mb-2">Target URLs (1 per line)</label>
+            <textarea id="urlInput" rows="5"
+                class="w-full bg-slate-800/50 border border-slate-700 rounded-xl p-4 text-slate-200 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all placeholder-slate-600"
+                placeholder="https://example.com/page1&#10;https://example.com/document.pdf"></textarea>
+
+            <div class="mt-4 flex justify-end">
+                <button onclick="startArchive()" id="startBtn"
+                    class="bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white font-bold py-3 px-8 rounded-xl shadow-lg transform transition hover:-translate-y-1 active:scale-95 flex items-center gap-2">
+                    <span>🚀 Start Archiving</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Progress / Log Section -->
+        <div id="progressSection" class="hidden mb-12">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="font-semibold text-slate-300">Processing Status</h3>
+                <span id="statusBadge"
+                    class="bg-yellow-500/20 text-yellow-300 text-xs py-1 px-2 rounded-full border border-yellow-500/30">Running</span>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="w-full bg-slate-800 rounded-full h-2.5 mb-4">
+                <div id="progressBar" class="bg-blue-500 h-2.5 rounded-full transition-all duration-500"
+                    style="width: 0%"></div>
+            </div>
+
+            <!-- Terminal Log -->
+            <div id="logBox"
+                class="bg-black/80 rounded-xl p-4 h-48 overflow-y-auto monitor-log text-green-400 border border-slate-700 shadow-inner">
+                <p class="opacity-50">// System Ready...</p>
+            </div>
+        </div>
+
+        <!-- Files Gallery -->
+        <div>
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-slate-100">📚 Archived Files</h2>
+                <div class="flex gap-2">
+                    <button onclick="deleteAllFiles()"
+                        class="text-red-400 hover:text-red-300 text-sm font-semibold flex items-center gap-1 transition border border-red-500/30 px-3 py-1 rounded-lg bg-red-500/10 mr-2">
+                        🗑️ Delete All
+                    </button>
+                    <a href="/api/download_batch"
+                        class="text-green-400 hover:text-green-300 text-sm font-semibold flex items-center gap-1 transition border border-green-500/30 px-3 py-1 rounded-lg bg-green-500/10">
+                        ⚡️ Batch ZIP
+                    </a>
+                    <a href="/api/download_all"
+                        class="text-blue-400 hover:text-blue-300 text-sm font-semibold flex items-center gap-1 transition border border-blue-500/30 px-3 py-1 rounded-lg bg-blue-500/10">
+                        📦 All ZIP
+                    </a>
+                    <button onclick="loadFiles()" class="text-slate-400 hover:text-white text-sm ml-2 transition">↻
+                        Refresh</button>
+                </div>
+            </div>
+
+            <div id="fileGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <!-- Cards will be injected here -->
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let isProcessing = false;
+        let pollInterval = null;
+
+        async function startArchive() {
+            const urls = document.getElementById('urlInput').value;
+            if (!urls.trim()) return alert("URLを入力してください");
+
+            const btn = document.getElementById('startBtn');
+            btn.disabled = true;
+            btn.classList.add('opacity-50', 'cursor-not-allowed');
+
+            try {
+                const res = await fetch('/api/archive', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ urls: urls })
+                });
+                const data = await res.json();
+
+                if (data.status === "success") {
+                    startPolling();
+                } else {
+                    alert('Error: ' + data.message);
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-50', 'cursor-not-allowed');
+                }
+            } catch (e) {
+                alert("Network Error");
+                btn.disabled = false;
+            }
+        }
+
+        function startPolling() {
+            isProcessing = true;
+            document.getElementById('progressSection').classList.remove('hidden');
+            document.getElementById('logBox').innerHTML = ''; // Clear logs
+
+            pollInterval = setInterval(async () => {
+                const res = await fetch('/api/status');
+                const state = await res.json();
+
+                updateUI(state);
+
+                if (state.status === 'completed' || state.status === 'error') {
+                    clearInterval(pollInterval);
+                    isProcessing = false;
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('startBtn').classList.remove('opacity-50', 'cursor-not-allowed');
+                    document.getElementById('statusBadge').innerText = state.status.toUpperCase();
+                    document.getElementById('statusBadge').className = state.status === 'completed'
+                        ? "bg-green-500/20 text-green-300 text-xs py-1 px-2 rounded-full border border-green-500/30"
+                        : "bg-red-500/20 text-red-300 text-xs py-1 px-2 rounded-full border border-red-500/30";
+
+                    loadFiles(); // Refresh list
+                }
+            }, 1000);
+        }
+
+        function updateUI(state) {
+            // Logs
+            const logBox = document.getElementById('logBox');
+            // Only update if new logs? Simpler to just rewrite or append diff. 
+            // For simplicity, let's just dump the last 20 logs or assume state.logs contains everything.
+            // But log array grows.
+            // Let's just clear and show all for now (unless huge).
+            logBox.innerHTML = state.logs.map(l => `<div>${l}</div>`).join('');
+            logBox.scrollTop = logBox.scrollHeight;
+
+            // Progress
+            const percent = state.total > 0 ? (state.processed / state.total) * 100 : 0;
+            document.getElementById('progressBar').style.width = percent + '%';
+            
+            // Errors
+            const errorSection = document.getElementById('errorSection');
+            const errorList = document.getElementById('errorList');
+            
+            if (state.failures && state.failures.length > 0) {
+                errorSection.classList.remove('hidden');
+                errorList.innerHTML = state.failures.map(f => `
+                    <li>
+                        <span class="font-bold">[Failed]</span> ${f.url}
+                        <br><span class="opacity-75 pl-4">Reason: ${f.error}</span>
+                    </li>
+                `).join('');
+            } else {
+                errorSection.classList.add('hidden');
+            }
+        }
+
+        async function loadFiles() {
+            const res = await fetch('/api/files');
+            const files = await res.json();
+
+            const grid = document.getElementById('fileGrid');
+            if (files.length === 0) {
+                grid.innerHTML = '<p class="text-slate-500 col-span-full text-center py-8">No archived files yet.</p>';
+                return;
+            }
+            grid.innerHTML = files.map(file => `
+                <div class="glass p-4 rounded-xl hover:bg-slate-800/80 transition group relative">
+                    <div class="flex items-start justify-between">
+                        <div class="flex-1 min-w-0 pr-4">
+                            <h4 class="font-bold text-slate-200 truncate" title="${file}">${file}</h4>
+                            <p class="text-xs text-slate-500 mt-1">PDF Document</p>
+                        </div>
+                        <div class="bg-blue-500/20 p-2 rounded-lg text-blue-400">
+                            📄
+                        </div>
+                    </div>
+                    <div class="flex gap-2 mt-4">
+                        <a href="/downloads/${file}" target="_blank" 
+                            class="flex-1 text-center bg-slate-700 hover:bg-slate-600 py-2 rounded-lg text-sm text-slate-300 transition">
+                            Download / View
+                        </a>
+                        <button onclick="deleteFile('${file}')" 
+                            class="bg-red-500/10 hover:bg-red-500/30 text-red-400 py-2 px-3 rounded-lg transition" title="Delete">
+                            🗑️
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function deleteFile(filename) {
+            if (!confirm(`Delete "${filename}"?`)) return;
+            try {
+                const res = await fetch(`/api/files/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+                if (res.ok) loadFiles();
+                else alert("Failed to delete");
+            } catch (e) { alert("Network Error"); }
+        }
+
+        async function deleteAllFiles() {
+            if (!confirm("⚠️ Delete ALL archived files?\nThis cannot be undone.")) return;
+            try {
+                const res = await fetch('/api/files', { method: 'DELETE' });
+                if (res.ok) loadFiles();
+                else alert("Failed to delete all");
+            } catch (e) { alert("Network Error"); }
+        }
+
+        // Initial Load
+        loadFiles();
+    </script>
+</body>
+
+</html>

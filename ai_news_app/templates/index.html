@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI News Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>AI News Dashboard</h1>
+            <p class="subtitle">Daily Curated Intelligence</p>
+        </header>
+
+        <div class="controls">
+            <button id="fetchBtn" class="btn primary">
+                <span class="icon">⚡</span> 最新ニュースを表示
+            </button>
+            <button id="forceRefreshBtn" class="btn secondary">
+                <span class="icon">↻</span> 強制更新
+            </button>
+            <button id="emailBtn" class="btn secondary" disabled>
+                <span class="icon">✉</span> メール送信
+            </button>
+        </div>
+
+        <div id="metaInfo" class="meta-info hidden">
+            最終更新: <span id="lastUpdatedTime">-</span>
+        </div>
+
+        <!-- Filter Tabs -->
+        <div class="tabs" id="categoryTabs">
+            <button class="tab-btn active" data-category="All">すべて</button>
+            <button class="tab-btn" data-category="AI (Business)">AIビジネス</button>
+            <button class="tab-btn" data-category="AI (Drug Discovery)">創薬</button>
+            <button class="tab-btn" data-category="AI (Construction)">建設</button>
+            <button class="tab-btn" data-category="AI (Logistics)">物流</button>
+            <button class="tab-btn" data-category="AI (LLM/Model)">LLM</button>
+            <button class="tab-btn" data-category="Space">宇宙</button>
+            <button class="tab-btn" data-category="Nuclear Fusion">核融合</button>
+        </div>
+
+        <div id="statusMessage" class="status-message"></div>
+
+        <div id="newsGrid" class="news-grid">
+            <div class="empty-state">
+                <p>「最新ニュース取得」ボタンを押して、今日のトレンドをチェックしましょう。</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loader" class="loader-overlay hidden">
+        <div class="spinner"></div>
+        <p id="loaderText">Loading...</p>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>

@@ -1,0 +1,56 @@
+id: expense_report_v1
+name: Expense Report
+description: Profile for processing expense reports.
+version: 1.0
+
+matching_rules:
+  min_score_required: 0.7
+  sheet_name_patterns:
+    - ".*経費.*"
+    - ".*Expense.*"
+  required_headers:
+    - date
+    - amount
+    - purpose
+
+header_aliases:
+  date:
+    - 申請日
+    - 日付
+    - Date
+  purpose:
+    - 摘要
+    - 用途
+    - 目的
+    - Purpose
+  amount:
+    - 費用
+    - 金額
+    - Amount
+  applicant:
+    - 申請者
+    - Applicant
+    - 氏名
+  receipt_no:
+    - 領収書番号
+    - 領収書No
+    - Receipt No
+
+data_model:
+  fields:
+    - name: date
+      type: date
+    - name: purpose
+      type: string
+    - name: amount
+      type: number
+    - name: applicant
+      type: string
+      required: false
+    - name: receipt_no
+      type: string
+      required: false
+
+operations:
+  allow_unlisted_columns: true
+  allow_row_deletion: false

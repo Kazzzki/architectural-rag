@@ -1,0 +1,57 @@
+id: sales_report_v1
+name: Sales Report
+description: Profile for processing sales reports.
+version: 1.0
+
+matching_rules:
+  min_score_required: 0.6
+  sheet_name_patterns:
+    - "^売上.*"
+    - ".*Sales.*"
+  required_headers:
+    - date
+    - amount
+    - project_name
+
+header_aliases:
+  amount:
+    - 金額
+    - 売上
+    - Amount
+    - 税込金額
+  date:
+    - 日付
+    - 計上日
+    - Date
+    - 売上日
+  project_name:
+    - 案件名
+    - Project
+    - Project Name
+  assignee:
+    - 担当者
+    - 担当
+    - Assignee
+  remarks:
+    - 備考
+    - メモ
+    - Note
+
+data_model:
+  fields:
+    - name: date
+      type: date
+    - name: amount
+      type: number
+    - name: project_name
+      type: string
+    - name: assignee
+      type: string
+      required: false
+    - name: remarks
+      type: string
+      required: false
+
+operations:
+  allow_unlisted_columns: true
+  allow_row_deletion: false

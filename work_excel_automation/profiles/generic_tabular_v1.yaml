@@ -1,0 +1,19 @@
+id: generic_tabular_v1
+name: Generic Tabular Data
+description: Fallback profile for unknown tabular Excel files. Matches any file.
+version: 1.0
+
+matching_rules:
+  min_score_required: 0.0 # always matches
+  sheet_name_patterns:
+    - ".*"
+  required_headers: []
+
+header_aliases: {}
+  
+data_model:
+  fields: []
+
+operations:
+  allow_unlisted_columns: true
+  allow_row_deletion: false

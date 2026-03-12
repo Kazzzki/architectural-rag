@@ -1,0 +1,37 @@
+{
+  "run_id": "run_test1",
+  "success": true,
+  "diff_summary": {
+    "sheets_before": [
+      "売上管理"
+    ],
+    "sheets_after": [
+      "売上管理"
+    ],
+    "dimensions_changed": {
+      "売上管理": {
+        "before": {
+          "start": [
+            1,
+            1
+          ],
+          "end": [
+            3,
+            5
+          ]
+        },
+        "after": {
+          "start": [
+            1,
+            1
+          ],
+          "end": [
+            3,
+            6
+          ]
+        }
+      }
+    }
+  },
+  "failed_validations": []
+}
