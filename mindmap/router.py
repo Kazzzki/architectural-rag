@@ -366,8 +366,13 @@ async def get_project(project_id: str):
         template_id=merged['project']['template_id'],
         created_at=merged['project']['created_at'],
         updated_at=merged['project']['updated_at'],
+        delta_count=len(raw.get('deltas', [])),
         nodes=merged['nodes'],
         edges=merged['edges'],
+        technical_conditions=merged['project'].get('technical_conditions', ''),
+        legal_requirements=merged['project'].get('legal_requirements', ''),
+        layer_b_project_id=merged['project'].get('layer_b_project_id', ''),
+        gap_check_history=merged['project'].get('gap_check_history', []),
     )
 
 
@@ -519,32 +524,45 @@ async def create_nodes_from_text(project_id: str, req: NodeFromTextRequest):
 # --- Auto Link Prediction / Unlinked Mentions ---
 @router.post("/projects/{project_id}/unlinked-mentions")
 async def get_unlinked_mentions(project_id: str, req: UnlinkedMentionsRequest):
-    project_data = project_store.get_project_data(project_id)
-    if not project_data:
+    raw = project_store.get_project_data(project_id)
+    if not raw:
         raise HTTPException(status_code=404, detail="Project not found")
         
-    nodes = project_data.get("nodes", [])
-    edges = project_data.get("edges", [])
+    template = _load_template(raw["project"]["template_id"])
+    merged = project_store.get_project_with_merged_data(project_id, template)
     
-    target_node = next((n for n in nodes if n["id"] == req.node_id), None)
+    nodes = merged.get("nodes", [])
+    edges = merged.get("edges", [])
+    
+    target_node = next((n for n in nodes if n.id == req.node_id), None)
     if not target_node:
         raise HTTPException(status_code=404, detail="Node not found")
         
-    text_to_check = f"{target_node.get('label', '')} {target_node.get('description', '')} {' '.join(target_node.get('checklist', []))}"
+    # Task-5: Use NFKC for robust matching
+    from .ai_helper import normalize_text
+    
+    def robust_norm(t):
+        import unicodedata
+        return unicodedata.normalize('NFKC', str(t))
+    
+    checklist_text = " ".join([str(i) for i in target_node.checklist])
+    text_to_check = robust_norm(f"{target_node.label} {target_node.description} {checklist_text}")
     
     linked_nodes = set()
     for e in edges:
-        if e.get("source") == req.node_id:
-            linked_nodes.add(e.get("target"))
-        if e.get("target") == req.node_id:
-            linked_nodes.add(e.get("source"))
+        if e.source == req.node_id:
+            linked_nodes.add(e.target)
+        if e.target == req.node_id:
+            linked_nodes.add(e.source)
             
     unlinked = []
     for n in nodes:
-        if n["id"] == req.node_id or n["id"] in linked_nodes:
+        if n.id == req.node_id or n.id in linked_nodes:
             continue
-        if n.get("label") and n["label"] in text_to_check:
-            unlinked.append({"id": n["id"], "label": n["label"]})
+            
+        norm_label = robust_norm(n.label)
+        if norm_label and norm_label in text_to_check:
+            unlinked.append({"id": n.id, "label": n.label})
             
     return {"mentions": unlinked}
 
@@ -603,6 +621,13 @@ async def run_gap_check(project_id: str, req: GapCheckRequest):
     if not raw:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Task-1: Normalize focus_areas
+    focus_list = req.focus_areas or []
+    if not focus_list and req.focus_area:
+        focus_list = [req.focus_area]
+    
+    focus_str = ", ".join(focus_list) if focus_list else "全体"
+
     template = template_loader.load_template(raw["project"]["template_id"])
     context_str = req.project_context_override
     if not context_str:
@@ -612,25 +637,41 @@ async def run_gap_check(project_id: str, req: GapCheckRequest):
         
     structural_issues = project_store.detect_structural_issues(project_id, template)
     merged = project_store.get_project_with_merged_data(project_id, template)
-    nodes = {n.id: n.label for n in merged["nodes"]}
+    nodes_info = {n.id: {"label": n.label, "phase": n.phase} for n in merged["nodes"]}
     
     prompt = f"""
     あなたは設計プロセスの専門家（Gap Advisor）です。
-    以下のプロジェクトの文脈と現在のマインドマップの構成を評価し、追加すべきプロセス（ノード）や依存関係の提案（Gap）を行ってください。
+    以下のプロジェクトの【文脈】と【現在のマインドマップ構造】を評価し、不足しているプロセスやリスクのある箇所を特定してください。
+    特に【重点エリア】: {focus_str} に着目してください。
 
     【プロジェクトの文脈】
     {context_str}
 
-    【現在のノード一覧】
-    {list(nodes.values())}
+    【現在のノード構成】
+    {nodes_info}
 
     【構造的課題（OrphanやDead-endなど）】
     {structural_issues}
 
-    以下のJSON形式で、3〜5個の提案を返してください:
-    {{"suggestions": [
-        {{"type": "add_node" | "add_edge" | "modify_node", "target": "関連ノード名または新しいノード名", "description": "提案の理由や詳細な内容"}}
-    ]}}
+    以下のJSON形式で回答してください:
+    {{
+        "coverage_score": 0〜100の数値（現在のマップが文脈をどの程度網羅しているか）,
+        "summary": "現在の網羅状況に関するAIの簡潔な評価（100文字程度）",
+        "suggestions": [
+            {{
+                "type": "add_node",
+                "target": "新規ノード名",
+                "parent_id": "既存ノードID (先行タスクとして接続する場合。任意)",
+                "description": "具体的な不足点や改善案の理由"
+            }},
+            {{
+                "type": "add_edge",
+                "source_id": "既存ノードID1",
+                "target_id": "既存ノードID2",
+                "description": "依存関係が必要な理由"
+            }}
+        ]
+    }}
     """
     
     try:
@@ -638,24 +679,51 @@ async def run_gap_check(project_id: str, req: GapCheckRequest):
         api_key = settings.get("gemini_api_key")
         model = settings.get("gemini_model", "gemini-2.5-flash")
         
+        # Task-6: Timeout is already handled in ai_helper.call_gemini_json
         result_json = await call_gemini_json(prompt, api_key=api_key, model_name=model)
         
+        coverage_score = result_json.get("coverage_score", 0)
+        summary = result_json.get("summary", "評価完了")
+        suggestions = result_json.get("suggestions", [])
+
         # 履歴として保存
         history_item = {
             "context": context_str,
+            "focus_areas": focus_list,
             "structural_issues": structural_issues,
-            "suggestions": result_json.get("suggestions", [])
+            "coverage_score": coverage_score,
+            "summary": summary,
+            "suggestions": suggestions
         }
         project_store.update_gap_check_history(project_id, history_item)
         
         return {
             "issues": structural_issues,
-            "suggestions": result_json.get("suggestions", []),
+            "suggestions": suggestions,
+            "coverage_score": coverage_score,
+            "summary": summary,
             "history_id": history_item.get("id")
         }
+    except HTTPException as he:
+        # Pass through specific errors like 504 Timeout
+        raise he
     except Exception as e:
         logger.error(f"Gap check failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/{project_id}/gap-history")
+async def get_gap_history(project_id: str):
+    """Gap Checkの履歴を取得"""
+    raw = project_store.get_project_data(project_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail="Project not found")
+        
+    history = raw["project"].get("gap_check_history", [])
+    # 逆順（最新が上）で返す
+    if isinstance(history, list):
+        return sorted(history, key=lambda x: x.get('timestamp', ''), reverse=True)
+    return []
 
 
 @router.post("/projects/{project_id}/gap-suggestions/apply")
@@ -667,15 +735,34 @@ async def apply_gap_suggestions(project_id: str, req: GapApplyRequest):
         desc = suggestion.get("description", "")
         
         if s_type == "add_node":
-            project_store.add_node(project_id, {
+            # Task-2: Create node and then edge if parent_id exists
+            new_node_id = project_store.add_node(project_id, {
                 "label": target, 
                 "description": desc,
                 "status": "未着手",
                 "source_type": "gap_advisor"
             })
+            
+            p_id = suggestion.get("parent_id")
+            if p_id:
+                project_store.add_edge(project_id, {
+                    "source": p_id,
+                    "target": new_node_id,
+                    "type": "hard",
+                    "reason": "Gap Advisorによる自動接続"
+                })
+
         elif s_type == "add_edge":
-            # 簡略化して理由だけを保存するEdgeとして仮実装
-            pass
+            # Task-2: Handle explicit add_edge suggestion
+            src = suggestion.get("source_id")
+            tgt = suggestion.get("target_id")
+            if src and tgt:
+                project_store.add_edge(project_id, {
+                    "source": src,
+                    "target": tgt,
+                    "type": "hard",
+                    "reason": desc or "Gap Advisorによる依存関係提案"
+                })
         elif s_type == "modify_node":
             # 指定が曖昧なのでここではスキップ
             pass

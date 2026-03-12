@@ -39,6 +39,7 @@ interface Props {
     onUpdate?: (nodeId: string, updates: Partial<ProcessNode>) => void;
     onChecklistToggle?: (nodeId: string, index: number, checked: boolean) => void;
     projectId?: string;
+    onConnect?: (sourceId: string, targetId: string) => void;
 }
 
 const STATUS_OPTIONS = ['未着手', '検討中', '決定済み'];
@@ -67,6 +68,7 @@ export default function NodeDetailPanel({
     onUpdate,
     onChecklistToggle,
     projectId,
+    onConnect,
 }: Props) {
     const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG['未着手'];
     const [checkedItems, setCheckedItems] = useState<Set<number>>(new Set());
@@ -209,16 +211,34 @@ export default function NodeDetailPanel({
                         </h3>
                         <div className="space-y-1.5">
                             {unlinkedMentions.map(mention => (
-                                <button
+                                <div
                                     key={mention.id}
-                                    onClick={() => onNavigate(mention.id)}
-                                    className="w-full text-left bg-violet-50 hover:bg-violet-100 border border-violet-100 hover:border-violet-300 rounded-lg px-3 py-2 transition-colors group flex items-center justify-between"
+                                    className="w-full bg-violet-50 hover:bg-violet-100 border border-violet-100 hover:border-violet-300 rounded-lg px-3 py-2 transition-colors group flex items-center justify-between"
                                 >
-                                    <span className="text-xs font-medium text-violet-800 transition-colors">
+                                    <button 
+                                        onClick={() => onNavigate(mention.id)}
+                                        className="text-xs font-medium text-violet-800 hover:underline"
+                                    >
                                         {mention.label}
-                                    </span>
-                                    <ExternalLink className="w-3 h-3 text-violet-400 group-hover:text-violet-600" />
-                                </button>
+                                    </button>
+                                    <div className="flex items-center gap-2">
+                                        {isEditMode && onConnect && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onConnect(node.id, mention.id);
+                                                }}
+                                                className="p-1 hover:bg-violet-200 rounded text-violet-600 transition-colors"
+                                                title="エッジを作成"
+                                            >
+                                                <Link2 className="w-3.5 h-3.5" />
+                                            </button>
+                                        )}
+                                        <button onClick={() => onNavigate(mention.id)}>
+                                            <ExternalLink className="w-3 h-3 text-violet-400 group-hover:text-violet-600" />
+                                        </button>
+                                    </div>
+                                </div>
                             ))}
                         </div>
                     </section>

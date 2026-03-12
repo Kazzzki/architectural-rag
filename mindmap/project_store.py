@@ -170,7 +170,12 @@ def get_project_with_merged_data(project_id: str, template: MindmapTemplate) -> 
         return None
 
     # テンプレートのノード/エッジをコピー
-    nodes = {n.id: _node_to_dict(n) for n in template.nodes}
+    nodes = {}
+    for n in template.nodes:
+        node_dict = _node_to_dict(n)
+        node_dict['source_type'] = 'template' # Task-4: Tag as template
+        nodes[n.id] = node_dict
+        
     edges = {e.id: _edge_to_dict(e) for e in template.edges}
 
     # deltaを適用

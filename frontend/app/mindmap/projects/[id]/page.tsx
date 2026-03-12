@@ -651,10 +651,25 @@ export default function ProjectMapPage() {
             return;
         }
 
-        // Open dialog for type/reason
-        setPendingConnection({ source: sourceId, target: targetId });
-        setEdgeToEdit(null);
-        setShowEdgeDialog(true);
+        try {
+            // Task-0: Immediate creation without dialog
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source: sourceId,
+                    target: targetId,
+                    type: 'hard',
+                    reason: '',
+                }),
+            });
+            
+            setUndoCount(prev => prev + 1);
+            showSaveStatus();
+            loadProject(false);
+        } catch (err) {
+            console.error('Failed to create edge:', err);
+        }
     };
 
     const handleEdgeUpdate = async (oldEdge: EdgeData, newConnection: Connection) => {

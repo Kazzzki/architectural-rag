@@ -206,11 +206,11 @@ function AICopilotNode({ data, id, selected }: NodeProps<CustomNodeData>) {
                         
                         <div className="flex items-center gap-2">
                             {data.sourceType && data.sourceType !== 'manual' && (
-                                <span className="text-[9px] px-1 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200" title={`生成元: ${data.sourceType}`}>
-                                    {data.sourceType === 'ai_expand' ? '💡 AI' : 
+                                <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded-full border border-slate-200" title={`生成元: ${data.sourceType}`}>
+                                    {data.sourceType === 'ai_expand' ? '🤖 AI' : 
                                      data.sourceType === 'gap_advisor' ? '🔍 GAP' : 
                                      data.sourceType === 'chat' ? '💬 Chat' : 
-                                     data.sourceType === 'template' ? '📄 Tmpl' : data.sourceType}
+                                     data.sourceType === 'template' ? '📋 Tmpl' : data.sourceType}
                                 </span>
                             )}
                             {(data.deliverablesCount || 0) > 0 && (

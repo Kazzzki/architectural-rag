@@ -150,6 +150,7 @@ class ProjectListItem(BaseModel):
     created_at: str
     updated_at: str
     node_count: int = 0
+    delta_count: int = 0
     
     # Phase 1 additions
     technical_conditions: str = ""
@@ -165,6 +166,7 @@ class ProjectData(BaseModel):
     template_id: str
     created_at: str
     updated_at: str
+    delta_count: int = 0
     
     # Phase 1 additions
     technical_conditions: str = ""
@@ -263,6 +265,7 @@ class ProjectContextUpdate(BaseModel):
 class GapCheckRequest(BaseModel):
     project_context_override: Optional[str] = None
     focus_areas: Optional[List[str]] = None
+    focus_area: Optional[str] = None # Task-1 Compatibility
 
 
 class GapApplyRequest(BaseModel):
