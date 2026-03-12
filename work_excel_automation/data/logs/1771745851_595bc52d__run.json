@@ -1,0 +1,19 @@
+{
+  "run_id": "1771745851_595bc52d",
+  "events": [
+    {
+      "timestamp": "2026-02-22T16:37:46.110248",
+      "op": "insert_column",
+      "sheet": "売上管理",
+      "status": "success",
+      "detail": "税額計算列の追加"
+    },
+    {
+      "timestamp": "2026-02-22T16:37:46.110261",
+      "op": "fill_down",
+      "sheet": "売上管理",
+      "status": "success",
+      "detail": "10%の税率計算"
+    }
+  ]
+}

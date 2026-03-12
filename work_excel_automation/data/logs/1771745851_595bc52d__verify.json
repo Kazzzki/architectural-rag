@@ -1,0 +1,19 @@
+{
+  "run_id": "1771745851_595bc52d",
+  "success": true,
+  "diff_summary": {
+    "sheets_before": [
+      "売上管理"
+    ],
+    "sheets_after": [
+      "売上管理"
+    ],
+    "dimensions_changed": {
+      "売上管理": {
+        "before": "A1:E3",
+        "after": "A1:F3"
+      }
+    }
+  },
+  "failed_validations": []
+}

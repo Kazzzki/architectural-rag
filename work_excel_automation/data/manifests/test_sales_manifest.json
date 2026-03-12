@@ -1,0 +1,113 @@
+{
+  "manifest_version": "1.0",
+  "run_id": "run_1771748435_8e6c5288",
+  "file_info": {
+    "filename": "sales_sample.xlsx",
+    "extension": ".xlsx",
+    "size_bytes": 5064,
+    "hash": "sha256:583030173773d65958a345418f98284b24c1991228a7b11b7971685b896f1364"
+  },
+  "workbook_meta": {
+    "sheet_count": 1,
+    "protected": false
+  },
+  "sheets": [
+    {
+      "sheet_name": "売上管理",
+      "dimensions": "A1:E3",
+      "used_range": {
+        "start": [
+          1,
+          1
+        ],
+        "end": [
+          3,
+          5
+        ]
+      },
+      "hidden_rows": [],
+      "hidden_cols": [],
+      "merged_cells": [],
+      "header_candidates": [
+        {
+          "row": 1,
+          "values": [
+            "日付",
+            "案件名",
+            "金額",
+            "担当者",
+            "備考"
+          ]
+        },
+        {
+          "row": 2,
+          "values": [
+            "2025-01-01",
+            "システム開発",
+            "1000000",
+            "山田",
+            "新規"
+          ]
+        },
+        {
+          "row": 3,
+          "values": [
+            "2025-01-05",
+            "保守運用",
+            "50000",
+            "佐藤",
+            ""
+          ]
+        }
+      ],
+      "table_candidates": [
+        {
+          "start_row": 1,
+          "end_row": 3
+        }
+      ],
+      "formula_regions": [],
+      "column_profiles": [
+        {
+          "col_idx": 1,
+          "col_label": "日付",
+          "inferred_type": "string",
+          "null_ratio": 0.0,
+          "unique_est": 3
+        },
+        {
+          "col_idx": 2,
+          "col_label": "案件名",
+          "inferred_type": "string",
+          "null_ratio": 0.0,
+          "unique_est": 3
+        },
+        {
+          "col_idx": 3,
+          "col_label": "金額",
+          "inferred_type": "string",
+          "null_ratio": 0.0,
+          "unique_est": 3
+        },
+        {
+          "col_idx": 4,
+          "col_label": "担当者",
+          "inferred_type": "string",
+          "null_ratio": 0.0,
+          "unique_est": 3
+        },
+        {
+          "col_idx": 5,
+          "col_label": "備考",
+          "inferred_type": "string",
+          "null_ratio": 0.33,
+          "unique_est": 2
+        }
+      ],
+      "risk_flags": [
+        "multi_level_headers_detected"
+      ],
+      "profiling_confidence": 0.85
+    }
+  ]
+}

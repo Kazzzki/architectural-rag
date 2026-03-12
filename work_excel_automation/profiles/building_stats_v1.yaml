@@ -1,0 +1,18 @@
+id: building_stats_v1
+name: Building Stats
+description: For processing building stats and converting to database
+version: 1.0
+
+matching_rules:
+  min_score_required: 0.1
+  sheet_name_patterns:
+    - ".*造.*"
+  required_headers: []
+
+header_aliases: {}
+data_model:
+  fields: []
+
+operations:
+  allow_unlisted_columns: true
+  allow_row_deletion: false

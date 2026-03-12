@@ -1,0 +1,8 @@
+flask
+google-genai
+rembg
+Pillow
+python-dotenv
+opencv-python-headless
+numpy
+waitress

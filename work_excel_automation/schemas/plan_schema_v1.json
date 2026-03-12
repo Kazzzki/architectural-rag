@@ -1,0 +1,128 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ExcelFlow Plan schema v1.0",
+    "type": "object",
+    "properties": {
+        "schema_version": {
+            "type": "string",
+            "enum": [
+                "1.0"
+            ]
+        },
+        "run_id": {
+            "type": "string"
+        },
+        "input_file": {
+            "type": "string"
+        },
+        "output_file": {
+            "type": "string"
+        },
+        "matched_profile": {
+            "type": "string"
+        },
+        "mode": {
+            "type": "string",
+            "enum": [
+                "safe",
+                "trusted"
+            ]
+        },
+        "preconditions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "header_exists",
+                            "sheet_exists",
+                            "row_count",
+                            "column_type"
+                        ]
+                    },
+                    "value": {
+                        "type": [
+                            "string",
+                            "number",
+                            "boolean",
+                            "object"
+                        ]
+                    },
+                    "sheet": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "type",
+                    "value"
+                ]
+            }
+        },
+        "operations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "op": {
+                        "type": "string",
+                        "enum": [
+                            "insert_column",
+                            "write_cell",
+                            "write_range",
+                            "set_formula",
+                            "set_number_format",
+                            "fill_down"
+                        ]
+                    },
+                    "sheet": {
+                        "type": "string"
+                    },
+                    "params": {
+                        "type": "object"
+                    },
+                    "reason": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "op",
+                    "sheet",
+                    "params",
+                    "reason"
+                ]
+            }
+        },
+        "validations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string"
+                    },
+                    "params": {
+                        "type": "object"
+                    }
+                },
+                "required": [
+                    "type"
+                ]
+            }
+        },
+        "created_at": {
+            "type": "string",
+            "format": "date-time"
+        }
+    },
+    "required": [
+        "schema_version",
+        "run_id",
+        "input_file",
+        "output_file",
+        "matched_profile",
+        "operations",
+        "created_at"
+    ]
+}

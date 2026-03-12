@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+static/uploads/*
+static/stickers/*
+!static/stickers/.gitkeep

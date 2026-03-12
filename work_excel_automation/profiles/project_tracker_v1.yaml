@@ -1,0 +1,55 @@
+id: project_tracker_v1
+name: Project Tracker
+description: Profile for processing project management trackers.
+version: 1.0
+
+matching_rules:
+  min_score_required: 0.7
+  sheet_name_patterns:
+    - ".*案件.*"
+    - ".*Project.*"
+  required_headers:
+    - project_name
+    - status
+    - assignee
+
+header_aliases:
+  project_name:
+    - 案件名
+    - Project Name
+    - Project
+  assignee:
+    - 担当者
+    - Assignee
+    - 責任者
+  amount:
+    - 金額
+    - Amount
+    - 予算
+  date:
+    - 日付
+    - Date
+    - 期限
+  status:
+    - ステータス
+    - 状況
+    - Status
+
+data_model:
+  fields:
+    - name: project_name
+      type: string
+    - name: assignee
+      type: string
+    - name: amount
+      type: number
+      required: false
+    - name: date
+      type: date
+      required: false
+    - name: status
+      type: string
+
+operations:
+  allow_unlisted_columns: true
+  allow_row_deletion: false

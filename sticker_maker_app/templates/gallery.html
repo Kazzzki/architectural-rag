@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gallery - Sticker Maker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: #121212;
+            color: #f3f4f6;
+            font-family: 'Fredoka', sans-serif;
+        }
+
+        .glass {
+            background: rgba(40, 40, 40, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .card {
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(236, 72, 153, 0.3);
+        }
+    </style>
+</head>
+
+<body class="min-h-screen pb-20">
+    <nav class="glass sticky top-0 z-50 px-6 py-4 flex justify-between items-center mb-8 border-b border-white/10">
+        <div class="flex items-center gap-2">
+            <span class="text-2xl">🐱</span>
+            <h1 class="text-xl font-bold bg-gradient-to-r from-pink-400 to-purple-400 bg-clip-text text-transparent">
+                Sticker Maker</h1>
+        </div>
+        <a href="/logout" class="text-gray-400 hover:text-white text-sm">Logout</a>
+    </nav>
+
+    <div class="container mx-auto px-4 pb-32">
+        <!-- Style Reference Section -->
+        <div class="glass rounded-xl p-4 mb-6">
+            <div class="flex items-center justify-between flex-wrap gap-4">
+                <div class="flex items-center gap-4">
+                    <div>
+                        <h2 class="text-sm text-gray-400">現在のスタイル参照</h2>
+                        <p class="text-xs text-gray-500 mt-1">このスタイルでイラストが生成されます</p>
+                    </div>
+                    {% if style_url %}
+                    <img src="{{ style_url }}" class="w-16 h-16 object-cover rounded-lg border border-pink-500">
+                    {% else %}
+                    <div class="w-16 h-16 bg-gray-700 rounded-lg flex items-center justify-center text-2xl">❓</div>
+                    {% endif %}
+                </div>
+                <div>
+                    <label
+                        class="cursor-pointer bg-purple-500 hover:bg-purple-600 text-white text-sm px-4 py-2 rounded-lg transition">
+                        スタイルを変更
+                        <input type="file" id="style-input" accept="image/*" class="hidden">
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload Photos -->
+        <div id="drop-zone"
+            class="glass rounded-xl p-6 mb-6 text-center border-2 border-dashed border-gray-600 hover:border-pink-500 transition cursor-pointer">
+            <h2 class="text-lg font-semibold mb-2">📸 猫ちゃんの写真をアップロード</h2>
+            <p class="text-gray-400 text-sm">ドラッグ&ドロップ または クリック</p>
+            <input type="file" id="file-input" multiple accept="image/*" class="hidden">
+        </div>
+
+        <!-- Instructions -->
+        <div class="text-center mb-6 text-gray-400">
+            <p>👇 スタンプにしたい写真をえらんでください（最大3枚）</p>
+        </div>
+
+        <!-- Gallery Grid -->
+        {% if images %}
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            {% for image in images %}
+            <div onclick="toggleSelection('{{ image.id }}')" id="card-{{ image.id }}"
+                class="card glass rounded-xl overflow-hidden relative border-2 border-transparent transition-all group">
+                <img src="{{ image.filepath }}"
+                    class="w-full h-48 object-cover transition-transform group-hover:scale-105" loading="lazy">
+                <!-- Checkmark -->
+                <div class="absolute top-2 right-2">
+                    <div id="check-{{ image.id }}"
+                        class="w-8 h-8 rounded-full bg-black/50 border-2 border-white flex items-center justify-center transition-all opacity-0 group-hover:opacity-100">
+                        <span class="text-white font-bold">✓</span>
+                    </div>
+                </div>
+                <div id="overlay-{{ image.id }}" class="absolute inset-0 bg-pink-500/20 hidden pointer-events-none">
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-20 text-gray-500">
+            <p class="text-6xl mb-4">📷</p>
+            <p>まだ画像がありません</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Floating Action Button -->
+    <div id="fab-container"
+        class="fixed bottom-8 left-0 right-0 flex justify-center translate-y-32 transition-transform duration-300 z-50">
+        <button onclick="goToStudio()"
+            class="bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold py-4 px-10 rounded-full shadow-2xl flex items-center gap-3 hover:scale-105 transition border border-white/20 backdrop-blur-md">
+            <span class="text-2xl">🎨</span>
+            <div class="text-left leading-tight">
+                <div class="text-sm opacity-80">選択中: <span id="fab-count" class="font-bold text-white text-lg">0</span>枚
+                </div>
+                <div>スタジオで作成する</div>
+            </div>
+        </button>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const styleInput = document.getElementById('style-input');
+        const fabContainer = document.getElementById('fab-container');
+        const fabCount = document.getElementById('fab-count');
+
+        // Multi-selection Logic
+        let selectedIds = new Set();
+
+        function toggleSelection(id) {
+            const card = document.getElementById(`card-${id}`);
+            const check = document.getElementById(`check-${id}`);
+            const overlay = document.getElementById(`overlay-${id}`);
+
+            if (selectedIds.has(id)) {
+                // Deselect
+                selectedIds.delete(id);
+                card.classList.remove('border-pink-500', 'ring-2', 'ring-pink-500');
+                card.classList.add('border-transparent');
+
+                check.classList.remove('bg-pink-500', 'opacity-100');
+                check.classList.add('bg-black/50', 'opacity-0');
+
+                overlay.classList.add('hidden');
+            } else {
+                // Select
+                if (selectedIds.size >= 3) {
+                    alert('スタンプ生成に使えるのは最大3枚までです');
+                    return;
+                }
+                selectedIds.add(id);
+                card.classList.remove('border-transparent');
+                card.classList.add('border-pink-500', 'ring-2', 'ring-pink-500');
+
+                check.classList.remove('bg-black/50', 'opacity-0');
+                check.classList.add('bg-pink-500', 'opacity-100');
+
+                overlay.classList.remove('hidden');
+            }
+
+            updateFab();
+        }
+
+        function updateFab() {
+            fabCount.innerText = selectedIds.size;
+            if (selectedIds.size > 0) {
+                fabContainer.classList.remove('translate-y-32');
+            } else {
+                fabContainer.classList.add('translate-y-32');
+            }
+        }
+
+        function goToStudio() {
+            if (selectedIds.size === 0) return;
+            const ids = Array.from(selectedIds).join(',');
+            window.location.href = `/studio?ids=${ids}`;
+        }
+
+        // Photo upload
+        dropZone.onclick = () => fileInput.click();
+        dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('border-pink-500'); };
+        dropZone.ondragleave = () => dropZone.classList.remove('border-pink-500');
+        dropZone.ondrop = e => { e.preventDefault(); dropZone.classList.remove('border-pink-500'); handleFiles(e.dataTransfer.files); };
+        fileInput.onchange = e => handleFiles(e.target.files);
+
+        async function handleFiles(files) {
+            for (let file of files) {
+                const formData = new FormData();
+                formData.append('image', file);
+                dropZone.querySelector('h2').innerText = '⏳ アップロード中...';
+                try {
+                    const res = await fetch('/api/upload', { method: 'POST', body: formData });
+                    if (res.ok) window.location.reload();
+                } catch (e) { alert('Upload failed'); }
+            }
+        }
+
+        // Style upload
+        styleInput.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('image', file);
+
+            try {
+                const res = await fetch('/api/upload_style', { method: 'POST', body: formData });
+                if (res.ok) window.location.reload();
+            } catch (e) { alert('Style upload failed'); }
+        };
+    </script>
+</body>
+
+</html>

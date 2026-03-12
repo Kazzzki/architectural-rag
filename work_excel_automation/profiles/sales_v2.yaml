@@ -1,0 +1,29 @@
+profile_version: "1.0"
+profile_id: "sales_v2"
+name: "売上データ (V2)"
+sheet_candidates:
+  - ".*売上.*"
+  - "Sales"
+
+header_aliases:
+  "案件名": ["プロジェクト名", "対象案件"]
+  "金額": ["売上", "単価", "費用"]
+  "日付": ["着工日", "完了日", "計上月"]
+
+required_fields:
+  - name: "案件名"
+    logical_type: "string"
+  - name: "金額"
+    logical_type: "numeric"
+
+optional_fields:
+  - name: "日付"
+    logical_type: "date"
+  - name: "担当者"
+    logical_type: "string"
+
+transforms: []
+validations:
+  min_data_rows: 1
+profile_match_rules:
+  min_match_ratio: 0.8

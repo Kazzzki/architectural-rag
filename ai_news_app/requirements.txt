@@ -1,0 +1,7 @@
+feedparser
+schedule
+requests
+python-dotenv
+python-dateutil
+deep-translator
+flask

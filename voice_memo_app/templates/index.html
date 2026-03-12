@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎤 Voice Memo</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent: #10b981;
+            --accent-hover: #059669;
+            --danger: #ef4444;
+            --border: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            background-image:
+                radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(56, 189, 248, 0.15) 0px, transparent 50%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            padding: 1.5rem;
+            text-align: center;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #10b981, #38bdf8);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .container {
+            flex: 1;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            width: 100%;
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Title Input */
+        .title-input {
+            width: 100%;
+            padding: 0.8rem 1rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .title-input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .title-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Mic Button */
+        .mic-container {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .mic-btn {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: none;
+            background: linear-gradient(135deg, var(--accent), #059669);
+            color: white;
+            font-size: 2rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .mic-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 25px rgba(16, 185, 129, 0.6);
+        }
+
+        .mic-btn.recording {
+            background: linear-gradient(135deg, var(--danger), #dc2626);
+            animation: pulse 1.5s infinite;
+            box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4);
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.08);
+            }
+        }
+
+        .status {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+
+        .status.active {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        /* Text Area */
+        textarea {
+            width: 100%;
+            min-height: 300px;
+            padding: 1.2rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 1rem;
+            line-height: 1.7;
+            resize: vertical;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Actions */
+        .actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-top: 1.5rem;
+        }
+
+        button {
+            padding: 0.9rem 1.5rem;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), #059669);
+            color: white;
+            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4);
+            grid-column: 1 / -1;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.6);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.1);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #1e293b;
+            color: white;
+            padding: 1rem 2rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .toast.success {
+            border-left: 4px solid var(--accent);
+        }
+
+        .toast.error {
+            border-left: 4px solid var(--danger);
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 1rem;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <h1>🎤 Voice Memo</h1>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <!-- Model Selection Dropdown -->
+            <div style="margin-bottom: 1.5rem;">
+                <label for="model-select"
+                    style="display: block; margin-bottom: 0.5rem; color: var(--text-secondary); font-size: 0.85rem; font-weight: 500;">
+                    Model
+                </label>
+                <select id="model-select" style="
+                    width: 100%; 
+                    padding: 0.9rem 1rem; 
+                    border-radius: 10px; 
+                    border: 1px solid var(--border); 
+                    background: rgba(40, 40, 50, 0.95); 
+                    color: #f1f5f9; 
+                    font-size: 1rem; 
+                    cursor: pointer;
+                    font-family: 'Inter', sans-serif;
+                ">
+                    <option value="gemini-experimental">🌟 Gemini 3.0 Preview</option>
+                    <option value="gemini-2.0-flash-exp" selected>⚡ Gemini 3 Flash (New)</option>
+                    <option value="gemini-1.5-pro">🧠 Gemini 1.5 Pro</option>
+                    <option value="gemini-1.5-flash">🚀 Gemini 1.5 Flash</option>
+                </select>
+            </div>
+
+            <input type="text" class="title-input" id="note-title" placeholder="メモのタイトル（省略可）">
+
+            <div class="mic-container">
+                <button class="mic-btn" id="mic-btn">🎤</button>
+            </div>
+
+            <p class="status" id="status">マイクボタンを押して録音開始</p>
+
+            <textarea id="memo-text" placeholder="ここに音声がテキストとして表示されます...&#10;手動で編集も可能です。"></textarea>
+
+            <div class="actions">
+                <button class="btn-primary" id="save-btn">
+                    💾 Obsidian に保存
+                </button>
+                <button class="btn-secondary" id="copy-btn">📋 コピー</button>
+                <button class="btn-danger" id="clear-btn">🗑️ クリア</button>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        Gemini 3 Flash で高精度文字起こし ✨
+    </footer>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const micBtn = document.getElementById('mic-btn');
+        const status = document.getElementById('status');
+        const memoText = document.getElementById('memo-text');
+        const noteTitle = document.getElementById('note-title');
+        const saveBtn = document.getElementById('save-btn');
+        const copyBtn = document.getElementById('copy-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const toast = document.getElementById('toast');
+
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+
+        // Mic Button - Start/Stop Recording
+        micBtn.addEventListener('click', async () => {
+            if (isRecording) {
+                // Stop recording
+                mediaRecorder.stop();
+            } else {
+                // Start recording
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                    audioChunks = [];
+
+                    mediaRecorder.ondataavailable = (e) => {
+                        audioChunks.push(e.data);
+                    };
+
+                    mediaRecorder.onstart = () => {
+                        isRecording = true;
+                        micBtn.classList.add('recording');
+                        micBtn.textContent = '⏹️';
+                        status.textContent = '🔴 録音中... 話し終わったらボタンを押してください';
+                        status.classList.add('active');
+                    };
+
+                    mediaRecorder.onstop = async () => {
+                        isRecording = false;
+                        micBtn.classList.remove('recording');
+                        micBtn.textContent = '⏳';
+                        micBtn.disabled = true;
+                        status.textContent = '🧠 Gemini で文字起こし中...';
+
+                        // Stop all tracks
+                        stream.getTracks().forEach(track => track.stop());
+
+                        // Create audio blob
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+
+                        // Send to server for Gemini transcription
+                        const formData = new FormData();
+                        formData.append('audio', audioBlob, 'recording.webm');
+
+                        try {
+                            const res = await fetch('/api/transcribe', {
+                                method: 'POST',
+                                body: formData
+                            });
+                            const data = await res.json();
+
+                            if (data.status === 'success') {
+                                memoText.value += data.transcript + '\n\n';
+
+                                // Show cost info
+                                const tokens = data.tokens ? data.tokens.total : 0;
+                                const cost = data.cost_usd || 0;
+                                const costDisplay = cost > 0 ? `$${cost.toFixed(6)}` : '無料';
+                                showToast(`✅ 完了！ ${tokens.toLocaleString()} tokens (${costDisplay})`, 'success');
+                            } else {
+                                showToast('エラー: ' + data.message, 'error');
+                            }
+                        } catch (e) {
+                            showToast('通信エラー: ' + e.message, 'error');
+                        } finally {
+                            micBtn.textContent = '🎤';
+                            micBtn.disabled = false;
+                            status.textContent = 'マイクボタンを押して録音開始';
+                            status.classList.remove('active');
+                        }
+                    };
+
+                    mediaRecorder.start();
+                } catch (e) {
+                    showToast('マイクの使用が許可されていません', 'error');
+                }
+            }
+        });
+
+        // Save to Obsidian
+        saveBtn.addEventListener('click', async () => {
+            const content = memoText.value.trim();
+            const title = noteTitle.value.trim();
+
+            if (!content) {
+                showToast('内容が空です', 'error');
+                return;
+            }
+
+            saveBtn.disabled = true;
+            saveBtn.textContent = '保存中...';
+
+            try {
+                const res = await fetch('/api/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content, title })
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    showToast(`✅ Obsidian に保存しました: ${data.filename}`, 'success');
+                    memoText.value = '';
+                    noteTitle.value = '';
+                    localStorage.removeItem('voice_memo_draft');
+                } else {
+                    showToast('保存に失敗しました: ' + data.message, 'error');
+                }
+            } catch (e) {
+                showToast('エラー: ' + e.message, 'error');
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.textContent = '💾 Obsidian に保存';
+            }
+        });
+
+        // Copy
+        copyBtn.addEventListener('click', () => {
+            if (!memoText.value) return;
+            navigator.clipboard.writeText(memoText.value);
+            showToast('📋 クリップボードにコピーしました', 'success');
+        });
+
+        // Clear
+        clearBtn.addEventListener('click', () => {
+            if (confirm('メモをクリアしますか？')) {
+                memoText.value = '';
+                noteTitle.value = '';
+                localStorage.removeItem('voice_memo_draft');
+                showToast('クリアしました', 'success');
+            }
+        });
+
+        // Toast
+        function showToast(message, type = 'success') {
+            toast.textContent = message;
+            toast.className = 'toast ' + type + ' show';
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        // Auto-save to localStorage
+        memoText.addEventListener('input', () => {
+            localStorage.setItem('voice_memo_draft', memoText.value);
+        });
+
+        // Restore draft on load
+        const savedDraft = localStorage.getItem('voice_memo_draft');
+        if (savedDraft) {
+            memoText.value = savedDraft;
+        }
+    </script>
+
+</body>
+
+</html>

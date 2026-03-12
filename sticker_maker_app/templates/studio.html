@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Studio - Sticker Maker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: #121212;
+            color: #f3f4f6;
+            font-family: 'Fredoka', sans-serif;
+        }
+
+        .glass {
+            background: rgba(40, 40, 40, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+
+<body class="min-h-screen">
+    <nav class="glass sticky top-0 z-50 px-6 py-4 flex justify-between items-center border-b border-white/10">
+        <div class="flex items-center gap-2">
+            <span class="text-2xl">🎨</span>
+            <h1 class="text-xl font-bold bg-gradient-to-r from-pink-400 to-purple-400 bg-clip-text text-transparent">
+                Sticker Studio</h1>
+        </div>
+        <a href="/gallery" class="text-gray-400 hover:text-white">← ギャラリーに戻る</a>
+    </nav>
+
+    <div class="container mx-auto px-4 py-8 max-w-2xl">
+        <!-- Style + Photo Preview -->
+        <div class="glass rounded-xl p-4 mb-6">
+            <div class="flex items-center gap-4">
+                <!-- Style Reference -->
+                <div class="text-center w-1/4">
+                    <p class="text-xs text-gray-400 mb-2">参照スタイル</p>
+                    {% if style_url %}
+                    <img src="{{ style_url }}"
+                        class="w-20 h-20 object-cover rounded-lg border-2 border-purple-500 mx-auto">
+                    {% else %}
+                    <div class="w-20 h-20 bg-gray-700 rounded-lg flex items-center justify-center text-xl mx-auto">❓
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div class="text-2xl text-gray-500">+</div>
+
+                <!-- Selected Photos -->
+                <div class="text-center flex-1">
+                    <p class="text-xs text-gray-400 mb-2">素材写真 ({{ images|length }}枚)</p>
+                    <div class="flex gap-2 justify-center overflow-x-auto p-2">
+                        {% for image in images %}
+                        <img src="{{ image.filepath }}"
+                            class="w-20 h-20 object-cover rounded-lg border-2 border-pink-500 shrink-0">
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="text-2xl text-gray-500">=</div>
+
+                <!-- Result Preview -->
+                <div class="text-center w-1/4">
+                    <p class="text-xs text-gray-400 mb-2">生成結果</p>
+                    <div id="result-preview"
+                        class="w-20 h-20 bg-gray-700 rounded-lg flex items-center justify-center text-xl mx-auto">
+                        🎨
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Form -->
+        <div class="mb-4">
+            <label class="block text-sm text-gray-400 mb-2">アレンジ強度 (Creativity)</label>
+            <input type="range" id="creativity-input" min="1" max="3" value="2" step="1"
+                class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+                <span>忠実</span>
+                <span>バランス</span>
+                <span>大胆</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-2">※複数の写真から「その子らしさ」を詳しく分析します</p>
+        </div>
+        <div class="mb-4">
+            <label class="block text-sm text-gray-400 mb-2">テーマ (任意)</label>
+            <input type="text" id="theme-input" placeholder="例: おつかれさま、おはよう、怒り"
+                class="w-full p-3 rounded-lg bg-gray-800 border border-gray-700 text-white focus:border-pink-500 focus:outline-none">
+        </div>
+        <div class="mb-6">
+            <label class="block text-sm text-gray-400 mb-2">スタンプ文字</label>
+            <input type="text" id="caption-input" placeholder="例: おつかれ！"
+                class="w-full p-3 rounded-lg bg-gray-800 border border-gray-700 text-white focus:border-pink-500 focus:outline-none">
+        </div>
+        <button id="generate-btn"
+            class="w-full bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold py-4 rounded-xl hover:opacity-90 transition text-lg shadow-lg">
+            🎨 スタンプを生成 (Ver 3.0)
+        </button>
+    </div>
+
+    <!-- Result -->
+    <div id="result-area" class="hidden">
+        <div class="glass rounded-xl p-6 text-center">
+            <h3 class="text-lg font-semibold mb-4 text-pink-400">✨ 完成！</h3>
+            <div
+                class="relative bg-[url('https://t3.ftcdn.net/jpg/02/61/08/94/360_F_261089458_1f2bM2yD3y0Y8z5y5y5y5y5y5y5y5y5y.jpg')] bg-repeat p-4 rounded-xl mb-4">
+                <img id="result-image" class="max-w-xs mx-auto rounded-lg shadow-xl">
+            </div>
+            <p class="text-xs text-gray-400 mb-4">背景は透明化されています (LINE規格準拠)</p>
+            <a id="download-link" download="sticker.png"
+                class="inline-block bg-pink-500 text-white px-8 py-3 rounded-full hover:bg-pink-600 transition font-bold shadow-lg">
+                📥 ダウンロード (PNG)
+            </a>
+
+            <!-- Analysis Log (Debug) -->
+            <div class="mt-8 text-left bg-black/30 p-4 rounded-lg text-xs font-mono text-gray-400">
+                <p class="mb-2 font-bold text-gray-300">📊 AI分析レポート (Ver 3.0 Analysis)</p>
+                <pre id="analysis-log" class="whitespace-pre-wrap"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div id="loading" class="hidden text-center py-12">
+        <div class="text-5xl mb-6 animate-bounce">🧬</div>
+        <h3 class="text-xl font-bold mb-2">Generating Ver 3.0...</h3>
+        <p class="text-gray-400">Phase 1: 複数の写真から特徴を構造解析中...</p>
+        <p class="text-gray-400">Phase 2: スタイルと特徴を統合して生成中...</p>
+        <p class="text-gray-400">Phase 3: 背景除去 & 規格リサイズ処理中...</p>
+    </div>
+    </div>
+
+    <script>
+        // Pass image IDs from backend template
+        const imageIds = [{% for image in images %}"{{ image.id }}", {% endfor %}];
+
+        const generateBtn = document.getElementById('generate-btn');
+        const themeInput = document.getElementById('theme-input');
+        const captionInput = document.getElementById('caption-input');
+        const creativityInput = document.getElementById('creativity-input');
+        const resultArea = document.getElementById('result-area');
+        const resultImage = document.getElementById('result-image');
+        const resultPreview = document.getElementById('result-preview');
+        const downloadLink = document.getElementById('download-link');
+        const loading = document.getElementById('loading');
+        const analysisLog = document.getElementById('analysis-log');
+
+        generateBtn.onclick = async () => {
+            if (imageIds.length === 0) {
+                alert('画像が選択されていません');
+                return;
+            }
+
+            generateBtn.disabled = true;
+            generateBtn.classList.add('opacity-50');
+            loading.classList.remove('hidden');
+            resultArea.classList.add('hidden');
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+
+            try {
+                const res = await fetch('/api/generate_sticker', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image_ids: imageIds, // Send list of IDs
+                        theme: themeInput.value,
+                        caption: captionInput.value,
+                        creativity: creativityInput.value
+                    })
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    resultImage.src = data.url;
+                    resultPreview.innerHTML = `<img src="${data.url}" class="w-full h-full object-cover rounded-lg">`;
+                    downloadLink.href = data.url;
+
+                    if (data.analysis) {
+                        analysisLog.textContent = JSON.stringify(data.analysis, null, 2);
+                    }
+
+                    resultArea.classList.remove('hidden');
+                    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                } else {
+                    alert('エラー: ' + (data.error || '生成に失敗しました'));
+                }
+            } catch (e) {
+                alert('エラー: ' + e.message);
+            } finally {
+                generateBtn.disabled = false;
+                generateBtn.classList.remove('opacity-50');
+                loading.classList.add('hidden');
+            }
+        };
+    </script>
+</body>
+
+</html>

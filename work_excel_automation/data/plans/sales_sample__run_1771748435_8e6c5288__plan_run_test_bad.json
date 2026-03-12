@@ -1,0 +1,38 @@
+{
+  "version": "1.0",
+  "run_id": "run_test_bad",
+  "input_file": "data/working/sales_sample__run_1771748435_8e6c5288.xlsx",
+  "output_file": "data/output/sales_sample__run_1771748435_8e6c5288.xlsx",
+  "matched_profile": "default",
+  "manifest_ref": "data/manifests/test_sales_manifest.json",
+  "mapping_ref": "data/mappings/sales_v1.json",
+  "write_contract_ref": "data/contracts/sales_v1.json",
+  "preconditions": [
+    {
+      "type": "sheet_exists",
+      "sheet": "売上管理",
+      "row": null
+    }
+  ],
+  "operations": [
+    {
+      "op": "delete_row",
+      "sheet": "売上管理",
+      "params": {
+        "row": 2
+      },
+      "reason": "Accidental deletion"
+    }
+  ],
+  "validations": [
+    {
+      "type": "contract_enforcement",
+      "params": {}
+    },
+    {
+      "type": "no_unintended_sheet_changes",
+      "params": {}
+    }
+  ],
+  "approval_required": true
+}
