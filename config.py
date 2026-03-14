@@ -11,9 +11,12 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent
 
 # 各種ディレクトリ
+# KNOWLEDGE_BASE_DIR: Drive同期専用。インデックスパイプラインからの参照禁止
 KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
 PDF_STORAGE_DIR    = BASE_DIR / "data" / "pdfs"
 PDF_CACHE_DIR      = BASE_DIR / "data" / "cache" / "pdfs"
+MD_DIR             = BASE_DIR / "data" / "md"
+
 
 # Storage Strategy (drive: Google Drive canonical, local: Local filesystem canonical)
 PDF_STORAGE_MODE = os.environ.get("PDF_STORAGE_MODE", "drive").lower()
@@ -41,8 +44,9 @@ DB_PATH = f"sqlite:///{LOCAL_APP_DIR / 'antigravity.db'}"
 UNCATEGORIZED_FOLDER = "00_未分類"
 
 # 後方互換エリアス
-REFERENCE_DIR = KNOWLEDGE_BASE_DIR
-SEARCH_MD_DIR = KNOWLEDGE_BASE_DIR
+REFERENCE_DIR = MD_DIR
+SEARCH_MD_DIR = MD_DIR
+
 
 # 処理用データ・一時ファイル
 TEMP_CHUNK_DIR = BASE_DIR / "data" / "temp_chunks"

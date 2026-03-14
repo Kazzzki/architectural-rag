@@ -28,9 +28,7 @@ from metadata_repository import MetadataRepository
 logger = logging.getLogger(__name__)
 
 from config import (
-    KNOWLEDGE_BASE_DIR,
-    SEARCH_MD_DIR,   # = KNOWLEDGE_BASE_DIR (後方互換エイリアス)
-    REFERENCE_DIR,   # = KNOWLEDGE_BASE_DIR (後方互換エイリアス)
+    MD_DIR,
     CHROMA_DB_DIR,
     FILE_INDEX_PATH,
     SUPPORTED_EXTENSIONS,
@@ -38,6 +36,7 @@ from config import (
     EXCLUDE_FOLDERS,
     EMBEDDING_MODEL,
     PARENT_CHUNKS_DIR,
+    MD_DIR,
 )
 from dense_indexer import get_chroma_client
 from gemini_client import get_client
@@ -124,9 +123,13 @@ def _should_exclude(path: Path, base_path: Path) -> bool:
         from config import EXCLUDE_PATTERNS
     except ImportError:
         EXCLUDE_PATTERNS = []
+    
+    # MD_DIR 基準での最小限の除外設定
+    md_exclude_folders = ["__pycache__", ".git"]
+    
     rel = str(path.relative_to(base_path))
     # フォルダ除外
-    if any(ex in rel for ex in EXCLUDE_FOLDERS):
+    if any(ex in rel for ex in md_exclude_folders):
         return True
     # ファイル名パターン除外
     if any(p in path.name for p in EXCLUDE_PATTERNS):
@@ -134,8 +137,8 @@ def _should_exclude(path: Path, base_path: Path) -> bool:
     return False
 
 
-def scan_files(base_dir: Path = SEARCH_MD_DIR) -> List[Dict[str, Any]]:
-    """ナレッジ DB フォルダを再帰スキャンしてファイルメタデータを収集"""
+def scan_files(base_dir: Path = MD_DIR) -> List[Dict[str, Any]]:
+    """MD_DIR フォルダを再帰スキャンしてファイルメタデータを収集"""
     files = []
     base_path = Path(base_dir)
     if not base_path.exists():
@@ -143,12 +146,10 @@ def scan_files(base_dir: Path = SEARCH_MD_DIR) -> List[Dict[str, Any]]:
         return files
 
     raw_files = []
-    for filepath in base_path.rglob("*"):
+    for filepath in base_path.rglob("*.md"):
         if filepath.is_dir():
             continue
         if _should_exclude(filepath, base_path):
-            continue
-        if filepath.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
 
         rel_path = filepath.relative_to(base_path)
@@ -158,36 +159,20 @@ def scan_files(base_dir: Path = SEARCH_MD_DIR) -> List[Dict[str, Any]]:
         sub_subcategory = parts[2] if len(parts) > 3 else ""
         doc_type = _infer_doc_type(category, filepath.name)
 
-        raw_files.append({
+        files.append({
             "filename":       filepath.name,
             "full_path":      str(filepath),
             "rel_path":       str(rel_path),
             "category":       category,
             "subcategory":    subcategory,
             "sub_subcategory": sub_subcategory,
-            "file_type":      filepath.suffix.lower().lstrip('.'),
+            "file_type":      "md",
             "file_size_kb":   round(filepath.stat().st_size / 1024, 2),
             "modified_at":    datetime.fromtimestamp(filepath.stat().st_mtime, tz=timezone.utc).isoformat(),
             "doc_type":       doc_type,
         })
 
-    # MD 優先ロジック: 同フォルダに同名 PDF がある場合は PDF をスキップ
-    processed_paths = set()
-    final_files = []
-    for f in raw_files:
-        if f["file_type"] == "md":
-            pdf_rel = str(Path(f["rel_path"]).with_suffix(".pdf"))
-            pdf_full = base_path / pdf_rel
-            if pdf_full.exists():
-                f["source_pdf_rel"] = pdf_rel
-                processed_paths.add(pdf_rel)
-            final_files.append(f)
-            processed_paths.add(f["rel_path"])
-    for f in raw_files:
-        if f["rel_path"] not in processed_paths:
-            final_files.append(f)
-
-    return final_files
+    return files
 
 
 def scan_pdfs_dir() -> List[Dict[str, Any]]:
@@ -488,37 +473,48 @@ def process_and_index_file(
     stats: Dict[str, int],
 ) -> bool:
     """単一ファイル情報を受け取ってインデックスする（統一パイプライン）"""
-    rel_path  = file_info["rel_path"]
-    full_path = file_info["full_path"]
+    rel_path_str = file_info["rel_path"]
+    full_path    = Path(file_info["full_path"])
     
+    # MD_DIR からの相対パスを再計算 (念のため)
+    try:
+        rel_path = str(full_path.relative_to(MD_DIR))
+    except ValueError:
+        rel_path = rel_path_str
+
     classifier = DocumentClassifier()
     doc_type = classifier.infer_doc_type(file_info.get("category", ""), file_info.get("filename", ""))
     file_info["doc_type"] = doc_type
 
-    pages = extract_text(full_path)
+    pages = extract_text(str(full_path))
     if not pages:
         stats["skipped"] += 1
         return False
 
-    frontmatter = parse_frontmatter(full_path) if file_info["file_type"] == "md" else {}
+    # MDファイル以外はスキップ（要件：MDファイルのFrontmatterをSingle source of truthとする）
+    if file_info["file_type"] != "md":
+        logger.warning(f"Skipping non-MD file in indexer: {rel_path}")
+        stats["skipped"] += 1
+        return False
 
-    # source_pdf_hash 解決
-    source_pdf_hash = (
-        frontmatter.get("source_pdf")
-        or file_info.get("source_pdf_rel", "")
-        or file_info.get("source_pdf_hash", "")
-    )
+    frontmatter = parse_frontmatter(str(full_path))
+
+    # source_pdf_hash 強制チェック
+    source_pdf_hash = frontmatter.get("source_pdf_hash")
     if not source_pdf_hash:
-        try:
-            source_pdf_hash = hashlib.sha256(Path(full_path).read_bytes()).hexdigest()[:16]
-        except Exception:
-            source_pdf_hash = "unknown"
+        logger.error(f"Critical Error: source_pdf_hash is missing in {rel_path}. Aborting.")
+        stats["errors"] += 1
+        return False
     
     file_info["source_pdf_hash"] = source_pdf_hash
-    source_pdf_name = (
-        frontmatter.get("pdf_filename") or frontmatter.get("source_pdf_name") or file_info.get("filename", "")
-    )
-    file_info["source_pdf_name"] = source_pdf_name
+    
+    # メタデータ抽出
+    source_pdf_name = frontmatter.get("source_pdf_name") or ""
+    drive_file_id   = frontmatter.get("drive_file_id") or ""
+    category        = frontmatter.get("category") or "00_未分類"
+    page_no         = frontmatter.get("page_no") or 0
+    tags            = frontmatter.get("tags") or []
+    tags_str        = ",".join(tags) if isinstance(tags, list) else str(tags)
 
     # MetadataRepository を通じて初期登録 (Status: accepted -> processing)
     repo = MetadataRepository()
@@ -538,20 +534,22 @@ def process_and_index_file(
     for p in pages:
         ocr_results.append({
             "text": p["text"],
-            "start_page": p.get("page_number", 0),
-            "label": f"Page {p.get('page_number', 0)}"
+            "start_page": p.get("page_number") or page_no, # ページ番号があれば優先、なければFMのpage_no
+            "label": f"Page {p.get('page_number') or page_no}"
         })
         full_text += p["text"] + "\n\n"
 
     source_metadata = {
-        "version_id": version_id,
         "source_pdf_hash": source_pdf_hash,
         "source_pdf_name": source_pdf_name,
-        "rel_path": rel_path,
-        "filename": file_info["filename"],
-        "category": frontmatter.get("primary_category") or file_info["category"],
-        "doc_type": doc_type,
-        "tags_str": ",".join(frontmatter.get("tags", []))
+        "drive_file_id":   drive_file_id,
+        "category":        category,
+        "page_no":         page_no,
+        "tags_str":        tags_str,
+        "rel_path":        rel_path,
+        "version_id":      version_id,
+        "doc_type":        doc_type, # ChunkBuilder内部でdoc_typeを使う場合のために残す
+        "filename":        file_info["filename"] # 念のため
     }
 
     chunks = builder.build(full_text, ocr_results, source_metadata)
@@ -564,7 +562,7 @@ def process_and_index_file(
     lexical.upsert_chunks(version_id, chunks)
 
     # 完了更新
-    _upsert_doc_index(rel_path, file_info, len(chunks)) # Legacy DB Sync
+    _upsert_doc_index(rel_path, {**file_info, **source_metadata}, len(chunks)) # Legacy DB Sync
     repo.mark_as_searchable(rel_path)
     
     stats["indexed"] += 1

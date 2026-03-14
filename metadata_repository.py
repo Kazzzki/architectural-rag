@@ -24,7 +24,8 @@ class MetadataRepository:
         mime_type: str = "application/pdf",
         file_size: int = 0,
         source_kind: str = "pdf",
-        force: bool = False
+        force: bool = False,
+        drive_file_id: str = ""
     ) -> Dict[str, str]:
         """
         アップロード時にレコードを生成/更新し、version_id と 旧ID (legacy_id) を返す。
@@ -46,6 +47,7 @@ class MetadataRepository:
                     file_size=file_size,
                     file_type=filename.split('.')[-1].lower() if '.' in filename else '',
                     status="accepted",
+                    drive_file_id=drive_file_id,
                     created_at=datetime.now(timezone.utc),
                     updated_at=datetime.now(timezone.utc)
                 )
@@ -55,6 +57,7 @@ class MetadataRepository:
                 doc_legacy.source_pdf_hash = source_pdf_hash
                 doc_legacy.file_size = file_size
                 doc_legacy.status = "accepted"
+                doc_legacy.drive_file_id = drive_file_id
                 doc_legacy.error_message = None
                 doc_legacy.updated_at = datetime.now(timezone.utc)
             
@@ -125,6 +128,7 @@ class MetadataRepository:
                 artifact_type="original",
                 storage_path=file_path,
                 storage_type="local",
+                drive_file_id=drive_file_id,
                 created_at=datetime.now(timezone.utc)
             )
             session.add(artifact)
@@ -306,6 +310,7 @@ class MetadataRepository:
                     "processed_pages": doc.processed_pages,
                     "error": doc.error_message,
                     "hash": doc.source_pdf_hash,
+                    "drive_file_id": doc.drive_file_id or "",
                     "indexed_at": doc.last_indexed_at.isoformat() if doc.last_indexed_at else None
                 }
             return None

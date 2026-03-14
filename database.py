@@ -31,8 +31,10 @@ class Document(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     canonical_id = Column(String, nullable=True, unique=True)
     title = Column(String, nullable=False)
+    drive_file_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    drive_file_id = Column(Text, nullable=True)
 
 class DocumentVersion(Base):
     """
@@ -484,6 +486,8 @@ def _run_migrations():
         "ALTER TABLE legacy_documents ADD COLUMN context_sheet_role VARCHAR",
         "ALTER TABLE legacy_documents ADD COLUMN context_sheet_model VARCHAR",
         "ALTER TABLE legacy_documents ADD COLUMN context_sheet_at DATETIME",
+        # Document (Logical) への Drive ID 追加
+        "ALTER TABLE documents ADD COLUMN drive_file_id VARCHAR",
         # context_sheets テーブルの新規作成（存在しない場合のみ）
         """CREATE TABLE IF NOT EXISTS context_sheets (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -505,6 +509,8 @@ def _run_migrations():
         "ALTER TABLE chat_messages ADD COLUMN web_sources TEXT",
         # Phase 7: PersonalContext に status 列追加（既存レコードは approved として悉起）
         "ALTER TABLE personal_contexts ADD COLUMN status VARCHAR NOT NULL DEFAULT 'approved'",
+        # T-5-A: documents テーブルへの drive_file_id 列追加
+        "ALTER TABLE documents ADD COLUMN drive_file_id TEXT",
     ]
     with engine.connect() as conn:
         for sql in migrations:

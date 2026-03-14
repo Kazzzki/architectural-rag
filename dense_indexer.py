@@ -106,12 +106,15 @@ class DenseIndexer:
             documents.append(chunk["content"])
 
             # メタデータ平坦化 (ChromaDB はネストした dict を受け付けない)
+            # 旧スキーマキー (sub_subcategory, subcategory, file_type, source_pdf) を除外
             meta: Dict[str, Any] = {
                 "version_id": version_id,
                 "chunk_type": chunk["chunk_type"],
             }
             if chunk.get("metadata"):
                 for k, v in chunk["metadata"].items():
+                    if k in {"sub_subcategory", "subcategory", "file_type", "source_pdf"}:
+                        continue
                     if isinstance(v, (str, int, float, bool)):
                         meta[k] = v
             metadatas.append(meta)

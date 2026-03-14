@@ -12,9 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, timezone
+import yaml
 from tenacity import RetryError
 
-from config import GEMINI_MODEL_OCR, MAX_TOKENS, EXECUTOR_WORKERS, API_CONCURRENCY, PDF_CHUNK_PAGES_GENERAL, PDF_CHUNK_PAGES_DRAWING, OCR_TEXT_FASTPATH_MIN_CHARS
+from config import GEMINI_MODEL_OCR, MAX_TOKENS, EXECUTOR_WORKERS, API_CONCURRENCY, PDF_CHUNK_PAGES_GENERAL, PDF_CHUNK_PAGES_DRAWING, OCR_TEXT_FASTPATH_MIN_CHARS, MD_DIR
 from ocr_utils import retry_gemini_call
 from gemini_client import get_client
 from text_sanitizer import is_text_extraction_usable, detect_garble_reason, normalize_unicode_text
@@ -676,139 +678,93 @@ async def _process_all_chunks_pipelined(
 # 既存の仕上げ処理（変更なし）
 # ---------------------------------------------------------------------------
 
+# ocr_processor.py の冒頭でインポート済みの前提
+from classifier import DocumentClassifier
+
 def finalize_processing(
     filepath: str, 
     output_path: str, 
     markdown_text: str, 
     source_pdf_hash: str = "",
-    version_id: str = ""
+    version_id: str = "",
+    classification_result: Optional[Dict[str, Any]] = None
 ):
     """
     生成されたMarkdownテキストを元に、分類・Frontmatter付与・フォルダ移動・インデックス登録を行う
+    T-3-B: 既にページごとのMDが生成されているが、後続パイプラインのために結合版を処理する。
     """
     try:
         from metadata_repository import MetadataRepository
         repo = MetadataRepository()
-        from classifier import DocumentClassifier
-        # import here to avoid circular dependency if possible
-        from config import KNOWLEDGE_BASE_DIR
+        from config import PDF_STORAGE_DIR
         import shutil
         from pathlib import Path
         import traceback
         import time
 
-
-        # 分類実行
-        classifier = DocumentClassifier()
-        meta_input = {'title': Path(filepath).stem}
-        classification_result = classifier.classify(markdown_text[:5000], meta_input)
+        # 分類実行（引数にない場合のみ実行）
+        if not classification_result:
+            classifier = DocumentClassifier()
+            meta_input = {'title': Path(filepath).stem}
+            classification_result = classifier.classify(markdown_text[:5000], meta_input)
         
-        import hashlib
-        # ハッシュIDがない場合は生成 (互換性のため残す)
+        # 既存コードを大幅に変更せず、二重書きを避けるように調整
+        # (ここでは一旦、結合版MDのFrontmatter付与と移動のみを維持)
         if not source_pdf_hash:
+            import hashlib
             with open(filepath, 'rb') as f:
                 source_pdf_hash = hashlib.sha256(f.read()).hexdigest()
 
-        # Google Driveへのアップロードは別ジョブに分離 (ここでは実行しない)
         drive_file_id = ""
 
-        # Frontmatter生成
+        # Frontmatter生成 (classifier経由)
+        # Note: ページごとのMDには既に付与されているが、結合版にも付与する
         extra_meta = {
-            "source_pdf": source_pdf_hash,
-            "pdf_filename": Path(filepath).name,
-            "drive_file_id": drive_file_id
+            "source_pdf_hash": source_pdf_hash, # T-3-B 要件名に合わせる
+            "source_pdf_name": Path(filepath).name,
+            "drive_file_id": drive_file_id,
+            "indexed_at": datetime.now(timezone.utc).isoformat()
         }
+        
+        classifier = DocumentClassifier()
         frontmatter = classifier.generate_frontmatter(classification_result, extra_meta)
         
         # Markdownファイルを更新 (Frontmatterを先頭に追加)
         full_md_text = frontmatter + markdown_text
+        # [T-3-A] knowledge_baseへの書き込みは行わない。
+        # output_pathが渡されている場合、そのパス（通常はdata/pdfs内の一時MD）を更新するにどどめる。
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(full_md_text)
         
-        # フォルダ移動 (PDF と MD を同一カテゴリフォルダに配置)
-        from config import ENABLE_AUTO_CATEGORIZE, AUTO_CATEGORIZE_UPLOADS_ONLY, KNOWLEDGE_BASE_DIR, UNCATEGORIZED_FOLDER, PDF_STORAGE_DIR
+        # [T-3-A] KNOWLEDGE_BASE_DIRへの移動ロジックを完全に削除
+        from config import PDF_STORAGE_DIR
 
-        # 元のカテゴリを取得（KNOWLEDGE_BASE_DIRからの相対パス）
-        try:
-            # resolve()を使って絶対パスで比較
-            original_category = Path(filepath).parent.resolve().relative_to(Path(KNOWLEDGE_BASE_DIR).resolve())
-            # "00_未分類"・"uploads"・ルート直下（"."）はすべて未分類扱い
-            is_uploads = str(original_category) in ('uploads', '.', UNCATEGORIZED_FOLDER)
-        except ValueError:
-            # KNOWLEDGE_BASE_DIR外（例: data/input/）の場合は未分類扱い
-            original_category = UNCATEGORIZED_FOLDER
-            is_uploads = True
-
-        category_path = str(original_category)
-
-        if not is_uploads:
-            # カテゴリフォルダに意図的に置かれたファイルは移動しない
-            category_path = str(original_category)
-        elif not ENABLE_AUTO_CATEGORIZE:
-            # 自動分類無効の場合は未分類フォルダへ
-            category_path = UNCATEGORIZED_FOLDER
-        else:
-            # 自動分類有効 → primary_categoryを使用
-            primary_cat = classification_result.get('primary_category')
-            if primary_cat and primary_cat not in ("uploads", UNCATEGORIZED_FOLDER):
-                category_path = primary_cat
-            else:
-                category_path = UNCATEGORIZED_FOLDER
-
-        # PDFはハッシュ名でPDF_STORAGE_DIRに格納し、MDはカテゴリフォルダへ配置
+        # PDFはハッシュ名でPDF_STORAGE_DIRに格納 (MDの移動は行わない)
         target_pdf_dir = Path(PDF_STORAGE_DIR)
-        target_md_dir = Path(KNOWLEDGE_BASE_DIR) / category_path
-        
         target_pdf_dir.mkdir(parents=True, exist_ok=True)
-        target_md_dir.mkdir(parents=True, exist_ok=True)
         
         new_pdf_path = target_pdf_dir / f"{source_pdf_hash}{Path(filepath).suffix}"
-        new_md_path = target_md_dir / Path(output_path).name
 
-        # 移動実行（同名ファイルは上書き。タイムスタンプ付加はしない）
+        # PDFの移動実行
         pdf_moved = False
-        md_moved = False
-        
         if new_pdf_path.resolve() != Path(filepath).resolve():
-            # 移動先に既存ファイルがある場合は先に削除して上書き
             if new_pdf_path.exists():
                 new_pdf_path.unlink()
             shutil.move(filepath, new_pdf_path)
             pdf_moved = True
             
-        if new_md_path.resolve() != Path(output_path).resolve():
-            if new_md_path.exists():
-                new_md_path.unlink()
-            shutil.move(output_path, new_md_path)
-            md_moved = True
-            
-        if pdf_moved or md_moved:
-            logger.info(f"自動分類: PDFは {PDF_STORAGE_DIR}、MDは {category_path} へ移動しました")
-            if pdf_moved:
-                # status_mgr は廃止し、repo を使用
-                repo.update_ingest_stage(filepath, "completed") # 暫定
-                # file_store の current_path を新しいパスに更新
-                try:
-                    import file_store as fs
-                    file_rec = fs.get_file_by_path(filepath)
-                    if file_rec:
-                        fs.update_path(file_rec["id"], str(new_pdf_path))
-                except Exception as _e:
-                    logger.warning(f"file_store パス更新エラー ({filepath}): {_e}")
-                filepath = str(new_pdf_path)
-            if md_moved:
-                output_path = str(new_md_path)
-        else:
-            logger.info(f"自動分類: 移動不要 ({category_path})")
+        if pdf_moved:
+            logger.info(f"自動分類: PDFは {target_pdf_dir} へ移動しました")
+            repo.update_ingest_stage(filepath, "completed")
+            try:
+                import file_store as fs
+                file_rec = fs.get_file_by_path(filepath)
+                if file_rec:
+                    fs.update_path(file_rec["id"], str(new_pdf_path))
+            except Exception as _e:
+                logger.warning(f"file_store パス更新エラー ({filepath}): {_e}")
+            filepath = str(new_pdf_path)
         
-        # 自動インデックス登録
-        try:
-            from indexer import index_file
-            logger.info(f"インデックス登録開始: {new_md_path}")
-            index_file(str(new_md_path))
-        except Exception as e:
-            logger.error(f"自動インデックス登録エラー ({new_md_path}): {e}", exc_info=True)
-
         if version_id:
             repo.update_ingest_stage(filepath, "indexing_completed")
             repo.mark_as_searchable(filepath)
@@ -837,6 +793,11 @@ def process_pdf_background(
 
     Phase 3: asyncioパイプラインで全チャンクの並列アップロード＋OCRを実行する。
     """
+    # source_pdf_hash のバリデーション
+    if not source_pdf_hash:
+        logger.error(f"OCR中断: source_pdf_hash が指定されていません (filepath={filepath})")
+        return
+
     # 同一ファイルの重複処理防止 (Lock + Set)
     job_key = version_id or filepath
     with _jobs_lock:
@@ -846,9 +807,20 @@ def process_pdf_background(
         _running_jobs.add(job_key)
 
     try:
+        if not source_pdf_hash:
+            logger.error(f"OCR中止: source_pdf_hash が指定されていません ({filepath})")
+            from metadata_repository import MetadataRepository
+            MetadataRepository().fail_processing(filepath, "source_pdf_hash is missing")
+            return
+
         logger.info(f"OCR開始: {filepath} -> {output_path} (doc_type={doc_type}, hash={source_pdf_hash}, version={version_id})")
         from metadata_repository import MetadataRepository
         repo = MetadataRepository()
+
+        # 0. 出力ディレクトリの準備 (T-3-B)
+        from config import MD_DIR
+        hashed_md_dir = Path(MD_DIR) / source_pdf_hash
+        hashed_md_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. PDF分割（Phase 1 + 2: text extraction fast path + chunking）
         chunks = _split_pdf(filepath, doc_type)
@@ -873,20 +845,106 @@ def process_pdf_background(
                 repo.fail_processing(filepath, "OCR overall timeout: exceeded 1800 seconds")
                 return
 
-        # 3. 結合（index順にソートして全結果をMarkdown化）
+        # 3. 結合 & ページ分割 & Frontmatter付与 (T-3-B)
         results.sort(key=lambda x: x["index"])
-        markdown_text = f"# {Path(filepath).stem}\n\n"
-
+        
+        # 全テキストを一旦結合して分類に使用
+        combined_text_for_classification = ""
         for r in results:
-            label = r.get("label", f"Part {r['index'] + 1}")
-            markdown_text += f"## {label}\n\n"
-            markdown_text += r.get("text", "")
-            markdown_text += "\n\n---\n"
+            combined_text_for_classification += r.get("text", "")
+        
+        from classifier import DocumentClassifier
+        classifier = DocumentClassifier()
+        meta_input = {'title': Path(filepath).stem}
+        # T-3-B: 分類とタグを事前に取得
+        classification_result = classifier.classify(combined_text_for_classification[:5000], meta_input)
+        
+        primary_category = classification_result.get("primary_category", "00_未分類")
+        tags = classification_result.get("tags", [])
+        indexed_at = datetime.now(timezone.utc).isoformat()
+        
+        # ページごとに分解して保存
+        markdown_text = f"# {Path(filepath).stem}\n\n"
+        page_contents = {} # page_no -> text
+        
+        # チャンクごとに処理
+        for r in results:
+            chunk_text = r.get("text", "")
+            # [[PAGE_N]] で分割
+            parts = re.split(r'(\[\[PAGE_\d+\]\])', chunk_text)
+            current_page = None
             
+            for part in parts:
+                if part.startswith("[[PAGE_"):
+                    # ページ番号抽出
+                    m = re.search(r'\d+', part)
+                    if m:
+                        current_page = int(m.group())
+                        if current_page not in page_contents:
+                            page_contents[current_page] = ""
+                elif current_page is not None:
+                    page_contents[current_page] += part
+            
+            # combined 用
+            label = r.get("label", f"Part {r['index'] + 1}")
+            markdown_text += f" ## {label}\n\n"
+            markdown_text += chunk_text
+            markdown_text += "\n\n---\n"
+
+        # ページごとにファイル書き出し
+        for p_no, con in page_contents.items():
+            # Frontmatter 生成
+            fm_data = {
+                "source_pdf_hash": source_pdf_hash,
+                "source_pdf_name": Path(filepath).name,
+                "page_no": p_no,
+                "category": primary_category,
+                "tags": tags,
+                "drive_file_id": "",
+                "indexed_at": indexed_at
+            }
+            fm_yaml = yaml.dump(fm_data, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            full_page_text = f"---\n{fm_yaml}---\n\n{con.strip()}"
+            
+            page_md_path = hashed_md_dir / f"page_{p_no}.md"
+            with open(page_md_path, "w", encoding="utf-8") as pf:
+                pf.write(full_page_text)
+
         markdown_text = normalize_unicode_text(markdown_text)
 
-        # 4. 保存（一旦）
+        # 4. 保存（ページ分割保存）
+        # [T-3-A] data/md/{hash}/ に保存
+        target_md_dir = Path(MD_DIR) / source_pdf_hash
+        target_md_dir.mkdir(parents=True, exist_ok=True)
+
+        import re
+        # [[PAGE_N]] マーカーで分割
+        # 最初の [[PAGE_N]] より前のコンテンツ（通常はタイトル）を抽出し、それ以降をページごとに分ける
+        page_splits = re.split(r'(\[\[PAGE_\d+\]\])', markdown_text)
+        
+        # page_splits は [header, "[[PAGE_1]]", content1, "[[PAGE_2]]", content2, ...] という形になる
+        # 最初の header は combined.md には含めるが、個別ページファイルには含めない
+        
+        # 各ページを保存
+        for i in range(1, len(page_splits), 2):
+            marker = page_splits[i]
+            content = page_splits[i+1] if i+1 < len(page_splits) else ""
+            
+            # ページ番号抽出
+            page_match = re.search(r'PAGE_(\d+)', marker)
+            if page_match:
+                page_no = page_match.group(1)
+                page_filename = f"page_{page_no}.md"
+                page_path = target_md_dir / page_filename
+                with open(page_path, "w", encoding="utf-8") as f:
+                    f.write(marker + content)
+        
+        # 全体版も一応保存（デバッグ・後続ステージ用）
         with open(output_path, "w", encoding="utf-8") as f:
+            f.write(markdown_text)
+            
+        combined_path = target_md_dir / "combined.md"
+        with open(combined_path, "w", encoding="utf-8") as f:
             f.write(markdown_text)
             
         if blocks_output_path:
@@ -894,7 +952,7 @@ def process_pdf_background(
             with open(blocks_output_path, "w", encoding="utf-8") as bf:
                 json.dump(results, bf, ensure_ascii=False, indent=2)
 
-        logger.info(f"OCR完了・保存: {output_path}")
+        logger.info(f"OCR完了・保存: {output_path} および {hashed_md_dir}/page_*.md")
 
         # 5. 次のステージへディスパッチ (Phase 3)
         repo.update_ingest_stage(filepath, "ocr_completed")
