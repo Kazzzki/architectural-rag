@@ -479,11 +479,11 @@ def init_db():
 def _run_migrations():
     """既存テーブルへの列追加マイグレーション（べき等・エラー無視）"""
     migrations = [
-        # documents テーブルへの context_sheet 列追加（前バージョンからの移行）
-        "ALTER TABLE documents ADD COLUMN context_sheet TEXT",
-        "ALTER TABLE documents ADD COLUMN context_sheet_role VARCHAR",
-        "ALTER TABLE documents ADD COLUMN context_sheet_model VARCHAR",
-        "ALTER TABLE documents ADD COLUMN context_sheet_at DATETIME",
+        # legacy_documents テーブルへの context_sheet 列追加
+        "ALTER TABLE legacy_documents ADD COLUMN context_sheet TEXT",
+        "ALTER TABLE legacy_documents ADD COLUMN context_sheet_role VARCHAR",
+        "ALTER TABLE legacy_documents ADD COLUMN context_sheet_model VARCHAR",
+        "ALTER TABLE legacy_documents ADD COLUMN context_sheet_at DATETIME",
         # context_sheets テーブルの新規作成（存在しない場合のみ）
         """CREATE TABLE IF NOT EXISTS context_sheets (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -499,6 +499,8 @@ def _run_migrations():
         "ALTER TABLE artifacts ADD COLUMN storage_type VARCHAR DEFAULT 'local'",
         # DocumentVersion への同期ステータス追加
         "ALTER TABLE document_versions ADD COLUMN drive_status VARCHAR",
+        "ALTER TABLE document_versions ADD COLUMN total_pages INTEGER DEFAULT 0",
+        "ALTER TABLE document_versions ADD COLUMN processed_pages INTEGER DEFAULT 0",
         # ChatMessage への web_sources 列追加
         "ALTER TABLE chat_messages ADD COLUMN web_sources TEXT",
         # Phase 7: PersonalContext に status 列追加（既存レコードは approved として悉起）

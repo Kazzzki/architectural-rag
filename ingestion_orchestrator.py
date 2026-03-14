@@ -23,6 +23,19 @@ class IngestionOrchestrator:
         """
         ファイルアップロード直後に呼び出されるエントリーポイント
         """
+        # version_id が渡されていない場合は新規作成を試みる（外部呼び出し用）
+        if not version_id:
+            res = self.repo.create_document_version(
+                filename=Path(file_path).name,
+                file_path=file_path,
+                source_pdf_hash=source_pdf_hash,
+                source_kind=source_kind
+            )
+            if res.get("skipped"):
+                logger.info(f"[Orchestrator] Job already in progress for {file_path}. Skipping enqueue.")
+                return
+            version_id = res["version_id"]
+
         logger.info(f"[Orchestrator] Enqueuing job for version_id={version_id}")
         self.repo.update_ingest_stage_by_version_id(version_id, "processing")
         self.repo.update_ingest_stage(file_path, "processing")

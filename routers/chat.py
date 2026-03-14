@@ -56,48 +56,95 @@ class ChatRequest(BaseModel):
     conversation_scope: Optional[ConversationScope] = None
     # ウェブ検索の使用可否 (False: 検索しない、True: Google Search Grounding有効)
     use_web_search: bool = False
+    # v4.1: session_id を body でも受け取れるようにする
+    session_id: Optional[str] = None
 
 class ChatResponse(BaseModel):
     answer: str
     sources: List[dict]
     web_sources: Optional[List[dict]] = None
 
+class SessionResponse(BaseModel):
+    id: str
+    title: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+class SessionDetailResponse(SessionResponse):
+    messages: List[dict]
+
+class SessionUpdateRequest(BaseModel):
+    title: str
+
 def run_memory_pipeline(user_message: str, assistant_response: str, project_id: Optional[str] = None):
-    """Phase1 → Phase2 を順次実行。全体をtry/exceptで包む。"""
+    """
+    ユーザーの発言とAIの回答から個人知見を抽出し、MemoryV2 (Layer A) および PersonalContext (Layer C) を更新する。
+    """
+    # 起動条件の判定 (#48)
+    if not assistant_response or len(assistant_response.strip()) < 10:
+        logger.info("Memory pipeline skipped: Assistant response too short.")
+        return
+
+    # 拒絶/定型文の判定
+    refusal_patterns = ["申し訳ありません", "分かりかねます", "お答えできません", "データベースにありません"]
+    if any(p in assistant_response for p in refusal_patterns):
+        logger.info("Memory pipeline skipped: Assistant response contains refusal patterns.")
+        return
+
+    logger.info(f"Memory pipeline STARTED: project_id={project_id}")
     try:
         from context_extractor import extract_personal_context
         from context_updater import update_contexts_with_dedup
 
-        # Phase 1: 抽出
+        # Phase 1: 抽出 (内部で Layer A への ingest も行う)
         candidates = extract_personal_context(user_message, assistant_response)
+        
         if not candidates:
-            # logger.debug("No personal context detected in this conversation.")
+            logger.info("Memory pipeline: No personal context detected in this conversation.")
             return
 
-        # Phase 2: 重複解消付き更新
+        # Phase 2: 重複解消付き更新 (Layer C)
         update_contexts_with_dedup(candidates, source_question=user_message, project_id=project_id)
-        logger.info(f"Memory pipeline completed: {len(candidates)} candidates processed.")
+        logger.info(f"Memory pipeline COMPLETED: {len(candidates)} candidates processed.")
 
     except Exception as e:
-        logger.warning(f"Memory pipeline failed (non-critical): {e}")
+        # 例外を隔離し、本体のチャットフローを停止させない (#51)
+        logger.error(f"Memory pipeline FAILED (non-critical): {e}", exc_info=True)
 
 def persist_chat_message(session_id: str, user_query: str, assistant_response: str, sources: List[dict], model: str, web_sources: Optional[List[dict]] = None):
-    """メッセージをDBに永続化し、セッションの更新日時を更新する"""
+    """
+    メッセージをDBに永続化し、セッションの更新日時を更新する。
+    トランザクション整合性を保ち、重複保存を防止する。
+    """
+    if not session_id or not user_query or not assistant_response:
+        logger.warning(f"Aborting persistence: Missing session_id or content.")
+        return None
+
     from database import SessionLocal, ChatSession, ChatMessage
     db = SessionLocal()
     try:
+        # 1. セッション確保
         session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
         if not session:
-            # セッションがない場合は新規作成（通常は呼ばれないはずだが救済策）
+            logger.info(f"Creating new session {session_id} in persistence layer.")
             session = ChatSession(id=session_id)
             db.add(session)
         
         if not session.title:
             session.title = user_query[:30]
 
-        # updated_at は onupdate で自動更新されるが、明示的に変更を入れる
+        # 2. 更新日時の明示的更新 (UTC)
         session.updated_at = datetime.now(timezone.utc)
         
+        # 3. 重複保存防止 (#46)
+        # セッションの最新メッセージを確認し、全く同じ内容の回答が連続する場合は保存しない
+        last_msg = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.desc()).first()
+        if last_msg and last_msg.role == "assistant" and last_msg.content == assistant_response:
+            logger.info(f"Persistence SKIPPED: Duplicate assistant message detected for session {session_id}.")
+            return last_msg.id
+
+        # 4. メッセージ保存 (User -> Assistant の順序固定 #47)
+        # Role 正規化 (#44)
         user_msg = ChatMessage(
             session_id=session_id,
             role="user",
@@ -105,6 +152,9 @@ def persist_chat_message(session_id: str, user_query: str, assistant_response: s
             sources=json.dumps([], ensure_ascii=False),
             model=model
         )
+        db.add(user_msg)
+        db.flush() # ID確定のため
+
         assistant_msg = ChatMessage(
             session_id=session_id,
             role="assistant",
@@ -113,14 +163,17 @@ def persist_chat_message(session_id: str, user_query: str, assistant_response: s
             web_sources=json.dumps(web_sources or [], ensure_ascii=False),
             model=model
         )
-
-        db.add(user_msg)
         db.add(assistant_msg)
+        
+        # 5. 一括コミット (#45)
         db.commit()
-        logger.info(f"Chat messages persisted for session {session_id}")
+        logger.info(f"Chat messages persisted (IDs: user={user_msg.id}, assistant={assistant_msg.id}) for session {session_id}")
+        return assistant_msg.id
+        
     except Exception as e:
         db.rollback()
-        logger.error(f"Failed to persist chat message: {e}")
+        logger.error(f"Persistence FAILED for session {session_id}: {e}", exc_info=True)
+        return None
     finally:
         db.close()
 
@@ -129,6 +182,14 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
     """質問に対する回答を生成"""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="質問を入力してください")
+    
+    # session_id の正規化: body を優先、query は fallback とする (#20, #23)
+    effective_session_id = request.session_id or session_id
+    
+    # 安全のための初期化 (#18)
+    answer = ""
+    source_files = []
+    web_sources = None
     
     try:
         if request.use_rag or request.use_web_search:
@@ -191,11 +252,11 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
 
         logger.info(f"Answer generated ({len(answer)} chars)")
         
-        # 永続化タスク
-        if session_id:
-            # 永続化（同期）
-            persist_chat_message(
-                session_id=session_id,
+        # 永続化タスクを BackgroundTasks に移行 (#19, #28)
+        if effective_session_id:
+            background_tasks.add_task(
+                persist_chat_message,
+                session_id=effective_session_id,
                 user_query=request.question,
                 assistant_response=answer,
                 sources=source_files,
@@ -204,12 +265,14 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
             )
         
         # Layer A Memory
-        background_tasks.add_task(
-            run_memory_pipeline,
-            user_message=request.question,
-            assistant_response=answer,
-            project_id=request.project_id
-        )
+        # 空回答時 (#29) は memory pipeline をスキップ
+        if answer.strip():
+            background_tasks.add_task(
+                run_memory_pipeline,
+                user_message=request.question,
+                assistant_response=answer,
+                project_id=request.project_id
+            )
         
         return ChatResponse(answer=answer, sources=source_files, web_sources=web_sources)
 
@@ -225,6 +288,9 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
     """ストリーミング形式で回答を生成 (Phase 2: SSE対応)"""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="質問を入力してください")
+    
+    # session_id の正規化: body を優先、query は fallback とする (#23)
+    effective_session_id = request.session_id or session_id
     
     try:
         if request.use_rag or request.use_web_search:
@@ -259,11 +325,18 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
 
         history = request.history
 
-        def generate():
+        def generate(sid):
+            # 状態管理の整理 (#30)
             full_answer = ""
+            web_sources_collected = []
+            done_sent = False
+            error_sent = False
+            
+            # 初期情報の送出
             yield f"data: {json.dumps({'type': 'sources', 'data': source_files}, ensure_ascii=False)}\n\n"
 
             try:
+                # generator の呼び出し整理 (#33)
                 if request.use_rag or request.use_web_search:
                     stream_gen = generate_answer_stream(
                         request.question, context, source_files,
@@ -283,9 +356,7 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                         use_web_search=request.use_web_search,
                     )
                 
-                web_sources_collected = []
-                
-                # 2. 回答をストリーミング
+                # チャンク送出と累積の責務分離 (#33)
                 for part in stream_gen:
                     if part["type"] == "answer":
                         chunk = part["data"]
@@ -294,37 +365,42 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                     elif part["type"] == "web_sources":
                         web_sources_collected = part["data"]
                         yield f"data: {json.dumps({'type': 'web_sources', 'data': web_sources_collected}, ensure_ascii=False)}\n\n"
-            except Exception as e:
-                logger.error(f"Stream generation exception: {e}", exc_info=True)
-                yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
-                return
+                
+                # 正常終了時の後継タスク登録（副作用の分離） (#31, #35)
+                # 空回答時 (#29) は memory pipeline をスキップ
+                if full_answer.strip():
+                    if sid:
+                        background_tasks.add_task(
+                            persist_chat_message,
+                            session_id=sid,
+                            user_query=request.question,
+                            assistant_response=full_answer,
+                            sources=source_files,
+                            model=request.model,
+                            web_sources=web_sources_collected
+                        )
 
-            # [DONE]送信前に蓄積タスクを登録 (正常終了時のみ)
-            if full_answer.strip():
-                # 永続化
-                if session_id:
                     background_tasks.add_task(
-                        persist_chat_message,
-                        session_id=session_id,
-                        user_query=request.question,
+                        run_memory_pipeline,
+                        user_message=request.question,
                         assistant_response=full_answer,
-                        sources=source_files,
-                        model=request.model,
-                        web_sources=web_sources_collected
+                        project_id=request.project_id
                     )
 
-                background_tasks.add_task(
-                    run_memory_pipeline,
-                    user_message=request.question,
-                    assistant_response=full_answer,
-                    project_id=request.project_id
-                )
-
-                # 3. 完了シグナル
-                yield "data: [DONE]\n\n"
+            except Exception as e:
+                # エラーイベントの多重送信防止・排他制御 (#32, #34, #31)
+                if not error_sent and not done_sent:
+                    logger.error(f"Stream generation exception: {e}", exc_info=True)
+                    yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+                    error_sent = True
+            finally:
+                # 終端通知の統一と確実な [DONE] 送出 (#24, #32, #36)
+                if not done_sent and not error_sent:
+                    yield "data: [DONE]\n\n"
+                    done_sent = True
         
         return StreamingResponse(
-            generate(), 
+            generate(effective_session_id), 
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -346,23 +422,27 @@ class SaveMessagesRequest(BaseModel):
     web_sources: Optional[List[dict]] = None
     model: str
 
-@router.get("/api/chat/sessions")
+@router.get("/api/chat/sessions", response_model=List[SessionResponse])
 def get_sessions(limit: int = 100, db: Session = Depends(get_db)):
+    """セッション一覧を取得（更新日時降順）"""
     sessions = db.query(ChatSession).order_by(ChatSession.updated_at.desc()).limit(limit).all()
-    return [{"id": s.id, "title": s.title, "created_at": s.created_at, "updated_at": s.updated_at} for s in sessions]
+    return sessions
 
-@router.post("/api/chat/sessions")
+@router.post("/api/chat/sessions", response_model=SessionResponse)
 def create_session(db: Session = Depends(get_db)):
+    """新規セッションを作成"""
     new_session = ChatSession()
     db.add(new_session)
     db.commit()
     db.refresh(new_session)
-    return {"id": new_session.id}
+    return new_session
 
-@router.get("/api/chat/sessions/{session_id}")
+@router.get("/api/chat/sessions/{session_id}", response_model=SessionDetailResponse)
 def get_session_detail(session_id: str, db: Session = Depends(get_db)):
+    """セッション詳細とメッセージ履歴を取得"""
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session:
+        logger.warning(f"Session not found: {session_id}")
         raise HTTPException(status_code=404, detail="Session not found")
     
     messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc()).all()
@@ -387,18 +467,38 @@ def get_session_detail(session_id: str, db: Session = Depends(get_db)):
         "messages": msg_list
     }
 
+@router.patch("/api/chat/sessions/{session_id}", response_model=SessionResponse)
+def update_session(session_id: str, request: SessionUpdateRequest, db: Session = Depends(get_db)):
+    """セッション情報の部分更新（現在はタイトルのみ）"""
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session.title = request.title
+    db.commit()
+    db.refresh(session)
+    logger.info(f"Session {session_id} title updated to: {request.title}")
+    return session
+
 @router.delete("/api/chat/sessions/{session_id}")
 def delete_session(session_id: str, db: Session = Depends(get_db)):
+    """セッションを削除（メッセージも連鎖削除される）"""
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
     db.delete(session)
     db.commit()
+    logger.info(f"Session {session_id} and its messages deleted.")
     return {"status": "success"}
 
 @router.post("/api/chat/sessions/{session_id}/messages")
 def save_messages(session_id: str, request: SaveMessagesRequest, db: Session = Depends(get_db)):
+    """
+    [DEPRECATED] 手動メッセージ保存用。
+    現在は chat/stream エンドポイント側で自動保存されるため、基本的には使用しない。
+    """
+    logger.warning(f"Deprecated endpoint /api/chat/sessions/{session_id}/messages called")
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

@@ -10,7 +10,7 @@ headers = {
   'Content-Type': 'application/json'
 }
 
-response = requests.request("POST", url, headers=headers, data=payload, auth=('admin', 'antigravity'), stream=True)
+response = requests.request("POST", url, headers=headers, data=payload, auth=('admin', 'Antig2026!rag'), stream=True)
 
 print(response.status_code)
 for line in response.iter_lines():

@@ -29,6 +29,10 @@ GEMINI_MODEL = GEMINI_MODEL_OCR
 # max_workersはスレッドプール全体のサイズ。実際のAPI呼び出しはSemaphoreで絞る。
 _api_semaphore = threading.Semaphore(API_CONCURRENCY)
 
+# 重複実行防止用のロックとセット
+_running_jobs = set()
+_jobs_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Phase 1-A: PDF分割ヘルパー
@@ -833,11 +837,19 @@ def process_pdf_background(
 
     Phase 3: asyncioパイプラインで全チャンクの並列アップロード＋OCRを実行する。
     """
-    logger.info(f"OCR開始: {filepath} -> {output_path} (doc_type={doc_type}, hash={source_pdf_hash}, version={version_id})")
-    from metadata_repository import MetadataRepository
-    repo = MetadataRepository()
+    # 同一ファイルの重複処理防止 (Lock + Set)
+    job_key = version_id or filepath
+    with _jobs_lock:
+        if job_key in _running_jobs:
+            logger.warning(f"OCR処理スキップ: すでに実行中です (key={job_key})")
+            return
+        _running_jobs.add(job_key)
 
     try:
+        logger.info(f"OCR開始: {filepath} -> {output_path} (doc_type={doc_type}, hash={source_pdf_hash}, version={version_id})")
+        from metadata_repository import MetadataRepository
+        repo = MetadataRepository()
+
         # 1. PDF分割（Phase 1 + 2: text extraction fast path + chunking）
         chunks = _split_pdf(filepath, doc_type)
         
@@ -851,14 +863,11 @@ def process_pdf_background(
         # 2. asyncioパイプラインで並列OCR（Phase 2: max_workers=EXECUTOR_WORKERS）
         with ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS) as executor:
             try:
-                results = asyncio.run(
-                    asyncio.wait_for(
-                    _process_all_chunks_pipelined(
-                        chunks, doc_type, executor, repo, filepath, version_id
-                    ),
-                    timeout=1800  # 全体上限30分
-                    )
+                # 戻り値を待機
+                future = _process_all_chunks_pipelined(
+                    chunks, doc_type, executor, repo, filepath, version_id
                 )
+                results = asyncio.run(asyncio.wait_for(future, timeout=1800))
             except asyncio.TimeoutError:
                 logger.error(f"OCR全体タイムアウト（1800秒）: {filepath}")
                 repo.fail_processing(filepath, "OCR overall timeout: exceeded 1800 seconds")
@@ -870,8 +879,6 @@ def process_pdf_background(
 
         for r in results:
             label = r.get("label", f"Part {r['index'] + 1}")
-            
-            # [[PAGE_N]] はプロンプト出力・抽出テキスト自体に含むため重複追加しない
             markdown_text += f"## {label}\n\n"
             markdown_text += r.get("text", "")
             markdown_text += "\n\n---\n"
@@ -900,7 +907,7 @@ def process_pdf_background(
             target=orchestrator.dispatch_next_stage,
             args=(version_id, "ocr_completed"),
             kwargs={
-                "original_filepath": filepath,  # Bug fix: 元のアップロードパスをoriginal_filepathとして明示的に渡す
+                "original_filepath": filepath,
                 "filepath": filepath,
                 "output_md_path": output_path,
                 "output_blocks_path": blocks_output_path,
@@ -911,14 +918,19 @@ def process_pdf_background(
 
     except Exception as e:
         logger.error(f"OCRプロセス全体でエラー ({filepath}): {e}", exc_info=True)
-        repo.fail_processing(filepath, str(e))
+        from metadata_repository import MetadataRepository
+        MetadataRepository().fail_processing(filepath, str(e))
     finally:
+        # 重複実行防止セットから削除
+        with _jobs_lock:
+            if job_key in _running_jobs:
+                _running_jobs.remove(job_key)
+        
         # 最終クリーンアップ (成功・失敗に関わらず一時ファイルを削除)
         if 'chunks' in locals():
             for c in chunks:
                 if c.get("is_temp") and c.get("path") and os.path.exists(c["path"]):
                     try:
                         os.remove(c["path"])
-                        logger.debug(f"Cleaned up temp chunk: {c['path']}")
-                    except OSError as e:
-                        logger.warning(f"Failed to remove temp chunk {c['path']}: {e}")
+                    except OSError:
+                        pass

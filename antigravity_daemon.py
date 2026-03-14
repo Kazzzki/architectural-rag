@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 class NewFileHandler(FileSystemEventHandler):
     def __init__(self, pipeline_manager):
         self.pipeline_manager = pipeline_manager
+        self.processed_files = {}  # {filename: timestamp}
 
     def on_created(self, event):
         if event.is_directory:
@@ -39,11 +40,18 @@ class NewFileHandler(FileSystemEventHandler):
         if filename.startswith('.') or filename.endswith('.tmp'):
             return
             
+        # 重複検知回避 (10秒以内の同一ファイルは無視)
+        now = time.time()
+        if filename in self.processed_files:
+            if now - self.processed_files[filename] < 10:
+                return
+        self.processed_files[filename] = now
+
         # 対象拡張子のみ処理
         if filename.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg')):
             logger.info(f"New file detected: {filename}")
-            # ファイル書き込み完了を少し待つ（念のため）
-            time.sleep(1)
+            # ファイル書き込み完了を少し待つ (2秒に延長)
+            time.sleep(2)
             try:
                 self.pipeline_manager.process_file(filepath)
             except Exception as e:
@@ -51,6 +59,7 @@ class NewFileHandler(FileSystemEventHandler):
 
 if __name__ == "__main__":
     # 入力ディレクトリ監視
+    # 既存の input/ も data/input/ にリンクされている可能性があるため注意
     INPUT_DIR = Path("data/input")
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     

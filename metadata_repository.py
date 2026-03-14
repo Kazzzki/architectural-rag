@@ -23,7 +23,8 @@ class MetadataRepository:
         source_pdf_hash: str,
         mime_type: str = "application/pdf",
         file_size: int = 0,
-        source_kind: str = "pdf"
+        source_kind: str = "pdf",
+        force: bool = False
     ) -> Dict[str, str]:
         """
         アップロード時にレコードを生成/更新し、version_id と 旧ID (legacy_id) を返す。
@@ -79,7 +80,17 @@ class MetadataRepository:
                 DocumentVersion.version_hash == source_pdf_hash
             ).first()
             if doc_version:
-                # 再アップロード: ステータスをリセットして再処理
+                # 重複処理チェック
+                if not force and doc_version.ingest_status in ("processing", "ocr_processing", "indexing", "classified"):
+                    logger.info(f"Document version {source_pdf_hash} is already in state '{doc_version.ingest_status}'. Skipping.")
+                    return {
+                        "version_id": doc_version.id,
+                        "document_id": doc_version.document_id,
+                        "skipped": True,
+                        "status": doc_version.ingest_status
+                    }
+                
+                # 再アップロードまたは強制再処理: ステータスをリセットして再処理
                 doc_version.ingest_status = "accepted"
                 doc_version.searchable = False
                 doc_version.error_message = None

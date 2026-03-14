@@ -307,65 +307,96 @@ export async function deleteContextSheet(id: number): Promise<void> {
 
 /**
  * SSEストリームを読み込み、イベント単位でパースする共通ヘルパー。
+ * chunk分割、複数行data、Abort時のクリーンアップ、実行時エラーの局所化に対応。
  */
 async function* _readSSEStream(stream: ReadableStream<Uint8Array>): AsyncGenerator<StreamUpdate> {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    let lineBuffer = '';
+
+    let eventName = 'message';
+    let dataContent = '';
 
     try {
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            buffer += decoder.decode(value, { stream: true });
+            // デコードエラーを局所化 (#58)
+            let chunk = '';
+            try {
+                chunk = decoder.decode(value, { stream: true });
+            } catch (e) {
+                console.error('SSE decode error:', e);
+                continue;
+            }
+
+            lineBuffer += chunk;
             
-            const parts = buffer.split('\n\n');
-            buffer = parts.pop() || '';
+            // 行単位で分割。CRLF, CR, LF すべてに対応 (#56)
+            const lines = lineBuffer.split(/\r\n|\r|\n/);
+            // 最後の要素は不完全な行として保持 (#54)
+            lineBuffer = lines.pop() ?? '';
 
-            for (const part of parts) {
-                if (!part.trim()) continue;
-
-                let eventName = 'message';
-                let dataContent = '';
-                
-                const lines = part.split('\n');
-                for (const line of lines) {
-                    if (line.startsWith('event:')) {
-                        eventName = line.replace('event:', '').trim();
-                    } else if (line.startsWith('data:')) {
-                        const content = line.replace('data:', '').trim();
-                        dataContent += (dataContent ? '\n' : '') + content;
-                    }
-                }
-
-                if (dataContent === '[DONE]') {
-                    yield { type: 'done' };
-                    return;
-                }
-
-                if (dataContent) {
-                    try {
-                        const data = JSON.parse(dataContent);
-                        if (eventName === 'error') {
-                            yield { type: 'error', data: data.error || 'Unknown streaming error' };
-                        } else if (data.type === 'web_sources') {
-                            yield { type: 'web_sources', data: data.data };
-                        } else if (data.type && data.data) {
-                            yield data as StreamUpdate;
-                        } else if (data.text) {
-                            yield { type: 'answer', data: data.text };
-                        } else {
-                            yield data as StreamUpdate;
+            for (const line of lines) {
+                // 空行はイベントの区切り (SSE仕様)
+                if (line.trim() === '') {
+                    if (dataContent) {
+                        // 完了シグナル判定
+                        if (dataContent === '[DONE]') {
+                            yield { type: 'done' };
+                            return;
                         }
-                    } catch (e) {
-                        yield { type: 'answer', data: dataContent };
+
+                        try {
+                            const data = JSON.parse(dataContent);
+                            if (eventName === 'error') {
+                                yield { type: 'error', data: data.error || 'Unknown streaming error' };
+                            } else if (data.type === 'web_sources') {
+                                yield { type: 'web_sources', data: data.data };
+                            } else if (data.type && data.data) {
+                                yield data as StreamUpdate;
+                            } else if (data.text) {
+                                yield { type: 'answer', data: data.text };
+                            } else {
+                                yield data as StreamUpdate;
+                            }
+                        } catch (e) {
+                            // JSONパース失敗を局所化。生のテキストとして扱う (#58)
+                            yield { type: 'answer', data: dataContent };
+                        }
                     }
+                    // イベントリセット
+                    eventName = 'message';
+                    dataContent = '';
+                    continue;
+                }
+
+                // フィールドのパース
+                if (line.startsWith('event:')) {
+                    eventName = line.slice(6).trim();
+                } else if (line.startsWith('data:')) {
+                    // 複数行 data の連結 (#55)
+                    const content = line.slice(5).trim();
+                    dataContent += (dataContent ? '\n' : '') + content;
                 }
             }
         }
+    } catch (err) {
+        // ストリーム読み取り中の例外 (#53)
+        if (err instanceof Error && err.name === 'AbortError') {
+            // AbortController による中断は正常系として扱う
+        } else {
+            yield { type: 'error', data: err instanceof Error ? err.message : String(err) };
+        }
     } finally {
-        reader.cancel().catch(() => {});
+        // リソースの確実な開放 (#27, #53)
+        try {
+            // reader.cancel() を待機
+            await reader.cancel();
+        } catch (e) {
+            // 既に閉じている場合のエラーは無視
+        }
         reader.releaseLock();
     }
 }

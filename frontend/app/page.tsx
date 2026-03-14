@@ -143,10 +143,20 @@ export default function Home() {
     // UI state
     const [activeLayerB, setActiveLayerB] = useState<string | null>(null);
     const [activeLayerBTitle, setActiveLayerBTitle] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null); // #62: error state を明示的に追加
     
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const lastRequestIdRef = useRef<number>(0);
+
+    // #63: unmount 時の cleanup effect
+    useEffect(() => {
+        return () => {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+        };
+    }, []);
 
     // Initial load
     useEffect(() => {
@@ -199,8 +209,15 @@ export default function Home() {
     };
 
     const loadSession = async (id: string) => {
+        // #60: セッション切り替え時も進行中の stream を abort する
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+
         try {
             setActiveSessionId(id);
+            setError(null);
             const data = await apiFetchSessionDetail(id);
             const msgs = data.messages || [];
             setMessages(msgs.map((m: any) => ({
@@ -211,42 +228,45 @@ export default function Home() {
             })));
         } catch (err) {
             console.error(err);
+            setError('セッションの読み込みに失敗しました');
         }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // #60: isLoading 中の再エントリーをブロック（連打防止）
         if (!input.trim() || isLoading) return;
 
         const userMessageContent = input.trim();
-        setInput('');
-        
-        // --- Snapshot history BEFORE adding new message ---
-        const historySnapshot = [...messages];
-        
-        // Add user message to UI
-        setMessages(prev => [...prev, { role: 'user', content: userMessageContent }]);
+        const requestId = ++lastRequestIdRef.current; // #61: requestId を発行
 
-        // Add placeholder assistant message
-        setMessages(prev => [...prev, { role: 'assistant', content: '', sources: undefined, webSources: undefined }]);
-
-        setIsLoading(true);
-
-        // Cancel previous request
+        // #60: 既存のストリームがあれば abort する
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
         const abortController = new AbortController();
         abortControllerRef.current = abortController;
-        const requestId = ++lastRequestIdRef.current;
+
+        // #62: state 更新順を固定
+        setInput('');
+        setError(null);
+        setIsLoading(true);
+        
+        // Add messages to UI
+        const historySnapshot = [...messages];
+        setMessages(prev => [
+            ...prev, 
+            { role: 'user', content: userMessageContent },
+            { role: 'assistant', content: '', sources: undefined, webSources: undefined }
+        ]);
 
         try {
-            const { chatStream, saveMessages } = await import('../lib/api');
+            const { chatStream } = await import('../lib/api');
             let accumulatedAnswer = '';
             let currentSources: SourceFile[] = [];
             let currentWebSources: { title: string; url: string }[] = [];
 
-            for await (const update of chatStream({
+            const stream = chatStream({
                 session_id: activeSessionId || undefined,
                 question: userMessageContent,
                 model: selectedModel,
@@ -255,7 +275,10 @@ export default function Home() {
                 contextSheet: activeLayerB,
                 history: historySnapshot.length > 0 ? historySnapshot : undefined,
                 signal: abortController.signal
-            })) {
+            });
+
+            for await (const update of stream) {
+                // #61:requestId が一致しない（後続のリクエストが開始された）場合は中断
                 if (requestId !== lastRequestIdRef.current) break;
 
                 if (update.type === 'answer') {
@@ -263,7 +286,9 @@ export default function Home() {
                     setMessages(prev => {
                         const next = [...prev];
                         const last = next[next.length - 1];
-                        if (last.role === 'assistant') last.content = accumulatedAnswer;
+                        if (last && last.role === 'assistant') {
+                            last.content = accumulatedAnswer;
+                        }
                         return next;
                     });
                 } else if (update.type === 'sources') {
@@ -271,7 +296,9 @@ export default function Home() {
                     setMessages(prev => {
                         const next = [...prev];
                         const last = next[next.length - 1];
-                        if (last.role === 'assistant') last.sources = currentSources;
+                        if (last && last.role === 'assistant') {
+                            last.sources = currentSources;
+                        }
                         return next;
                     });
                 } else if (update.type === 'web_sources') {
@@ -279,13 +306,18 @@ export default function Home() {
                     setMessages(prev => {
                         const next = [...prev];
                         const last = next[next.length - 1];
-                        if (last.role === 'assistant') last.webSources = currentWebSources;
+                        if (last && last.role === 'assistant') {
+                            last.webSources = currentWebSources;
+                        }
                         return next;
                     });
                 } else if (update.type === 'error') {
                     throw new Error(update.data);
                 }
             }
+
+            // #61: 終了時もリクエストIDチェック
+            if (requestId !== lastRequestIdRef.current) return;
 
             // Persistence
             let sessionIdToSave = activeSessionId;
@@ -304,20 +336,36 @@ export default function Home() {
                     model: selectedModel
                 });
             }
-            fetchSessions().then(setSessions);
+            const updatedSessions = await fetchSessions();
+            setSessions(updatedSessions);
 
         } catch (err: any) {
-            if (err.name === 'AbortError') return;
+            if (err.name === 'AbortError') {
+                console.log('Request aborted');
+                return;
+            }
+            
+            // #61: stale request のエラーは無視
+            if (requestId !== lastRequestIdRef.current) return;
+
             console.error(err);
+            const errorMessage = err.message || 'エラーが発生しました';
+            setError(errorMessage);
+            
             setMessages(prev => {
                 const next = [...prev];
                 const last = next[next.length - 1];
-                if (last.role === 'assistant') last.content = `Error: ${err.message}`;
+                if (last && last.role === 'assistant') {
+                    last.content = last.content ? `${last.content}\n\n[Error: ${errorMessage}]` : `Error: ${errorMessage}`;
+                }
                 return next;
             });
         } finally {
-            setIsLoading(false);
-            abortControllerRef.current = null;
+            // #64: 終端処理の一貫性確保。ただし最新のリクエストの場合のみ状態を戻す
+            if (requestId === lastRequestIdRef.current) {
+                setIsLoading(false);
+                abortControllerRef.current = null;
+            }
         }
     };
 

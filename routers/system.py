@@ -201,7 +201,7 @@ def get_ocr_status():
 
                 jobs.append({
                     "file_path":          doc.file_path,
-                    "filename":           doc.filename,
+                    "filename":           doc.filename if hasattr(doc, 'filename') else Path(doc.file_path).name,
                     "status":             ingest_status,
                     "processed_pages":    doc.processed_pages or 0,
                     "total_pages":        doc.total_pages or 1,

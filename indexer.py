@@ -585,8 +585,20 @@ def build_index(force_rebuild: bool = False) -> Dict[str, int]:
     indexed_files = load_file_index().get("files", {})
     stats = {"total_files": len(files), "indexed": 0, "skipped": 0, "errors": 0, "chunks": 0}
 
+    from metadata_repository import MetadataRepository
+    repo = MetadataRepository()
+
     for file_info in files:
         rel_path = file_info["rel_path"]
+        
+        # 1. 処理中チェック
+        db_status = repo.get_document_status(rel_path)
+        if db_status and db_status.get("status") in ("processing", "ocr_processing", "indexing", "classified"):
+            logger.info(f"Skipping {rel_path}: already being processed by ingestion pipeline.")
+            stats["skipped"] += 1
+            continue
+
+        # 2. 変更検出 (force_rebuild でない場合)
         if not force_rebuild and rel_path in indexed_files:
             if indexed_files[rel_path].get("modified_at") == file_info["modified_at"]:
                 stats["skipped"] += 1
@@ -885,7 +897,7 @@ def delete_file_completely(file_path: str) -> dict:
 
 # ─── 後方互換 ────────────────────────────────────────────────────────────────────
 def load_file_index() -> Dict[str, Any]:
-    from database import get_session, Document as DbDocument
+    from database import get_session, LegacyDocument as DbDocument
     session = get_session()
     try:
         docs = session.query(DbDocument).filter(DbDocument.file_hash.isnot(None)).all()

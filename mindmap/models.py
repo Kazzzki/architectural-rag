@@ -278,3 +278,8 @@ class UnlinkedMentionsRequest(BaseModel):
 
 class PredictLinksRequest(BaseModel):
     new_node_id: str
+
+
+class NodeFromTextRequest(BaseModel):
+    text: str
+    source_type: str = "manual"

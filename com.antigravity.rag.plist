@@ -7,9 +7,7 @@
     
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>-c</string>
-        <string>./launchd_start.sh</string>
+        <string>/Users/kaz/Library/Mobile Documents/com~apple~CloudDocs/antigravity/architectural_rag/launchd_start.sh</string>
     </array>
     
     <key>WorkingDirectory</key>
