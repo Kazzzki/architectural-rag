@@ -1,0 +1,955 @@
+{
+  "generated_at": "2026-03-14T07:12:52.490287+00:00",
+  "summary": {
+    "total": 157,
+    "DELETE_NON_PDF": 33,
+    "DELETE_DUPLICATE": 0,
+    "MOVE_UNCLASSIFIED": 62,
+    "KEEP": 61
+  },
+  "files": {
+    "DELETE_NON_PDF": [
+      {
+        "file_id": "1PA5NTDm5_PoUrL64SbBaf3w95Ea5U3j4",
+        "name": "書籍 2026年3月3日 (2)_1772856031_0.md",
+        "folder_path": "",
+        "size": 76721
+      },
+      {
+        "file_id": "1Qloly5Yhv--LQ5qogTqQE855medmPXIR",
+        "name": "書籍 2026年3月3日 (1)_1772855334_0.md",
+        "folder_path": "",
+        "size": 159507
+      },
+      {
+        "file_id": "1mQlhmWBdv8m9zyOXY5Ez2YSv-zZtYCan",
+        "name": "Layer A スケール問題：論文調査と設計提案.md",
+        "folder_path": "04_リサーチ成果物",
+        "size": 8907
+      },
+      {
+        "file_id": "1okYg_49VDOJxIlz_ITyXdmF6h0n6nakb",
+        "name": "書籍 2026年3月3日 (2)_1772856031_0.md",
+        "folder_path": "06_設計マネジメント",
+        "size": 76721
+      },
+      {
+        "file_id": "1hdEbHC__O3jknzv4D9H-4MWmbkUTtS5c",
+        "name": "書籍 2026年3月3日 (1)_1772855334_0.md",
+        "folder_path": "06_設計マネジメント",
+        "size": 159507
+      },
+      {
+        "file_id": "171N8QlBP_cqbn-N-VR8yFXSNX6TEZoJp",
+        "name": "書籍 2026年3月3日_1772858657_0.md",
+        "folder_path": "06_設計マネジメント",
+        "size": 133281
+      },
+      {
+        "file_id": "1mnEUVElMNkOcGGZnTL7jdxL-HP33AnwL",
+        "name": "書籍 2026年3月3日_1772858526_0.md",
+        "folder_path": "06_設計マネジメント",
+        "size": 133286
+      },
+      {
+        "file_id": "1RckHArT5DkKBiDkImp_TyP2k4Xt1_cf2",
+        "name": "書籍 2026年3月3日_1772857377_0.md",
+        "folder_path": "06_設計マネジメント",
+        "size": 133286
+      },
+      {
+        "file_id": "142M7O3igCmUk3OrX-bmtx6uqyn8vjbyf",
+        "name": "書籍 2026年3月3日_1772856249_0.md",
+        "folder_path": "06_設計マネジメント",
+        "size": 133316
+      },
+      {
+        "file_id": "1_WCAiuBZp3XcKv3kC3YrJI2sKEELRueM",
+        "name": "書籍 2026年3月3日 (2)_1772855461_1.md",
+        "folder_path": "06_設計マネジメント",
+        "size": 76718
+      },
+      {
+        "file_id": "18yhM5jdii3WcNIkAAlZoFz-OoSIHZR2F",
+        "name": "書籍 2026年3月3日 (1)_1772855461_0.md",
+        "folder_path": "06_設計マネジメント",
+        "size": 157717
+      },
+      {
+        "file_id": "1knE7zkHHRdcLJwwPWIhgRDr8iJ7flzT0",
+        "name": "Antigravity 最効率の指示術 - PM_CM視点のエージェント操縦ガイド.md",
+        "folder_path": "06_設計マネジメント",
+        "size": 10436
+      },
+      {
+        "file_id": "11vcKfM21cRmYbkNAkOOgrlrF-_13fSi0",
+        "name": "index_metadata.pickle",
+        "folder_path": "99_システム/chroma_db/3e49789e-f2b5-4427-94a6-abe51e59d79d",
+        "size": 69260
+      },
+      {
+        "file_id": "11U6qgeY4I8koW8uuAjlpP5byq7W3z4kJ",
+        "name": "header.bin",
+        "folder_path": "99_システム/chroma_db/3e49789e-f2b5-4427-94a6-abe51e59d79d",
+        "size": 100
+      },
+      {
+        "file_id": "1X4fyeBP1cW2glE2yiV27Aj2bXn5ZhgXh",
+        "name": "link_lists.bin",
+        "folder_path": "99_システム/chroma_db/3e49789e-f2b5-4427-94a6-abe51e59d79d",
+        "size": 7776
+      },
+      {
+        "file_id": "1J_I6PdRYKYHOuqPF-xuM5gyPU3b6gH8i",
+        "name": "length.bin",
+        "folder_path": "99_システム/chroma_db/3e49789e-f2b5-4427-94a6-abe51e59d79d",
+        "size": 3628
+      },
+      {
+        "file_id": "1aMhWNR-zvWc8YZSllsYgNgFXuWy6iuXr",
+        "name": "data_level0.bin",
+        "folder_path": "99_システム/chroma_db/3e49789e-f2b5-4427-94a6-abe51e59d79d",
+        "size": 11272196
+      },
+      {
+        "file_id": "1iAezOeYkz8_FX2RhibVvtARZq_92RDep",
+        "name": "chroma.sqlite3",
+        "folder_path": "99_システム/chroma_db",
+        "size": 26734592
+      },
+      {
+        "file_id": "1QV84tbaNatIwaB0awxfYIQQuZb32qVSm",
+        "name": "8a67821fc08823dc.md",
+        "folder_path": "03_技術基準",
+        "size": 13846
+      },
+      {
+        "file_id": "1dhoYtt8uSjVH4kXbNHPSRK1h9JK3Wdmh",
+        "name": "pdf_1771743444.md",
+        "folder_path": "03_技術基準",
+        "size": 12044
+      },
+      {
+        "file_id": "1Jhfo-s5rbp4wRhqxJfq3CxIGteOI3pTy",
+        "name": "pdf_1771725981_8.md",
+        "folder_path": "03_技術基準",
+        "size": 54312
+      },
+      {
+        "file_id": "16dE4M0T_RLVdJvQwq5404frYJdhcOFzD",
+        "name": "model_test.md",
+        "folder_path": "uploads",
+        "size": 141
+      },
+      {
+        "file_id": "1uNP2EydCaTkkTXE1dzsj3k_AnHdMVNmc",
+        "name": "verify_test.md",
+        "folder_path": "uploads",
+        "size": 138
+      },
+      {
+        "file_id": "12hSumsJNMzEue9KVbV3OlWEw1kIIzV13",
+        "name": "test_upload2.md",
+        "folder_path": "uploads",
+        "size": 139
+      },
+      {
+        "file_id": "1Mmi6bkTuLCQhXj2kJg70udx83I6ivxAr",
+        "name": "final_test.md",
+        "folder_path": "uploads",
+        "size": 137
+      },
+      {
+        "file_id": "1f3EmJZNEkcgtYhNZz18dXZ7k74koV8uO",
+        "name": "コードレビュー統合版（全セクション）.md",
+        "folder_path": "00_未分類",
+        "size": 23660
+      },
+      {
+        "file_id": "1fn3eECopa51JbqbqfPUpirnKp_IsPm9G",
+        "name": "書籍 2026年3月3日 (1).md",
+        "folder_path": "00_未分類",
+        "size": 489
+      },
+      {
+        "file_id": "11yXr5IC7aub3Xzgi2KBxFibJV2dr9o-A",
+        "name": "test_e2e_input.md",
+        "folder_path": "00_未分類",
+        "size": 313
+      },
+      {
+        "file_id": "13I-iWmmAIaLfQ7OfRiuxJTDrwXM1OzBj",
+        "name": "書籍 2026年3月3日.md",
+        "folder_path": "00_未分類",
+        "size": 14611
+      },
+      {
+        "file_id": "1z9DHYHNz-JnWlv_5TJPjUQ0vQbwrdkOt",
+        "name": "test_real.md",
+        "folder_path": "00_未分類",
+        "size": 281
+      },
+      {
+        "file_id": "18KM18wf6ZbiFjwxlBI9LtIlYkRTwdnLX",
+        "name": "書籍 2026年3月3日 (2).md",
+        "folder_path": "00_未分類",
+        "size": 6969
+      },
+      {
+        "file_id": "1q76MlAmlRTHoPjMqQ9P9NG4OFqVXf_g9",
+        "name": "test_upload_1771768365_0.md",
+        "folder_path": "20_検索MD/uploads",
+        "size": 138
+      },
+      {
+        "file_id": "1eC7FDIjbjZPoI08miQw9pYNC61IVhiBv",
+        "name": "test_structure.md",
+        "folder_path": "20_検索MD/uploads",
+        "size": 17
+      }
+    ],
+    "DELETE_DUPLICATE": [],
+    "MOVE_UNCLASSIFIED": [
+      {
+        "file_id": "1HIBdHA0fteCaYVJ4aivsPLvDYXsE4UfJ",
+        "name": ".chunk_18_pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 416496
+      },
+      {
+        "file_id": "18gjQs8taHG4NGNKEA1AacxtCIkWYLfES",
+        "name": ".chunk_20_pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 415482
+      },
+      {
+        "file_id": "1raEx5QrWyE06Pa0Ek19sUOZgQ1qJ8tJ9",
+        "name": ".chunk_12_pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 416404
+      },
+      {
+        "file_id": "1R_buMe7CkWLd0pWCd68DuXbAt7pm-YEH",
+        "name": ".chunk_8_pdf_1771725981_10.pdf",
+        "folder_path": "uploads",
+        "size": 211151
+      },
+      {
+        "file_id": "18GikWytkodU4dHIvkErce3l_dwu4cz1q",
+        "name": ".chunk_8_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 265169
+      },
+      {
+        "file_id": "1VcLPms9pxXQBp6OV_TBeO05D4xgz034q",
+        "name": ".chunk_16_pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 416368
+      },
+      {
+        "file_id": "1W4X3MWRSm8wEkDkMZzluNsFkyzgyYdC_",
+        "name": ".chunk_6_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 274179
+      },
+      {
+        "file_id": "1QZTs-rB4gCDWqxvhEiWn5EX_vVTIOqIn",
+        "name": ".chunk_16_pdf_1771725981_9.pdf",
+        "folder_path": "uploads",
+        "size": 471224
+      },
+      {
+        "file_id": "1FPt0PcYoPibqppSpCTWO14HtS4WutD0U",
+        "name": ".chunk_24_pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 197433
+      },
+      {
+        "file_id": "1pDjIwSJ6JaF6Himqkw06N9ZPKqWE0_68",
+        "name": ".chunk_4_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 265402
+      },
+      {
+        "file_id": "1rS1pgAwSAs9MG2nMbYJaviGl8fGCfyx6",
+        "name": ".chunk_4_pdf_1771725981_12.pdf",
+        "folder_path": "uploads",
+        "size": 92175
+      },
+      {
+        "file_id": "1Seh26QzovlLJr6YiZUzo6YuAjSyXxH9l",
+        "name": ".chunk_20_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 265883
+      },
+      {
+        "file_id": "1VQ1yrKV2JG2i3ihUsfoGk1FBPqwDVVXX",
+        "name": ".chunk_12_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 265164
+      },
+      {
+        "file_id": "1Nn_aEfyLlDXA26LegzrmI7rjCiz5BUgr",
+        "name": ".chunk_12_pdf_1771725981_10.pdf",
+        "folder_path": "uploads",
+        "size": 201867
+      },
+      {
+        "file_id": "1F2EOm4-Rr2zgs2pXcgpaSm_JlkJmodHg",
+        "name": ".chunk_28_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 264182
+      },
+      {
+        "file_id": "1s-LjawPFHaoBtg4_s1qq3qVmblHt6Eoi",
+        "name": ".chunk_22_pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 480816
+      },
+      {
+        "file_id": "1L_TseVubXkkW8Z6l-TqiM5G-ked995QA",
+        "name": ".chunk_22_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 265364
+      },
+      {
+        "file_id": "1inOF9beutMcbesAto4CaYFdn1S_nOcSx",
+        "name": ".chunk_18_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 266069
+      },
+      {
+        "file_id": "1wIQfx3MFjMOU__iIR8hV6873NMCzMWHe",
+        "name": ".chunk_10_pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 416177
+      },
+      {
+        "file_id": "11IwYweu_RdK00m36v44nN5mdxgb454ue",
+        "name": ".chunk_10_pdf_1771725981_10.pdf",
+        "folder_path": "uploads",
+        "size": 201325
+      },
+      {
+        "file_id": "1djdIe45al88tDdm5F5k5JtRT1PRRzLxw",
+        "name": ".chunk_8_pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 416451
+      },
+      {
+        "file_id": "1eFT9LhZUmfN-6GpD8ENdr7HqJGOuraVf",
+        "name": ".chunk_10_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 264236
+      },
+      {
+        "file_id": "1YundghrFgRjOkpv6hR7JDG8f7dOdcYnp",
+        "name": ".chunk_10_pdf_1771725981_9.pdf",
+        "folder_path": "uploads",
+        "size": 406778
+      },
+      {
+        "file_id": "1TIJzV5lO7-_aEZyFzplY2LSY8p0L1ULh",
+        "name": ".chunk_16_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 265236
+      },
+      {
+        "file_id": "1NfPL7R9oNVwhzRIY1YKxj7b3zlSuK7W2",
+        "name": ".chunk_24_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 265585
+      },
+      {
+        "file_id": "1OPt4fqLkGvQHjFWsqHNl84J6n3qBqqth",
+        "name": ".chunk_14_pdf_1771725981_10.pdf",
+        "folder_path": "uploads",
+        "size": 189429
+      },
+      {
+        "file_id": "1IgYDcbmj_3nMgde3fWrgDAJag3T_V0Qj",
+        "name": ".chunk_14_pdf_1771725981_9.pdf",
+        "folder_path": "uploads",
+        "size": 474492
+      },
+      {
+        "file_id": "1hEMrVDePJIqTcHNeaJjUp-2tKVXdvL4u",
+        "name": ".chunk_14_pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 416298
+      },
+      {
+        "file_id": "1z6Pk_gO5aHLlfdI4kQh1dakmSHaEY7JR",
+        "name": ".chunk_14_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 265556
+      },
+      {
+        "file_id": "1GFrdFsU0eRqNq66wbxs3WSJ1GXGc9CyT",
+        "name": ".chunk_26_pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 265746
+      },
+      {
+        "file_id": "1CKRWBiCvRxRVdUMB_fySNYxDXIU-MICg",
+        "name": "pdf_1771731575_1.pdf",
+        "folder_path": "uploads",
+        "size": 202018
+      },
+      {
+        "file_id": "1Ewr84l0yv_nrmqmjnSE23pryiyQ1obrf",
+        "name": "pdf_1771731575_2.pdf",
+        "folder_path": "uploads",
+        "size": 192160
+      },
+      {
+        "file_id": "15j9RD-708v8ctdmxZn0DR9TATUUlo4QN",
+        "name": "pdf_1771731575_3.pdf",
+        "folder_path": "uploads",
+        "size": 489617
+      },
+      {
+        "file_id": "16ZXkx5jNt1DLfU9emEWe_NSAWHYp7UE9",
+        "name": "pdf_1771725981_9.pdf",
+        "folder_path": "uploads",
+        "size": 578373
+      },
+      {
+        "file_id": "101BC7Oo_3EdgpmGm3Blo83fWVsZklf14",
+        "name": "final_test.pdf",
+        "folder_path": "uploads",
+        "size": 587
+      },
+      {
+        "file_id": "1AeI37e_8ELcL4mqDUYHV1Jt4Xebjs504",
+        "name": "pdf_1771731575_7.pdf",
+        "folder_path": "uploads",
+        "size": 436460
+      },
+      {
+        "file_id": "1vonoak8DvqsWeQD3PUWPB6VsjXqAFwhR",
+        "name": "pdf_1771731575_6.pdf",
+        "folder_path": "uploads",
+        "size": 176941
+      },
+      {
+        "file_id": "1CF5hDjEvg8HOh9aC4kNkl3d-O8ScHgI8",
+        "name": "pdf_1771731575_12.pdf",
+        "folder_path": "uploads",
+        "size": 178693
+      },
+      {
+        "file_id": "1Ak-Gf3yufiiKnoycohvZkhpgcw8LFp_1",
+        "name": "pdf_1771725981_8.pdf",
+        "folder_path": "uploads",
+        "size": 840649
+      },
+      {
+        "file_id": "1OsRJKYVPznH0IqAqkgHq3Z_VMLq_C6D4",
+        "name": "pdf_1771731575_10.pdf",
+        "folder_path": "uploads",
+        "size": 384632
+      },
+      {
+        "file_id": "1lpp06RfbHetYnbHc0dYvC_ob-7McIkGI",
+        "name": "pdf_1771731575_4.pdf",
+        "folder_path": "uploads",
+        "size": 235009
+      },
+      {
+        "file_id": "14ItpRUA53oBFjqXaDctAHzId1NT3b05e",
+        "name": "pdf_1771731575_5.pdf",
+        "folder_path": "uploads",
+        "size": 114834
+      },
+      {
+        "file_id": "1Iwjr6wV_yXAwMkE0a6h8UrisOFn9Tzoz",
+        "name": "pdf_1771731575_11.pdf",
+        "folder_path": "uploads",
+        "size": 607389
+      },
+      {
+        "file_id": "1upt93JYWc8T95jlXyhl_49PgQPML3bYz",
+        "name": "pdf_1771727342_2.pdf",
+        "folder_path": "uploads",
+        "size": 192160
+      },
+      {
+        "file_id": "1UG0vX7ofHCs1VELXwIauBhfxuMvCZRpH",
+        "name": "pdf_1771727342_11.pdf",
+        "folder_path": "uploads",
+        "size": 607389
+      },
+      {
+        "file_id": "1WnhEucqxR30PjrLYIHqXPkwWAHLVRpkK",
+        "name": "pdf_1771727342_10.pdf",
+        "folder_path": "uploads",
+        "size": 384632
+      },
+      {
+        "file_id": "1GxrmGuX_rEMmUp4d0zwKBUAlXqwO2OeQ",
+        "name": "pdf_1771727342_3.pdf",
+        "folder_path": "uploads",
+        "size": 489617
+      },
+      {
+        "file_id": "1b0XauR2YfEDdTLLX1qw8KrfqdEb_g1l5",
+        "name": "pdf_1771727342_1.pdf",
+        "folder_path": "uploads",
+        "size": 202018
+      },
+      {
+        "file_id": "14-34kd9TNBgyEhJxc6Jo4EwxzzEd2JQ9",
+        "name": "pdf_1771727342_4.pdf",
+        "folder_path": "uploads",
+        "size": 235009
+      },
+      {
+        "file_id": "1XDJZBG_HW4aWqqZOB0LSZTMugiIHWDpH",
+        "name": "pdf_1771727342_5.pdf",
+        "folder_path": "uploads",
+        "size": 114834
+      },
+      {
+        "file_id": "1tClfOKHcYTiA6i7f_kTw_m87AFdikCPI",
+        "name": "pdf_1771727342_7.pdf",
+        "folder_path": "uploads",
+        "size": 436460
+      },
+      {
+        "file_id": "1EHzUHCuKd2FM8l_6yBeeog7dFnxXilI8",
+        "name": "pdf_1771727342_6.pdf",
+        "folder_path": "uploads",
+        "size": 176941
+      },
+      {
+        "file_id": "1wtG9CDAMRqiaMobFP3_-hlwfIC2ofi6l",
+        "name": "pdf_1771725981_12.pdf",
+        "folder_path": "uploads",
+        "size": 178693
+      },
+      {
+        "file_id": "1Xdqyy9MD0l-OyNyadvBE22blnnnfOGtq",
+        "name": "pdf_1771727342_8.pdf",
+        "folder_path": "uploads",
+        "size": 840649
+      },
+      {
+        "file_id": "1td-Dn3RN-bWtLeIoNCZPZTwqk7O3VGE_",
+        "name": "pdf_1771725981_10.pdf",
+        "folder_path": "uploads",
+        "size": 384632
+      },
+      {
+        "file_id": "1BWlZgaXiapo6SCPBCVjY1vSt8id_uYYe",
+        "name": "pdf_1771725981_11.pdf",
+        "folder_path": "uploads",
+        "size": 607389
+      },
+      {
+        "file_id": "1Y___O8DabkiNYOZwh5MaoIsHB0WFDhPJ",
+        "name": "pdf_1771727342_9.pdf",
+        "folder_path": "uploads",
+        "size": 578373
+      },
+      {
+        "file_id": "1uhTuBROt5ObFBAcsbsORYFmD64jl0wBT",
+        "name": "test_upload2.pdf",
+        "folder_path": "uploads",
+        "size": 587
+      },
+      {
+        "file_id": "1YQM1wA2uSmGg3nJ8P1Al4uaYM_EVBMhc",
+        "name": "pdf_1771731575_8.pdf",
+        "folder_path": "uploads",
+        "size": 840649
+      },
+      {
+        "file_id": "1L6m8NNkdojgj1UBJO46AAtnS6vtfMz4Y",
+        "name": "pdf_1771731575_9.pdf",
+        "folder_path": "uploads",
+        "size": 578373
+      },
+      {
+        "file_id": "11LqmPAGoCKPvTfqRyBAqvHEQoozamIVc",
+        "name": "verify_test.pdf",
+        "folder_path": "uploads",
+        "size": 587
+      },
+      {
+        "file_id": "1LJbf6SWXgE12esonUjxOXt2wHj_gzcbX",
+        "name": "model_test.pdf",
+        "folder_path": "uploads",
+        "size": 587
+      }
+    ],
+    "KEEP": [
+      {
+        "file_id": "1NNVNNMhIyGTHI7TP34R6qjfASH4f6b8I",
+        "name": "15624ecfc0eafabd339802697198e4aa9b374a9d0ae0083638df098ddf92fa3d.pdf",
+        "folder_path": "pdfs",
+        "size": 871105
+      },
+      {
+        "file_id": "1_jQf7tZ3ejSuIIIUlb2MJCQ0dCtkChWl",
+        "name": "2aea73ed0b70f373b265a4e58209de90357fb9c03d7b2e24e790acde9abd4304.pdf",
+        "folder_path": "pdfs",
+        "size": 20963137
+      },
+      {
+        "file_id": "1L3hgVfqFTtVtLyAg0BHl8ovUsvrcBTy0",
+        "name": "96c0e26e6a28c795de0a45fef6446686ce6e9f9261a7d60677e1250943d05d42.pdf",
+        "folder_path": "pdfs",
+        "size": 14049352
+      },
+      {
+        "file_id": "1cA_URnMjir-Asa50_W8XFBXY1c_znEk0",
+        "name": "34ff14c3feab0bddbc988de7145727b1e4f3409657c86da9ac82de5bef8151c0.pdf",
+        "folder_path": "pdfs",
+        "size": 23555534
+      },
+      {
+        "file_id": "1tLHloicKpA5tu0sLFfICv2sweBrgczKO",
+        "name": "c742fa0a71a5f29573b47d35b035eb7e03610042bbe92f7a48654c268b8b1a3c.pdf",
+        "folder_path": "pdfs",
+        "size": 29381631
+      },
+      {
+        "file_id": "1-KFPTZE7kHLsUn425TLDnONiBctJ923m",
+        "name": "8fcc05d4e84fc9a74a99815e70dae2a50cfb8fecf776b61db18223c020287b3c.pdf",
+        "folder_path": "pdfs",
+        "size": 6033637
+      },
+      {
+        "file_id": "18zZ0Jut4UekEnC57ywzHp66bhz6auPq3",
+        "name": "4a0224b31adf2ab9bd3d1a79c148ff3cf3125cf9a9977fb4846cfcb32dd37a19.pdf",
+        "folder_path": "pdfs",
+        "size": 488224
+      },
+      {
+        "file_id": "14k4gWCqQGAHySF0asgvQsTOIvTsUBg_E",
+        "name": "8e1424249b74735e1335f1f4363d5b9d6186aa54151380b4c832e3c0a269994a.pdf",
+        "folder_path": "pdfs",
+        "size": 1780876
+      },
+      {
+        "file_id": "1yc-uNDsqaJhhflD7-axLYws2BtwAXIQ7",
+        "name": "c6dd9181e4c703679718891d3aeaac5d42e885a5d7b9735a41acd13e3b3d0548.pdf",
+        "folder_path": "pdfs",
+        "size": 645151
+      },
+      {
+        "file_id": "1MNeok1Pz9c6vJ8QDsmDC66N_IXiuJwy1",
+        "name": "9755d3f518f7147b.pdf",
+        "folder_path": "pdfs",
+        "size": 2653149
+      },
+      {
+        "file_id": "1wbDOcPFYhj8cMvMNuOwxRNaajRjdDSON",
+        "name": "d037d55d0a96f8cf11701df10f4eef7dd370271ea9e44043f6f990523de4aa85.pdf",
+        "folder_path": "pdfs",
+        "size": 10582417
+      },
+      {
+        "file_id": "1u7VtpbYqwYstC2_9e4yRjbdRlOdQqW5B",
+        "name": "54ac99516dcf219a.pdf",
+        "folder_path": "pdfs",
+        "size": 926709
+      },
+      {
+        "file_id": "1iUVbXoAm2xPH_ctjLh3eVy7FmIFfiR39",
+        "name": "書籍 2026年3月3日_1772858657_0.pdf",
+        "folder_path": "pdfs",
+        "size": 10582417
+      },
+      {
+        "file_id": "1G-nc-Z-KfBgPJVGU9yCMtDLsnz0lzxt8",
+        "name": "書籍 2026年3月3日_1772858526_0.pdf",
+        "folder_path": "pdfs",
+        "size": 10582417
+      },
+      {
+        "file_id": "1Ud-In2D_g1JaYu0ZBcSIKBcUuGT8ggFz",
+        "name": "書籍 2026年3月3日_1772857377_0.pdf",
+        "folder_path": "pdfs",
+        "size": 10582417
+      },
+      {
+        "file_id": "1P4_iGutbSXdpPJUc9A3t9Lv1mqb_Erwa",
+        "name": "書籍 2026年3月3日_1772856249_0.pdf",
+        "folder_path": "pdfs",
+        "size": 10582417
+      },
+      {
+        "file_id": "1q2TraKtXSYjIZZcjxZAqGB6Xkoxu-nee",
+        "name": "書籍 2026年3月3日 (2)_1772855461_1.pdf",
+        "folder_path": "pdfs",
+        "size": 7351496
+      },
+      {
+        "file_id": "1QXWthg7myZfE6jXUrNfMS1qYCTyVxQVX",
+        "name": "書籍 2026年3月3日 (1)_1772855461_0.pdf",
+        "folder_path": "pdfs",
+        "size": 20700576
+      },
+      {
+        "file_id": "1OCIBx3xwvQ0D-9_2oO8HGe2Tavsn-ux-",
+        "name": "書籍 2026年3月3日 (2)_1772856031_0.pdf",
+        "folder_path": "pdfs",
+        "size": 7351496
+      },
+      {
+        "file_id": "1Dqff99lqeB_T-581JBd5xc5WWJ_2doAT",
+        "name": "書籍 2026年3月3日 (1)_1772855334_0.pdf",
+        "folder_path": "pdfs",
+        "size": 20700576
+      },
+      {
+        "file_id": "1jn8rYA8TeH1vfAK86_8M62IMhqBWROgo",
+        "name": "Layer A スケール問題：論文調査と設計提案.pdf",
+        "folder_path": "pdfs",
+        "size": 764718
+      },
+      {
+        "file_id": "1lopIZldW3S3J9fmNZWYQcdPd8jiop24n",
+        "name": "コードレビュー統合版（全セクション）.pdf",
+        "folder_path": "pdfs",
+        "size": 1275354
+      },
+      {
+        "file_id": "1xhhbM9AFRW3uu7H81ZT-hqHmG00yAKLq",
+        "name": "Antigravity 最効率の指示術 - PM_CM視点のエージェント操縦ガイド.pdf",
+        "folder_path": "pdfs",
+        "size": 1193326
+      },
+      {
+        "file_id": "1MUmzBZhSBLoj9hrQxA-2nQI-6UC6cvcG",
+        "name": "test_e2e_input.pdf",
+        "folder_path": "pdfs",
+        "size": 13264
+      },
+      {
+        "file_id": "1fwKnD32SESKk7gs8rYnOgzULAU-VPkE4",
+        "name": "書籍 2026年3月3日 (1).pdf",
+        "folder_path": "pdfs",
+        "size": 431
+      },
+      {
+        "file_id": "1eRatYc5Z4titDIgaNrSNoZf4oDwoqnNI",
+        "name": "書籍 2026年3月3日.pdf",
+        "folder_path": "pdfs",
+        "size": 10582417
+      },
+      {
+        "file_id": "1_6z16imgYPCxCPosAbuKkkeSBcXJ8rVF",
+        "name": "テスト建築仕様書.pdf",
+        "folder_path": "pdfs",
+        "size": 431
+      },
+      {
+        "file_id": "1uGsD9LOjD4m4U0CoPyjUzcWC6aAc2PGc",
+        "name": "官庁施設の総合耐震診断・改修基準（平成8年制定）.pdf",
+        "folder_path": "pdfs",
+        "size": 157736
+      },
+      {
+        "file_id": "1JEmylzX88ntwtLYAkm9NBiHaws9O1z3r",
+        "name": "test_e2e_input.pdf",
+        "folder_path": "pdfs",
+        "size": 13264
+      },
+      {
+        "file_id": "1VO35p0EC--57EvpdoQrG8Cv3yOD1TLwS",
+        "name": "書籍 2026年3月3日 (2).pdf",
+        "folder_path": "pdfs",
+        "size": 7351496
+      },
+      {
+        "file_id": "16pI1Mq-1I0d4Oz38ioQ-Xzorr73aG4Tq",
+        "name": "test_real.pdf",
+        "folder_path": "pdfs",
+        "size": 431
+      },
+      {
+        "file_id": "1GMssa_rYK4_vp58J_PxOHRPbx4p3gb6k",
+        "name": "基本設計段階チェックリスト（設計者／CMr）S造研修所.pdf",
+        "folder_path": "10_参照PDF/4_設計マネジメント/4-1_設計プロセス管理",
+        "size": 941293
+      },
+      {
+        "file_id": "1Zd7y5hvBg7vYy1eSUeMWbMhFK_oFxN9U",
+        "name": "test_valid.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 14
+      },
+      {
+        "file_id": "1_3QRbvOX4P0t9tgHTbLwRXNQGnTT31Ao",
+        "name": ".chunk_10_pdf_1771725981_8.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 416177
+      },
+      {
+        "file_id": "1faqGKN15w5mMLFPB7X-WDNgmAMFgqOVG",
+        "name": ".chunk_10_pdf_1771725981_10.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 201325
+      },
+      {
+        "file_id": "1qsMHOQewIOktA4zy1G6iMLA-RzAJU5oD",
+        "name": ".chunk_8_pdf_1771725981_8.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 416451
+      },
+      {
+        "file_id": "1cbSXRAfNPCfphGje1ox1NGbhgafnq34t",
+        "name": ".chunk_10_pdf_1771725981_11.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 264236
+      },
+      {
+        "file_id": "1T3n_tE2H3BsW11y67CnGG6xvYRtOKmZk",
+        "name": ".chunk_10_pdf_1771725981_9.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 406778
+      },
+      {
+        "file_id": "1s0YEsw7fgSMQkx77lGW-2OzfK41aSW41",
+        "name": ".chunk_16_pdf_1771725981_11.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 265236
+      },
+      {
+        "file_id": "1eVxSl1CGuzws4cGCJMlQmklstQb9vJ__",
+        "name": "pdf_1771731575_8.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 840649
+      },
+      {
+        "file_id": "1ZfRpnWIavHdsUvlZCbpxLl1MZVYO2f92",
+        "name": "pdf_1771731575_9.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 578373
+      },
+      {
+        "file_id": "1pdNoOrq3lMbPJ-BpGslKhhiShfTDemre",
+        "name": ".chunk_24_pdf_1771725981_11.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 265585
+      },
+      {
+        "file_id": "1Zm-K2MqTxAtgUGpKhHC--Arf0kwKtaU4",
+        "name": ".chunk_14_pdf_1771725981_10.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 189429
+      },
+      {
+        "file_id": "1t3aiXJVe0Z4Hz3o3hFId3YbZPI0ZcgaH",
+        "name": ".chunk_14_pdf_1771725981_9.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 474492
+      },
+      {
+        "file_id": "1Zz_MDAihyTb-KCuJ_lWwETn2Dn8Vfd8G",
+        "name": "基本設計段階チェックリスト（設計者／CMr）S造研修所.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 941293
+      },
+      {
+        "file_id": "148KiBimh8wvcO5r00Dz1HbVJDON-xg1-",
+        "name": "ナレッジベース②：構造編 - S造の部材・荷重・耐震の判断基準.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 517072
+      },
+      {
+        "file_id": "1EMxPKwLCb3tnpCfknU5IOno0A8Mc5Eo1",
+        "name": ".chunk_14_pdf_1771725981_8.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 416298
+      },
+      {
+        "file_id": "1g7pep7-icJUbyoN-m-oMSC9fMP7nxssR",
+        "name": ".chunk_14_pdf_1771725981_11.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 265556
+      },
+      {
+        "file_id": "1JmJLyMaAq5i1b6qf6GIwaLL9WFJmB1gi",
+        "name": ".chunk_26_pdf_1771725981_11.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 265746
+      },
+      {
+        "file_id": "1UuURqKvmLnsB8PLcMrAi_63ELyYmjyqg",
+        "name": "verify_test.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 587
+      },
+      {
+        "file_id": "14DF93Sl5cVvoDc9AP6BGuYJvMKWxcx8S",
+        "name": "model_test.pdf",
+        "folder_path": "10_参照PDF/uploads",
+        "size": 587
+      },
+      {
+        "file_id": "1rpM4zSNKgsL0ah34RdmUqmFkVrlPVDdR",
+        "name": "pdf_1771747688_9.pdf",
+        "folder_path": "10_参照PDF/3-4_その他法令",
+        "size": 1099568
+      },
+      {
+        "file_id": "1BGdds4S8cV6N3yZF3DIB9kmXGop6NmT3",
+        "name": "基本設計段階チェックリスト（設計者／CMr）S造研修所.pdf",
+        "folder_path": "10_参照PDF/4_設計マネジメント/4-1_設計プロセス管理",
+        "size": 941293
+      },
+      {
+        "file_id": "11yatH2uKSgEiNzkK8NRigTr11ze9vR3J",
+        "name": "-_Google_.pdf",
+        "folder_path": "10_参照PDF/3-3_消防法",
+        "size": 1184474
+      },
+      {
+        "file_id": "1jayd6_xOQFF7jW_ntjUcspfro-qMGuoh",
+        "name": "e-Gov__1771747688_7.pdf",
+        "folder_path": "10_参照PDF/3-3_消防法",
+        "size": 173922
+      },
+      {
+        "file_id": "1Tf2KDadm4km6v9BYJm2idCLZE80ODh_F",
+        "name": "e-Gov__1771747688_10.pdf",
+        "folder_path": "10_参照PDF/3-3_消防法",
+        "size": 5908362
+      },
+      {
+        "file_id": "11-7sHfcwuiDo61jg2lWgMCXmqC40ofgO",
+        "name": "e-Gov_.pdf",
+        "folder_path": "10_参照PDF/3-3_消防法",
+        "size": 5078646
+      },
+      {
+        "file_id": "1YexXPD7U2fvNFT7v_sFpY6uAHG10y0RV",
+        "name": "e-Gov__1771747688_8.pdf",
+        "folder_path": "10_参照PDF/3-1_建築基準法（単体規定）",
+        "size": 5022650
+      },
+      {
+        "file_id": "1iOiRPpQajeZ_YHf0r1lKxd6bz7w2_-tm",
+        "name": "pdf_1771725981_4.pdf",
+        "folder_path": "03_技術基準",
+        "size": 235009
+      },
+      {
+        "file_id": "1Z6WuNfz4rpdeCIIAXF7RyiVwPLDUTZvo",
+        "name": "pdf_1771725981_1.pdf",
+        "folder_path": "03_技術基準",
+        "size": 202018
+      },
+      {
+        "file_id": "1i93WoXVAZDM5YO6OQLbnROKqxmopCT4f",
+        "name": "pdf_1771725981_3.pdf",
+        "folder_path": "03_技術基準",
+        "size": 489617
+      }
+    ]
+  }
+}

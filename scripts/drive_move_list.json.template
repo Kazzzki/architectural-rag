@@ -1,0 +1,12 @@
+[
+  {
+    "file_id": "EXAMPLE_ID_1",
+    "name": "example_catalog.pdf",
+    "destination_folder": "01_カタログ"
+  },
+  {
+    "file_id": "EXAMPLE_ID_2",
+    "name": "skip_this_one.pdf",
+    "destination_folder": "SKIP"
+  }
+]

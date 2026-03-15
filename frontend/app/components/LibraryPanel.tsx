@@ -224,12 +224,20 @@ export default function LibraryPanel() {
             });
 
             if (res.ok) {
+                const data = await res.json();
                 setSelectedPaths(new Set());
                 fetchTree();
                 fetchStats();
+                if (data.errors && data.errors.length > 0) {
+                    alert(`一部のファイルの削除に失敗しました:\n${data.errors.join('\n')}`);
+                }
+            } else {
+                const data = await res.json().catch(() => ({}));
+                alert(`削除に失敗しました: ${data.detail || res.statusText}`);
             }
         } catch (error) {
             console.error('Bulk delete error:', error);
+            alert('削除中にエラーが発生しました');
         } finally {
             setIsDeleting(false);
         }
@@ -429,7 +437,7 @@ export default function LibraryPanel() {
                                 >
                                     <Download className="w-4 h-4" /> ダウンロード
                                 </a>
-                                <button 
+                                <button
                                     onClick={async () => {
                                         if (confirm('削除しますか？')) {
                                             try {
@@ -439,11 +447,20 @@ export default function LibraryPanel() {
                                                     body: JSON.stringify({ file_path: detailFile.path })
                                                 });
                                                 if (res.ok) {
+                                                    const data = await res.json();
+                                                    if (data.errors && data.errors.length > 0) {
+                                                        alert(`削除完了（一部エラー）:\n${data.errors.join('\n')}`);
+                                                    }
                                                     setDetailFile(null);
                                                     fetchTree();
                                                     fetchStats();
+                                                } else {
+                                                    const data = await res.json().catch(() => ({}));
+                                                    alert(`削除に失敗しました: ${data.detail || res.statusText}`);
                                                 }
-                                            } catch (e) {}
+                                            } catch (e) {
+                                                alert('削除中にエラーが発生しました');
+                                            }
                                         }
                                     }}
                                     className="flex items-center justify-center gap-2 w-full py-2 bg-white text-red-600 hover:bg-red-50 rounded-md text-xs font-bold transition-colors border border-red-200 mt-2"

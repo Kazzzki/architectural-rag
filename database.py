@@ -444,6 +444,57 @@ class ProjectIssue(Base):
     )
 
 
+# ===== リサーチ自動化システム =====
+
+class ResearchJob(Base):
+    """技術リサーチジョブの管理テーブル"""
+    __tablename__ = 'research_jobs'
+
+    id               = Column(String,  primary_key=True)          # R-YYYYMMDD-NNN
+    question         = Column(Text,    nullable=False)
+    mode             = Column(String,  default='auto')             # auto / manual
+    status           = Column(String,  default='accepted')
+    phase_current    = Column(Integer, default=0)
+    phase_total      = Column(Integer, default=4)
+    phase_name       = Column(Text)
+    progress_percent = Column(Integer, default=0)
+    detail           = Column(Text)
+    sources_found    = Column(Integer, default=0)
+    errors           = Column(Text,    default='[]')               # JSON配列文字列
+    plan_json        = Column(Text)
+    report_markdown  = Column(Text)
+    summary          = Column(Text)
+    domain           = Column(String)
+    created_at       = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at       = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    completed_at     = Column(DateTime)
+
+    sources = relationship('ResearchSource', back_populates='job', cascade='all, delete-orphan')
+
+
+class ResearchSource(Base):
+    """リサーチで収集したソース情報"""
+    __tablename__ = 'research_sources'
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    research_id   = Column(String,  ForeignKey('research_jobs.id'), nullable=False)
+    title         = Column(Text)
+    url           = Column(Text)
+    source_type   = Column(String)   # gov_pdf / paper / guideline / html / catalog
+    trust_score   = Column(Float)
+    category      = Column(String)   # legal / design_guideline / manufacturer / case_study
+    summary       = Column(Text)
+    markdown_path = Column(Text)
+    raw_path      = Column(Text)
+    created_at    = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    job = relationship('ResearchJob', back_populates='sources')
+
+    __table_args__ = (
+        Index('idx_research_sources_research_id', 'research_id'),
+    )
+
+
 # DB接続設定
 engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -511,6 +562,34 @@ def _run_migrations():
         "ALTER TABLE personal_contexts ADD COLUMN status VARCHAR NOT NULL DEFAULT 'approved'",
         # T-5-A: documents テーブルへの drive_file_id 列追加
         "ALTER TABLE documents ADD COLUMN drive_file_id TEXT",
+        # 課題因果グラフ: issues テーブル新規作成
+        """CREATE TABLE IF NOT EXISTS issues (
+            id           TEXT PRIMARY KEY,
+            project_name TEXT NOT NULL,
+            title        TEXT NOT NULL,
+            raw_input    TEXT NOT NULL,
+            category     TEXT NOT NULL,
+            priority     TEXT NOT NULL DEFAULT 'normal',
+            status       TEXT NOT NULL DEFAULT '発生中',
+            description  TEXT,
+            cause        TEXT,
+            impact       TEXT,
+            action_next  TEXT,
+            is_collapsed INTEGER NOT NULL DEFAULT 0,
+            pos_x        REAL NOT NULL DEFAULT 0.0,
+            pos_y        REAL NOT NULL DEFAULT 0.0,
+            template_id  TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        )""",
+        # 課題因果グラフ: issue_edges テーブル新規作成
+        """CREATE TABLE IF NOT EXISTS issue_edges (
+            id         TEXT PRIMARY KEY,
+            from_id    TEXT NOT NULL,
+            to_id      TEXT NOT NULL,
+            confirmed  INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )""",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -791,6 +870,137 @@ def migrate_from_json():
         "ocr_records": migrated_ocr,
         "index_records": migrated_index,
     }
+
+
+# ===== リサーチジョブ CRUD =====
+
+def generate_research_id() -> str:
+    """当日の連番で R-YYYYMMDD-NNN 形式のIDを採番する"""
+    today = datetime.now(timezone.utc).strftime('%Y%m%d')
+    session = SessionLocal()
+    try:
+        count = session.query(ResearchJob).filter(
+            ResearchJob.id.like(f'R-{today}-%')
+        ).count()
+        return f'R-{today}-{count + 1:03d}'
+    finally:
+        session.close()
+
+
+def create_research_job(question: str, mode: str = 'auto') -> str:
+    """リサーチジョブをINSERTして生成したIDを返す"""
+    session = SessionLocal()
+    try:
+        research_id = generate_research_id()
+        now = datetime.now(timezone.utc)
+        job = ResearchJob(
+            id=research_id,
+            question=question,
+            mode=mode,
+            status='accepted',
+            phase_current=0,
+            phase_total=4,
+            progress_percent=0,
+            sources_found=0,
+            errors='[]',
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(job)
+        session.commit()
+        return research_id
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def update_research_job(id: str, **kwargs) -> None:
+    """指定キーワード引数で部分UPDATE（updated_atは自動設定）"""
+    session = SessionLocal()
+    try:
+        kwargs['updated_at'] = datetime.now(timezone.utc)
+        session.query(ResearchJob).filter(ResearchJob.id == id).update(kwargs)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_research_job(id: str) -> Optional[Dict]:
+    """単一ジョブをdictで返す（存在しない場合はNone）"""
+    session = SessionLocal()
+    try:
+        job = session.query(ResearchJob).filter(ResearchJob.id == id).first()
+        if job is None:
+            return None
+        return {c.name: getattr(job, c.name) for c in ResearchJob.__table__.columns}
+    finally:
+        session.close()
+
+
+def list_research_jobs(status: str = 'all', limit: int = 20, offset: int = 0) -> list:
+    """ジョブ一覧をdictのリストで返す（status='all'の場合はフィルタなし）"""
+    session = SessionLocal()
+    try:
+        q = session.query(ResearchJob)
+        if status != 'all':
+            q = q.filter(ResearchJob.status == status)
+        jobs = q.order_by(ResearchJob.created_at.desc()).limit(limit).offset(offset).all()
+        return [{c.name: getattr(j, c.name) for c in ResearchJob.__table__.columns} for j in jobs]
+    finally:
+        session.close()
+
+
+def add_research_source(research_id: str, source_data: dict) -> int:
+    """ソースをINSERTして生成されたIDを返す"""
+    session = SessionLocal()
+    try:
+        allowed = {c.name for c in ResearchSource.__table__.columns} - {'id', 'research_id', 'created_at'}
+        filtered = {k: v for k, v in source_data.items() if k in allowed}
+        source = ResearchSource(
+            research_id=research_id,
+            created_at=datetime.now(timezone.utc),
+            **filtered,
+        )
+        session.add(source)
+        session.commit()
+        session.refresh(source)
+        return source.id
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_research_sources(research_id: str) -> list:
+    """ジョブに紐づくソース一覧をdictのリストで返す"""
+    session = SessionLocal()
+    try:
+        sources = session.query(ResearchSource).filter(
+            ResearchSource.research_id == research_id
+        ).all()
+        return [{c.name: getattr(s, c.name) for c in ResearchSource.__table__.columns} for s in sources]
+    finally:
+        session.close()
+
+
+def delete_research_job(id: str) -> None:
+    """ジョブとソースをカスケード削除する"""
+    session = SessionLocal()
+    try:
+        session.query(ResearchSource).filter(ResearchSource.research_id == id).delete()
+        session.query(ResearchJob).filter(ResearchJob.id == id).delete()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 if __name__ == "__main__":

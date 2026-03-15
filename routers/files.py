@@ -236,58 +236,30 @@ async def bulk_delete_files(request: BulkDeleteRequest):
     """複数ファイルを一括削除"""
     try:
         from config import KNOWLEDGE_BASE_DIR
-        from metadata_repository import MetadataRepository
-        repo = MetadataRepository()
+        from indexer import delete_file_completely
         deleted_count = 0
         errors = []
-        
+
         for file_path in request.file_paths:
             try:
-                # 実際のパスからversion_idを特定するのは難しいため、
-                # まず原本を探す
-                from database import get_session, Artifact as DbArtifact
-                session = get_session()
-                artifact = session.query(DbArtifact).filter(DbArtifact.storage_path == str(Path(KNOWLEDGE_BASE_DIR) / file_path)).first()
-                if artifact:
-                    from indexer import delete_file_completely
-                    result = delete_file_completely(str(file_path))
-                    if result["errors"]:
-                        logger.warning(f"Delete errors for {file_path}: {result['errors']}")
-                    deleted_count += 1
-                session.close()
                 target_path = Path(KNOWLEDGE_BASE_DIR) / file_path
                 if not target_path.resolve().is_relative_to(Path(KNOWLEDGE_BASE_DIR).resolve()):
                     errors.append(f"{file_path}: Access denied")
                     continue
-                    
-                if target_path.exists():
-                    files_to_delete = [target_path]
-                    if target_path.suffix.lower() == '.md':
-                        pdf_path = target_path.with_suffix('.pdf')
-                        if pdf_path.exists():
-                            files_to_delete.append(pdf_path)
-                    elif target_path.suffix.lower() == '.pdf':
-                        md_path = target_path.with_suffix('.md')
-                        if md_path.exists():
-                            files_to_delete.append(md_path)
-                            
-                    for f in files_to_delete:
-                        if f.exists():
-                            f.unlink()
-                
-                from indexer import delete_file_completely
+
                 result = delete_file_completely(str(file_path))
                 if result["errors"]:
                     logger.warning(f"Delete errors for {file_path}: {result['errors']}")
                 deleted_count += 1
-                
+
             except Exception as e:
                 logger.error(f"Failed to delete {file_path}: {e}", exc_info=True)
                 errors.append(f"{file_path}: {str(e)}")
-                
+
+        status = "success" if not errors else "partial"
         return {
-            "status": "success", 
-            "message": f"{deleted_count} files processed",
+            "status": status,
+            "message": f"{deleted_count} files deleted",
             "errors": errors
         }
     except Exception as e:

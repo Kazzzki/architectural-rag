@@ -220,6 +220,12 @@ app.include_router(files.router)
 app.include_router(personal_context.router)
 app.include_router(analyze.router)
 app.include_router(projects.router)
+from routers.research import router as research_router
+app.include_router(research_router)
+from routers import issues as issues_module
+app.include_router(issues_module.router)
+from routers import transcribe as transcribe_module
+app.include_router(transcribe_module.router)
 
 @app.get("/")
 async def root():

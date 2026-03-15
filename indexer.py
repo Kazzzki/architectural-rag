@@ -445,19 +445,36 @@ def _upsert_doc_index(rel_path: str, file_info: Dict[str, Any], chunk_count: int
 
 def _delete_doc_index(rel_path: str) -> bool:
     """DBからインデックス情報を削除"""
-    from database import get_session, LegacyDocument, Document as DbDocument
+    from database import get_session, LegacyDocument, Artifact as DbArtifact, Upload as DbUpload, DocumentVersion as DbDocumentVersion
+    from config import KNOWLEDGE_BASE_DIR
     session = get_session()
     try:
-        # Legacy
+        # LegacyDocument: rel_pathで削除
         doc = session.query(LegacyDocument).filter(LegacyDocument.file_path == rel_path).first()
         if doc:
             session.delete(doc)
-        
-        # New
-        new_doc = session.query(DbDocument).filter(DbDocument.file_path == rel_path).first()
-        if new_doc:
-            session.delete(new_doc)
-            
+
+        # Artifact -> DocumentVersion -> Upload の連鎖削除
+        abs_path = str(Path(KNOWLEDGE_BASE_DIR) / rel_path)
+        artifacts = session.query(DbArtifact).filter(DbArtifact.storage_path == abs_path).all()
+        version_ids = set()
+        for artifact in artifacts:
+            version_ids.add(artifact.version_id)
+            session.delete(artifact)
+
+        for version_id in version_ids:
+            # 同じversion_idの他のArtifactが残っていなければVersionとUploadも削除
+            remaining = session.query(DbArtifact).filter(
+                DbArtifact.version_id == version_id
+            ).count()
+            if remaining == 0:
+                uploads = session.query(DbUpload).filter(DbUpload.version_id == version_id).all()
+                for upload in uploads:
+                    session.delete(upload)
+                version = session.query(DbDocumentVersion).filter(DbDocumentVersion.id == version_id).first()
+                if version:
+                    session.delete(version)
+
         session.commit()
         return True
     except Exception as e:
@@ -835,20 +852,7 @@ def delete_file_completely(file_path: str) -> dict:
         results["errors"].append(f"data/pdfs/削除エラー: {e}")
         logger.warning(f"[Delete] data/pdfs/削除エラー（続行）: {e}")
 
-    # --- 5. file_store (files テーブル) 削除 ---
-    try:
-        import file_store as fs
-        # current_path で検索（PDF・MD両方試みる）
-        for target_path in [str(pdf_path), str(md_path)]:
-            rec = fs.get_file_by_path(target_path)
-            if rec:
-                fs.delete_file(rec["id"])
-                results["file_store"] = True
-                logger.info(f"[Delete] file_store削除: {rec['id']}")
-                break
-    except Exception as e:
-        results["errors"].append(f"file_store削除エラー: {e}")
-        logger.warning(f"[Delete] file_store削除エラー（続行）: {e}")
+    # --- 5. (file_store は廃止済みのため削除ステップをスキップ) ---
 
     # --- 6. Document テーブル（SQLite）削除 ---
     try:

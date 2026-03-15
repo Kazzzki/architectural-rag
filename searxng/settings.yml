@@ -1,0 +1,39 @@
+use_default_settings: true
+
+server:
+  secret_key: "aB3kR7mN2pQ9wX1yZ5cF8hL4vT6jU0eI3oD2sG7nW4bE9rY6tP1mK8qH5iA0uC3"
+  limiter: false
+  image_proxy: false
+  port: 8080
+  bind_address: "0.0.0.0"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "ja-JP"
+  formats:
+    - html
+    - json
+
+engines:
+  - name: google
+    engine: google
+    language: ja
+    region: ja-JP
+    disabled: false
+
+  - name: bing
+    engine: bing
+    language: ja
+    region: ja-JP
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    language: ja
+    region: ja-jp
+    disabled: false
+
+ui:
+  default_theme: simple
+  default_locale: ja

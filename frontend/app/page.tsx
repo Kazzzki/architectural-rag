@@ -2,21 +2,21 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
-import { 
-    Send, 
-    Loader2, 
-    Plus, 
-    BookOpen, 
-    MessageSquare, 
-    ExternalLink, 
-    FileText, 
+import {
+    Send,
+    Loader2,
+    Plus,
+    BookOpen,
+    MessageSquare,
+    ExternalLink,
+    FileText,
     Library as LibraryIcon,
     ChevronDown,
     Building2,
     Sparkles,
     Database,
     Globe,
-    X
+    X,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { 
@@ -33,7 +33,6 @@ const PDFViewer = dynamic(() => import('./components/PDFViewer'), { ssr: false }
 import Library from './components/Library';
 import FileUpload from './components/FileUpload';
 import LayerPanel from './components/LayerPanel';
-import Link from 'next/link';
 import NavRail, { NavItemId } from './components/NavRail';
 import SecondaryPanel from './components/SecondaryPanel';
 import LibraryPanel from './components/LibraryPanel';
@@ -146,8 +145,25 @@ export default function Home() {
     const [error, setError] = useState<string | null>(null); // #62: error state を明示的に追加
     
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const lastRequestIdRef = useRef<number>(0);
+
+    const [isUserScrolled, setIsUserScrolled] = useState(false);
+
+    const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+        messagesEndRef.current?.scrollIntoView({ behavior });
+        setIsUserScrolled(false);
+    };
+
+    const handleScroll = () => {
+        if (scrollContainerRef.current) {
+            const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+            // 最下部から100px以上離れたら isUserScrolled を true に
+            const isAtBottom = scrollHeight - scrollTop <= clientHeight + 100;
+            setIsUserScrolled(!isAtBottom);
+        }
+    };
 
     // #63: unmount 時の cleanup effect
     useEffect(() => {
@@ -183,7 +199,9 @@ export default function Home() {
 
     // Scroll to bottom
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (!isUserScrolled) {
+            scrollToBottom('smooth');
+        }
     }, [messages]);
 
     const fetchSessions = async () => {
@@ -251,6 +269,9 @@ export default function Home() {
         setInput('');
         setError(null);
         setIsLoading(true);
+        setIsUserScrolled(false);
+        // 強制的に最下部へ
+        setTimeout(() => scrollToBottom('auto'), 0);
         
         // Add messages to UI
         const historySnapshot = [...messages];
@@ -371,7 +392,9 @@ export default function Home() {
 
     return (
         <div className="flex h-screen bg-[var(--background)] text-[var(--foreground)] overflow-hidden font-sans">
-            <NavRail activeItem={isPanelOpen ? activeNavItem : null} onSelect={handleNavSelect} />
+            <div className="flex-shrink-0">
+                <NavRail activeItem={isPanelOpen ? activeNavItem : null} onSelect={handleNavSelect} />
+            </div>
             <SecondaryPanel 
                 activeItem={activeNavItem} 
                 isOpen={isPanelOpen} 
@@ -445,7 +468,7 @@ export default function Home() {
             <main className="flex-1 flex min-w-0 bg-[#fbfbfb] overflow-hidden">
                 <div className="flex-1 flex min-w-0 overflow-hidden">
                     {/* Chat Area */}
-                    <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${rightPanel ? 'lg:w-1/2' : 'w-full'}`}>
+                    <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 relative ${rightPanel ? 'lg:w-1/2' : 'w-full'}`}>
                         {/* Chat Header */}
                             <div className="px-6 py-3 bg-white border-b border-[var(--border)] flex items-center justify-between shrink-0">
                                 <div className="flex items-center gap-2">
@@ -470,103 +493,120 @@ export default function Home() {
                                     </button>
                                 </div>
                             </div>
-                            {/* Messages Container */}
-                            <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
-                                {messages.length === 0 && (
-                                    <div className="h-full flex flex-col items-center justify-center text-[var(--muted)] opacity-60">
-                                        <Building2 className="w-16 h-16 mb-4" />
-                                        <h2 className="text-xl font-semibold mb-2">建築設計ナレッジ検索</h2>
-                                        <p className="max-w-md text-center text-sm">設計基準やカタログを横断的に検索し、高度な技術回答を生成します。</p>
-                                    </div>
-                                )}
+                            {/* Messages Container Area */}
+                            <div className="flex-1 relative min-h-0">
+                                <div 
+                                    ref={scrollContainerRef}
+                                    onScroll={handleScroll}
+                                    className="absolute inset-0 overflow-y-auto p-4 space-y-6 custom-scrollbar"
+                                >
+                                    {messages.length === 0 && (
+                                        <div className="h-full flex flex-col items-center justify-center text-[var(--muted)] opacity-60">
+                                            <Building2 className="w-16 h-16 mb-4" />
+                                            <h2 className="text-xl font-semibold mb-2">建築設計ナレッジ検索</h2>
+                                            <p className="max-w-md text-center text-sm">設計基準やカタログを横断的に検索し、高度な技術回答を生成します。</p>
+                                        </div>
+                                    )}
 
-                                {messages.map((msg, i) => (
-                                    <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
-                                        <div className={`max-w-[85%] rounded-2xl p-4 shadow-sm ${msg.role === 'user' ? 'bg-primary-600 text-white rounded-tr-none' : 'bg-white border border-[var(--border)] rounded-tl-none'}`}>
-                                            <div className="markdown-content text-sm leading-relaxed overflow-x-auto">
-                                                <ReactMarkdown
-                                                    components={{
-                                                        p: ({ children }) => {
-                                                            const currentSources = msg.sources || [];
-                                                            const transformed = React.Children.map(children, (child) => {
-                                                                if (typeof child === 'string') {
-                                                                    return transformCitations(
-                                                                        child,
-                                                                        currentSources,
-                                                                        (url, page) => {
-                                                                              setPdfUrl(url);
-                                                                              setPdfInitialPage(page);
-                                                                              setRightPanel('pdf');
-                                                                          }
-                                                                    );
-                                                                }
-                                                                return child;
-                                                            });
-                                                            return <p>{transformed}</p>;
-                                                        },
-                                                    }}
-                                                >{msg.content}</ReactMarkdown>
-                                            </div>
+                                    {messages.map((msg, i) => (
+                                        <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
+                                            <div className={`max-w-[85%] rounded-2xl p-4 shadow-sm ${msg.role === 'user' ? 'bg-primary-600 text-white rounded-tr-none' : 'bg-white border border-[var(--border)] rounded-tl-none'}`}>
+                                                <div className="markdown-content text-sm leading-relaxed overflow-x-auto">
+                                                    <ReactMarkdown
+                                                        components={{
+                                                            p: ({ children }) => {
+                                                                const currentSources = msg.sources || [];
+                                                                const transformed = React.Children.map(children, (child) => {
+                                                                    if (typeof child === 'string') {
+                                                                        return transformCitations(
+                                                                            child,
+                                                                            currentSources,
+                                                                            (url, page) => {
+                                                                                  setPdfUrl(url);
+                                                                                  setPdfInitialPage(page);
+                                                                                  setRightPanel('pdf');
+                                                                              }
+                                                                        );
+                                                                    }
+                                                                    return child;
+                                                                });
+                                                                return <p>{transformed}</p>;
+                                                            },
+                                                        }}
+                                                    >{msg.content}</ReactMarkdown>
+                                                </div>
 
-                                            {/* RAG Sources */}
-                                            {msg.sources && msg.sources.length > 0 && (
-                                                <div className="mt-4 pt-3 border-t border-[var(--border)]">
-                                                    <p className="text-[10px] font-bold text-[var(--muted)] mb-2 uppercase tracking-tighter">参照資料</p>
-                                                    <div className="flex flex-wrap gap-2">
-                                                        {msg.sources.map((src, j) => (
-                                                            <SourceCard 
-                                                                key={j} 
-                                                                src={src} 
-                                                                onPageClick={(url, page) => {
-                                                                      setPdfUrl(url);
-                                                                      setPdfInitialPage(page);
-                                                                      setRightPanel('pdf');
-                                                                  }} 
-                                                            />
-                                                        ))}
+                                                {/* RAG Sources */}
+                                                {msg.sources && msg.sources.length > 0 && (
+                                                    <div className="mt-4 pt-3 border-t border-[var(--border)]">
+                                                        <p className="text-[10px] font-bold text-[var(--muted)] mb-2 uppercase tracking-tighter">参照資料</p>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {msg.sources.map((src, j) => (
+                                                                <SourceCard 
+                                                                    key={j} 
+                                                                    src={src} 
+                                                                    onPageClick={(url, page) => {
+                                                                          setPdfUrl(url);
+                                                                          setPdfInitialPage(page);
+                                                                          setRightPanel('pdf');
+                                                                      }} 
+                                                                />
+                                                            ))}
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            )}
+                                                )}
 
-                                            {/* Web Sources */}
-                                            {msg.webSources && msg.webSources.length > 0 && (
-                                                <div className="mt-4 pt-3 border-t border-[var(--border)]">                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                                         {msg.webSources.map((ws, j) => (
-                                                             <a 
-                                                                 key={j} 
-                                                                 href={ws.url} 
-                                                                 target="_blank" 
-                                                                 rel="noopener noreferrer"
-                                                                 className="flex items-center gap-2.5 p-2 rounded-xl bg-blue-50/50 border border-blue-100/50 text-[11px] text-blue-700 hover:bg-blue-100 hover:border-blue-200 transition-all group shadow-sm active:scale-[0.98]"
-                                                             >
-                                                                 <div className="p-1.5 rounded-lg bg-blue-100/50 group-hover:bg-blue-200/50 transition-colors">
-                                                                     <Globe className="w-3.5 h-3.5 flex-shrink-0 text-blue-600" />
-                                                                 </div>
-                                                                 <div className="flex-1 min-w-0">
-                                                                     <p className="font-semibold truncate leading-tight">{ws.title || ws.url}</p>
-                                                                     <p className="text-[10px] text-blue-500/80 truncate mt-0.5">{new URL(ws.url).hostname}</p>
-                                                                 </div>
-                                                                 <ExternalLink className="w-2.5 h-2.5 opacity-40 group-hover:opacity-100 flex-shrink-0 transition-opacity" />
-                                                             </a>
-                                                         ))}
-                                                     </div>
-                                                </div>
-                                            )}
+                                                {/* Web Sources */}
+                                                {msg.webSources && msg.webSources.length > 0 && (
+                                                    <div className="mt-4 pt-3 border-t border-[var(--border)]">                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                             {msg.webSources.map((ws, j) => (
+                                                                 <a 
+                                                                     key={j} 
+                                                                     href={ws.url} 
+                                                                     target="_blank" 
+                                                                     rel="noopener noreferrer"
+                                                                     className="flex items-center gap-2.5 p-2 rounded-xl bg-blue-50/50 border border-blue-100/50 text-[11px] text-blue-700 hover:bg-blue-100 hover:border-blue-200 transition-all group shadow-sm active:scale-[0.98]"
+                                                                 >
+                                                                     <div className="p-1.5 rounded-lg bg-blue-100/50 group-hover:bg-blue-200/50 transition-colors">
+                                                                         <Globe className="w-3.5 h-3.5 flex-shrink-0 text-blue-600" />
+                                                                     </div>
+                                                                     <div className="flex-1 min-w-0">
+                                                                         <p className="font-semibold truncate leading-tight">{ws.title || ws.url}</p>
+                                                                         <p className="text-[10px] text-blue-500/80 truncate mt-0.5">{new URL(ws.url).hostname}</p>
+                                                                     </div>
+                                                                     <ExternalLink className="w-2.5 h-2.5 opacity-40 group-hover:opacity-100 flex-shrink-0 transition-opacity" />
+                                                                 </a>
+                                                             ))}
+                                                         </div>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
-                                    </div>
-                                ))}
-                                
-                                {isLoading && (
-                                    <div className="flex justify-start animate-pulse">
-                                        <div className="bg-white border border-[var(--border)] rounded-2xl p-4 rounded-tl-none flex items-center gap-3">
-                                            <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                                            <span className="text-sm text-[var(--muted)]">
-                                                {useWebSearch ? 'ウェブ検索中...' : '考案中...'}
-                                            </span>
+                                    ))}
+                                    
+                                    {isLoading && (
+                                        <div className="flex justify-start animate-pulse">
+                                            <div className="bg-white border border-[var(--border)] rounded-2xl p-4 rounded-tl-none flex items-center gap-3">
+                                                <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                                                <span className="text-sm text-[var(--muted)]">
+                                                    {useWebSearch ? 'ウェブ検索中...' : '考案中...'}
+                                                </span>
+                                            </div>
                                         </div>
-                                    </div>
+                                    )}
+                                    <div ref={messagesEndRef} />
+                                </div>
+
+                                {/* Scroll to bottom button */}
+                                {isUserScrolled && (messages.length > 0 || isLoading) && (
+                                    <button
+                                        onClick={() => scrollToBottom('smooth')}
+                                        className="absolute bottom-6 right-6 z-10 p-2.5 rounded-full bg-white border border-[var(--border)] text-primary-600 shadow-xl hover:bg-primary-50 hover:border-primary-200 transition-all animate-in fade-in zoom-in duration-200 group"
+                                        title="最下部へ移動"
+                                    >
+                                        <ChevronDown className="w-5 h-5 group-hover:translate-y-0.5 transition-transform" />
+                                    </button>
                                 )}
-                                <div ref={messagesEndRef} />
                             </div>
 
                             {/* Input Area */}
@@ -644,49 +684,49 @@ export default function Home() {
                                     </div>
                                 </form>
                             </div>
-                        </div>
-
-                        {/* Right Side Panel Pane */}
-                        {rightPanel && (
-                            <div className="w-full lg:w-1/2 h-full border-l border-[var(--border)] bg-white animate-in slide-in-from-right duration-300 flex flex-col">
-                                {rightPanel === 'pdf' && (
-                                    <PDFViewer
-                                        url={pdfUrl!}
-                                        initialPage={pdfInitialPage}
-                                        onClose={() => setRightPanel(null)}
-                                    />
-                                )}
-                                {rightPanel === 'layers' && (
-                                    <div className="h-full flex flex-col relative">
-                                        <div className="absolute top-4 right-4 z-10">
-                                            <button 
-                                                onClick={() => setRightPanel(null)}
-                                                className="p-1.5 bg-white/80 backdrop-blur rounded-full border border-[var(--border)] text-[var(--muted)] hover:text-red-500 transition-colors shadow-sm"
-                                            >
-                                                <X className="w-4 h-4" />
-                                            </button>
-                                        </div>
-                                        <LayerPanel 
-                                            className="!rounded-none !border-0 flex-1"
-                                            initialTab="layerB"
-                                            activeLayerB={activeLayerB}
-                                            activeLayerBTitle={activeLayerBTitle}
-                                            onLayerBChange={(content, title) => {
-                                                setActiveLayerB(content);
-                                                setActiveLayerBTitle(title);
-                                            }}
-                                            availableModels={availableModels}
-                                            availableRoles={{
-                                                pmcm: 'PMCM',
-                                                designer: '設計者',
-                                                cost: 'コスト管理者'
-                                            }}
-                                        />
-                                    </div>
-                                )}
-                            </div>
-                        )}
                     </div>
+
+                    {/* Right Side Panel Pane */}
+                    {rightPanel && (
+                        <div className="w-full lg:w-1/2 h-full border-l border-[var(--border)] bg-white animate-in slide-in-from-right duration-300 flex flex-col">
+                            {rightPanel === 'pdf' && (
+                                <PDFViewer
+                                    url={pdfUrl!}
+                                    initialPage={pdfInitialPage}
+                                    onClose={() => setRightPanel(null)}
+                                />
+                            )}
+                            {rightPanel === 'layers' && (
+                                <div className="h-full flex flex-col relative">
+                                    <div className="absolute top-4 right-4 z-10">
+                                        <button
+                                            onClick={() => setRightPanel(null)}
+                                            className="p-1.5 bg-white/80 backdrop-blur rounded-full border border-[var(--border)] text-[var(--muted)] hover:text-red-500 transition-colors shadow-sm"
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                    <LayerPanel
+                                        className="!rounded-none !border-0 flex-1"
+                                        initialTab="layerB"
+                                        activeLayerB={activeLayerB}
+                                        activeLayerBTitle={activeLayerBTitle}
+                                        onLayerBChange={(content, title) => {
+                                            setActiveLayerB(content);
+                                            setActiveLayerBTitle(title);
+                                        }}
+                                        availableModels={availableModels}
+                                        availableRoles={{
+                                            pmcm: 'PMCM',
+                                            designer: '設計者',
+                                            cost: 'コスト管理者'
+                                        }}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
             </main>
 
             {/* Global Styles */}
