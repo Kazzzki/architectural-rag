@@ -1,12 +1,15 @@
 import React from 'react';
-import { 
-    MessageSquare, 
+import {
+    MessageSquare,
     Library as LibraryIcon,
     GitBranch,
     Layers,
     Settings,
-    Building2 
+    Building2,
+    ClipboardList,
+    PlusSquare,
 } from 'lucide-react';
+import Link from 'next/link';
 
 export type NavItemId = 'chat' | 'library' | 'mindmap' | 'layers' | 'settings';
 
@@ -52,6 +55,31 @@ export default function NavRail({ activeItem, onSelect }: NavRailProps) {
                         </button>
                     );
                 })}
+            </div>
+
+            {/* Bottom links */}
+            <div className="flex flex-col gap-2 items-center">
+                <Link
+                    href="/issues/chat"
+                    title="課題を入力"
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-colors"
+                >
+                    <PlusSquare className="w-5 h-5" />
+                </Link>
+                <Link
+                    href="/issues"
+                    title="課題因果グラフ"
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-colors"
+                >
+                    <ClipboardList className="w-5 h-5" />
+                </Link>
+                <Link
+                    href="/research"
+                    title="技術リサーチ"
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-colors text-base"
+                >
+                    🔍
+                </Link>
             </div>
         </div>
     );
