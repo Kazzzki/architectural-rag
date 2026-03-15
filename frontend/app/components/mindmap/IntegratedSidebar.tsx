@@ -15,6 +15,7 @@ interface KnowledgeItem {
 interface ChatMessage {
     role: 'user' | 'assistant';
     content: string;
+    timestamp?: string;
 }
 
 interface EdgeData {
@@ -255,7 +256,12 @@ export default function IntegratedSidebar({
                                 </div>
                             )}
                             {chatHistory.map((msg, i) => (
-                                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                    {msg.timestamp && (
+                                        <span className="text-[9px] text-slate-400 mb-0.5 px-1">
+                                            {new Date(msg.timestamp).toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                        </span>
+                                    )}
                                     <div className={`max-w-[90%] rounded-xl px-3 py-2 text-xs leading-relaxed shadow-sm ${msg.role === 'user'
                                         ? 'bg-violet-600 text-white'
                                         : 'bg-white border border-slate-200 text-slate-700 markdown-content'
