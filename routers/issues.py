@@ -130,7 +130,7 @@ def _call_gemini_capture(raw_input: str, existing_issues: list) -> dict:
         pass
 
     response = client.models.generate_content(
-        model="gemini-3-flash-preview",
+        model="gemini-3.1-flash-lite",
         contents=prompt,
         config=config,
     )
