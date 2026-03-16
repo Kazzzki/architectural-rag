@@ -66,7 +66,12 @@ async def run_research_pipeline(research_id: str, question: str, mode: str) -> N
         (Path(RESEARCH_VAULT_PATH) / "raw" / month_str / research_id).mkdir(parents=True, exist_ok=True)
         (Path(RESEARCH_VAULT_PATH) / "markdown" / month_str / research_id).mkdir(parents=True, exist_ok=True)
 
-        # Step 2: プラン生成（セルフクリティック込み）
+        # Step 2: プラン生成（4人格ディスカッション: Phase1→Phase2→Phase3）
+        update_research_job(
+            research_id,
+            detail="法務・技術・メーカー・施工CM の4人格が個別にリサーチ観点を分析中...",
+            progress_percent=8,
+        )
         plan = await generate_plan(question)
         update_research_job(research_id, progress_percent=20)
 
