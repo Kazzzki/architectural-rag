@@ -238,14 +238,17 @@ export default function ProjectMapPage() {
     const handleChatSend = async (message: string) => {
         if (!selectedNodeId || !selectedNode) return;
 
-        const userMsg = { role: 'user' as const, content: message };
+        const userMsg = { role: 'user' as const, content: message, timestamp: new Date().toISOString() };
+        const existingHistory = selectedNode.chatHistory || [];
+        const historyWithUser = [...existingHistory, userMsg];
+
         setProject(prev => {
             if (!prev) return null;
             return {
                 ...prev,
                 nodes: prev.nodes.map(n =>
                     n.id === selectedNodeId
-                        ? { ...n, chatHistory: [...(n.chatHistory || []), userMsg] }
+                        ? { ...n, chatHistory: historyWithUser }
                         : n
                 ),
             };
@@ -274,27 +277,37 @@ export default function ProjectMapPage() {
             if (!res.ok) throw new Error('AI API failed');
             const data = await res.json();
 
-            const aiMsg = { role: 'assistant' as const, content: data.text || 'AIからの応答を取得できませんでした' };
+            const aiMsg = { role: 'assistant' as const, content: data.text || 'AIからの応答を取得できませんでした', timestamp: new Date().toISOString() };
+            const updatedHistory = [...historyWithUser, aiMsg];
+
             setProject(prev => {
                 if (!prev) return null;
                 return {
                     ...prev,
                     nodes: prev.nodes.map(n =>
                         n.id === selectedNodeId
-                            ? { ...n, chatHistory: [...(n.chatHistory || []), aiMsg] }
+                            ? { ...n, chatHistory: updatedHistory }
                             : n
                     ),
                 };
             });
+
+            // Persist chat history with timestamps to backend
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${selectedNodeId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chatHistory: updatedHistory }),
+            });
         } catch (err) {
             console.error('Chat API error:', err);
-            const aiMsg = { role: 'assistant' as const, content: 'エラーが発生しました。API設定を確認してください。' };
+            const aiMsg = { role: 'assistant' as const, content: 'エラーが発生しました。API設定を確認してください。', timestamp: new Date().toISOString() };
+            const updatedHistory = [...historyWithUser, aiMsg];
             setProject(prev => {
                 if (!prev) return null;
                 return {
                     ...prev,
                     nodes: prev.nodes.map(n =>
-                        n.id === selectedNodeId ? { ...n, chatHistory: [...(n.chatHistory || []), aiMsg] } : n
+                        n.id === selectedNodeId ? { ...n, chatHistory: updatedHistory } : n
                     ),
                 };
             });
@@ -939,13 +952,16 @@ export default function ProjectMapPage() {
             investigate: `「${node.label}」について詳しく調べてください`,
         };
 
-        const userMsg = { role: 'user' as const, content: actionLabels[action] || 'AIアクションを実行' };
+        const userMsg = { role: 'user' as const, content: actionLabels[action] || 'AIアクションを実行', timestamp: new Date().toISOString() };
+        const existingHistory = node.chatHistory || [];
+        const historyWithUser = [...existingHistory, userMsg];
+
         setProject(prev => {
             if (!prev) return null;
             return {
                 ...prev,
                 nodes: prev.nodes.map(n =>
-                    n.id === nodeId ? { ...n, chatHistory: [...(n.chatHistory || []), userMsg] } : n
+                    n.id === nodeId ? { ...n, chatHistory: historyWithUser } : n
                 ),
             };
         });
@@ -979,25 +995,35 @@ export default function ProjectMapPage() {
                 aiContent += `\n\n**展開候補:**\n${data.children.map((c: any) => `- **${c.label}** (${c.phase} / ${c.category})`).join('\n')}`;
             }
 
-            const aiMsg = { role: 'assistant' as const, content: aiContent || '回答を取得できませんでした' };
+            const aiMsg = { role: 'assistant' as const, content: aiContent || '回答を取得できませんでした', timestamp: new Date().toISOString() };
+            const updatedHistory = [...historyWithUser, aiMsg];
+
             setProject(prev => {
                 if (!prev) return null;
                 return {
                     ...prev,
                     nodes: prev.nodes.map(n =>
-                        n.id === nodeId ? { ...n, chatHistory: [...(n.chatHistory || []), aiMsg] } : n
+                        n.id === nodeId ? { ...n, chatHistory: updatedHistory } : n
                     ),
                 };
             });
+
+            // Persist chat history with timestamps to backend
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/nodes/${nodeId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chatHistory: updatedHistory }),
+            });
         } catch (err) {
             console.error('AI Action error:', err);
-            const errMsg = { role: 'assistant' as const, content: 'AI処理に失敗しました。設定を確認してください。' };
+            const errMsg = { role: 'assistant' as const, content: 'AI処理に失敗しました。設定を確認してください。', timestamp: new Date().toISOString() };
+            const updatedHistory = [...historyWithUser, errMsg];
             setProject(prev => {
                 if (!prev) return null;
                 return {
                     ...prev,
                     nodes: prev.nodes.map(n =>
-                        n.id === nodeId ? { ...n, chatHistory: [...(n.chatHistory || []), errMsg] } : n
+                        n.id === nodeId ? { ...n, chatHistory: updatedHistory } : n
                     ),
                 };
             });
