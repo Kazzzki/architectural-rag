@@ -2,18 +2,15 @@
 research_engine/synthesizer.py
 
 収集済みソースを統合してMarkdownレポートを生成する。
-3回のOllama呼び出し: 統合 → エビデンスチェック → 200字要約
+Gemini Flash を使用。3ステップ: 統合 → エビデンスチェック → 200字要約
 """
-import json
+import asyncio
 import logging
-import os
 
-import httpx
+from config import GEMINI_MODEL_FLASH
+from gemini_client import get_client
 
 logger = logging.getLogger(__name__)
-
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M")
 
 _SYSTEM_SYNTHESIS = """\
 あなたはPM/CM専門の技術リサーチャーです。
@@ -26,14 +23,17 @@ _SYSTEM_SYNTHESIS = """\
 ## エグゼクティブサマリー
 （結論を3〜5文）
 
-## 法令根拠
-（legalカテゴリのソースから統合）
+## 法令・規制
+（legal カテゴリのソースから統合）
 
 ## 技術基準・設計指針
-（design_guidelineカテゴリから統合）
+（technical カテゴリから統合）
 
-## 実務上の注意点
-（全ソースから実務的観点を抽出）
+## メーカー仕様・製品情報
+（manufacturer カテゴリから統合）
+
+## 施工事例・実務上の注意点
+（construction_case / construction_pm カテゴリから統合）
 
 ## 出典一覧
 （各ソースのタイトルとURL）\
@@ -62,17 +62,17 @@ def _build_sources_text(sources: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-async def _call_ollama(prompt: str, system: str = "", timeout: float = 3600.0) -> str:
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "system": system,
-        "stream": False,
-    }
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
+def _call_gemini_sync(prompt: str) -> str:
+    client = get_client()
+    response = client.models.generate_content(
+        model=GEMINI_MODEL_FLASH,
+        contents=prompt,
+    )
+    return response.text or ""
+
+
+async def _call_gemini(prompt: str) -> str:
+    return await asyncio.to_thread(_call_gemini_sync, prompt)
 
 
 async def synthesize_report(
@@ -85,20 +85,20 @@ async def synthesize_report(
     戻り値: (report_markdown全文, summary_200字)
     """
     sources_text = _build_sources_text(sources)
+    system = _SYSTEM_SYNTHESIS.format(question=question)
     synthesis_prompt = (
+        f"{system}\n\n"
         f"質問: {question}\n\n"
         f"収集したソース情報:\n{sources_text}"
     )
-    system = _SYSTEM_SYNTHESIS.format(question=question)
 
     # 第1回: 統合レポート生成
-    report = await _call_ollama(synthesis_prompt, system=system)
+    report = await _call_gemini(synthesis_prompt)
     logger.info("Synthesizer: initial report generated")
 
     # 第2回: エビデンスチェック
-    evidence_prompt = f"{report}\n\n{_PROMPT_EVIDENCE_CHECK}"
     try:
-        checked_report = await _call_ollama(evidence_prompt)
+        checked_report = await _call_gemini(f"{report}\n\n{_PROMPT_EVIDENCE_CHECK}")
         if checked_report:
             report = checked_report
         logger.info("Synthesizer: evidence check done")
@@ -106,9 +106,8 @@ async def synthesize_report(
         logger.warning(f"Synthesizer: evidence check failed: {e}")
 
     # 第3回: 200字要約
-    summary_prompt = f"{report}\n\n{_PROMPT_SUMMARY}"
     try:
-        summary = await _call_ollama(summary_prompt, timeout=1800.0)
+        summary = await _call_gemini(f"{report}\n\n{_PROMPT_SUMMARY}")
     except Exception as e:
         logger.warning(f"Synthesizer: summary generation failed: {e}")
         summary = ""
