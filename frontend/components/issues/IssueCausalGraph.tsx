@@ -7,10 +7,10 @@ import ReactFlow, {
   MiniMap,
   Node,
   Edge,
-  NodeChange,
-  applyNodeChanges,
   useNodesState,
   useEdgesState,
+  useReactFlow,
+  ReactFlowProvider,
   MarkerType,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
@@ -50,17 +50,26 @@ interface IssueCausalGraphProps {
   priorityFilter: PriorityFilter;
   onNodeClick: (issue: Issue) => void;
   onRefresh: () => void;
+  fitViewTrigger?: number;
 }
 
-export default function IssueCausalGraph({
+function IssueCausalGraphInner({
   issues,
   edges,
   priorityFilter,
   onNodeClick,
-  onRefresh,
+  fitViewTrigger,
 }: IssueCausalGraphProps) {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges] = useEdgesState([]);
+  const { fitView } = useReactFlow();
+
+  // fitViewTrigger が変わるたびに fitView を実行
+  useEffect(() => {
+    if (fitViewTrigger !== undefined && fitViewTrigger > 0) {
+      fitView({ padding: 0.2 });
+    }
+  }, [fitViewTrigger, fitView]);
 
   // 折りたたまれた子ノードのセットを計算
   const collapsedChildIds = useMemo(() => {
@@ -96,7 +105,6 @@ export default function IssueCausalGraph({
   }, [issues, edges]);
 
   useEffect(() => {
-    const issueLookup = new Map(issues.map((iss) => [iss.id, iss]));
     const visibleIds = new Set(visibleIssues.map((iss) => iss.id));
 
     // priority に応じてノードを構築
@@ -189,15 +197,31 @@ export default function IssueCausalGraph({
         onNodeDragStop={handleNodeDragStop}
         fitView
         fitViewOptions={{ padding: 0.2 }}
+        minZoom={0.1}
+        maxZoom={3}
+        zoomOnPinch
+        panOnScroll={false}
       >
         <Background gap={16} color="#e5e7eb" />
-        <Controls />
-        <MiniMap nodeColor={(n) => {
-          const iss = issues.find((i) => i.id === n.id);
-          if (!iss) return '#ccc';
-          return iss.priority === 'critical' ? '#F7C1C1' : iss.priority === 'minor' ? '#F1EFE8' : '#B5D4F4';
-        }} />
+        <div className="hidden md:block">
+          <Controls />
+        </div>
+        <div className="hidden md:block">
+          <MiniMap nodeColor={(n) => {
+            const iss = issues.find((i) => i.id === n.id);
+            if (!iss) return '#ccc';
+            return iss.priority === 'critical' ? '#F7C1C1' : iss.priority === 'minor' ? '#F1EFE8' : '#B5D4F4';
+          }} />
+        </div>
       </ReactFlow>
     </div>
+  );
+}
+
+export default function IssueCausalGraph(props: IssueCausalGraphProps) {
+  return (
+    <ReactFlowProvider>
+      <IssueCausalGraphInner {...props} />
+    </ReactFlowProvider>
   );
 }

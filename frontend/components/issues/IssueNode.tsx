@@ -34,8 +34,8 @@ function IssueNode({ data }: NodeProps<IssueNodeData>) {
         border: style.border,
         backgroundColor: style.bg,
         borderRadius: 8,
-        padding: '8px 12px',
-        minWidth: 160,
+        padding: '10px 14px',
+        minWidth: 170,
         maxWidth: 220,
         cursor: 'pointer',
         position: 'relative',
@@ -61,13 +61,13 @@ function IssueNode({ data }: NodeProps<IssueNodeData>) {
       {/* タイトル行 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingRight: 16 }}>
         {style.badge && <span style={{ fontSize: 11 }}>{style.badge}</span>}
-        <span style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.3 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.3 }}>
           {issue.title}
         </span>
       </div>
 
       {/* カテゴリ・重要度 */}
-      <div style={{ fontSize: 11, color: '#555', marginTop: 4 }}>
+      <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
         {issue.category} / {issue.status}
       </div>
 
