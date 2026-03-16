@@ -84,7 +84,6 @@ export default function ProjectMapPage() {
     const [showEdgeDialog, setShowEdgeDialog] = useState(false);
     const [nodeToEdit, setNodeToEdit] = useState<ProcessNode | null>(null);
     const [edgeToEdit, setEdgeToEdit] = useState<EdgeData | null>(null);
-    const [pendingConnection, setPendingConnection] = useState<{ source: string, target: string } | null>(null);
     const [undoCount, setUndoCount] = useState(0);
     const [nextActions, setNextActions] = useState<any[]>([]);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'dirty' | 'error'>('idle');
@@ -705,33 +704,15 @@ export default function ProjectMapPage() {
     };
 
     const handleEdgeDialogConfirm = async (type: string, reason: string) => {
+        if (!edgeToEdit) return;
         try {
-            if (pendingConnection) {
-                // Create new edge
-                await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        source: pendingConnection.source,
-                        target: pendingConnection.target,
-                        type,
-                        reason,
-                    }),
-                });
-            } else if (edgeToEdit) {
-                // Update existing edge
-                await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${edgeToEdit.id}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        type,
-                        reason,
-                    }),
-                });
-            }
+            await authFetch(`${API_BASE}/api/mindmap/projects/${projectId}/edges/${edgeToEdit.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type, reason }),
+            });
 
             setShowEdgeDialog(false);
-            setPendingConnection(null);
             setEdgeToEdit(null);
             setUndoCount(prev => prev + 1);
             showSaveStatus();
@@ -743,17 +724,13 @@ export default function ProjectMapPage() {
 
     const handleEdgeClick = (id: string, edge: EdgeData) => {
         if (!isEditMode) return;
-        // setEdgeToEdit(edge);
-        // setPendingConnection(null);
-        // setShowEdgeDialog(true);
         handleEdgeSelect(id);
     };
 
     const handleEdgeDoubleClick = (id: string, edge: EdgeData) => {
+        // Double-click on edge: no dialog, just select it
         if (!isEditMode) return;
-        setEdgeToEdit(edge);
-        setPendingConnection(null);
-        setShowEdgeDialog(true);
+        handleEdgeSelect(id);
     };
 
     const handleEdgesDelete = async (edgeIds: string[]) => {
@@ -1589,13 +1566,12 @@ export default function ProjectMapPage() {
                     isOpen={showEdgeDialog}
                     onClose={() => {
                         setShowEdgeDialog(false);
-                        setPendingConnection(null);
                         setEdgeToEdit(null);
                     }}
                     onSave={handleEdgeDialogConfirm}
                     initialType={edgeToEdit?.type as 'hard' | 'soft' || 'hard'}
                     initialReason={edgeToEdit?.reason || ''}
-                    title={edgeToEdit ? '依存関係の編集' : '新しい依存関係'}
+                    title="依存関係の編集"
                 />
             )}
 
