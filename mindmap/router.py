@@ -26,7 +26,7 @@ from .graph_service import GraphService
 from . import project_store
 from . import template_loader
 from . import api_settings
-from .ai_helper import call_gemini_json
+from .ai_helper import call_gemini_json, run_multi_perspective_research
 
 from .migrations import add_project_context_columns
 
@@ -1511,20 +1511,18 @@ async def ai_action_endpoint(req: AIActionRequest):
                 return {"text": "【注意: RAGモジュール利用不可のため、一般知識回答です】\n" + resp.text.strip()}
 
         elif req.action == "investigate":
-            prompt = f"""
-            あなたは建築のプロフェッショナルです。
-            以下のノードについて、設計・施工・管理の観点から「確認すべきこと」「調査すべきこと」「検討すべきリスク」をリストアップしてください。
-            
-            対象: {req.content}
-            プロジェクト文脈: {req.context}
-            
-            出力フォーマット:
-            Markdown形式のチェックリストで出力してください。
-            重要な項目は太字にしてください。
-            カテゴリごとに分けて記述してください（例: ### 法規, ### 施工, ### コスト）。
-            """
-            resp = _client.models.generate_content(model=model_name, contents=prompt)
-            return {"text": resp.text.strip()}
+            # 多角的技術リサーチ: 法規・技術・メーカー・CMrの4ペルソナが並列分析→議論→統合プロセス生成
+            project_context = ""
+            if req.context:
+                project_context = req.context.get("projectContext") or ""
+
+            research_model = api_settings.get_analysis_model() or "gemini-2.5-flash"
+            result_text = await run_multi_perspective_research(
+                node_content=req.content or "",
+                project_context=project_context,
+                model_name=research_model,
+            )
+            return {"text": result_text}
 
         else:
             raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
