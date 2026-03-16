@@ -16,9 +16,15 @@ def get_setting(key: str) -> Optional[str]:
         return None
 
 def get_project_registry(project_id: str) -> Optional[Dict[str, Any]]:
-    # TODO: Fetch from mindmap projects table in P2
-    # Mocking for P1
-    return {"id": project_id, "name": f"Project {project_id}"}
+    try:
+        from mindmap.project_store import get_project_data
+        data = get_project_data(project_id)
+        if data and data.get("project"):
+            proj = data["project"]
+            return {"id": proj["id"], "name": proj.get("name", project_id)}
+    except Exception as e:
+        logger.warning(f"Failed to fetch project {project_id} from mindmap store: {e}")
+    return None
 
 
 def infer_project_from_attachments_or_query(question: str, attachments: Optional[List[dict]]) -> Optional[Dict[str, Any]]:
