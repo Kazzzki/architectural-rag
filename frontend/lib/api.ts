@@ -25,6 +25,7 @@ export type StreamUpdate =
     | { type: 'error'; data: string }
     | { type: 'truncation_warning'; data: string }
     | { type: 'saved'; id: number }
+    | { type: 'issue_capture'; data: import('./issue_types').IssueCaptureData }
     | { type: 'done' };
 
 // APIのベースURL (環境変数がない場合はNext.jsの同ドメインリライトに任せる)
@@ -211,6 +212,8 @@ export async function* chatStream(params: {
     use_rag?: boolean;
     use_web_search?: boolean;
     signal?: AbortSignal;
+    capture_issues?: boolean;
+    project_name?: string;
 }): AsyncGenerator<StreamUpdate> {
     const {
         question,
@@ -229,6 +232,8 @@ export async function* chatStream(params: {
         use_rag = true,
         use_web_search = false,
         signal,
+        capture_issues = false,
+        project_name,
     } = params;
 
     const response = await fetch(`${API_BASE}/api/chat/stream`, {
@@ -250,6 +255,8 @@ export async function* chatStream(params: {
             scope_mode: scope_mode || 'auto',
             use_rag: use_rag,
             use_web_search: use_web_search,
+            capture_issues: capture_issues,
+            project_name: project_name || null,
         }),
         signal
     });
@@ -303,6 +310,52 @@ export async function getContextSheet(id: number): Promise<ContextSheetDetail> {
 export async function deleteContextSheet(id: number): Promise<void> {
     const res = await authFetch(`${API_BASE}/api/analyze/context-sheet/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error(`Failed to delete context sheet ${id}: ${res.statusText}`);
+}
+
+/** 課題の因果エッジを確認する */
+export async function confirmIssueEdge(fromId: string, toId: string, confirmed: boolean): Promise<{ ok: boolean; saved: boolean; edge_id?: string }> {
+    const res = await authFetch(`${API_BASE}/api/issues/edges/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_id: fromId, to_id: toId, confirmed }),
+    });
+    if (!res.ok) throw new Error(`Failed to confirm edge: ${res.statusText}`);
+    return res.json();
+}
+
+/** 課題を部分更新する */
+export async function updateIssue(issueId: string, updates: Record<string, unknown>): Promise<void> {
+    const res = await authFetch(`${API_BASE}/api/issues/${issueId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+    });
+    if (!res.ok) throw new Error(`Failed to update issue: ${res.statusText}`);
+}
+
+/** プロジェクトメンバー一覧を取得 */
+export async function fetchProjectMembers(projectName: string): Promise<import('./issue_types').ProjectMember[]> {
+    const res = await authFetch(`${API_BASE}/api/issues/members?project_name=${encodeURIComponent(projectName)}`);
+    if (!res.ok) throw new Error(`Failed to fetch members: ${res.statusText}`);
+    const data = await res.json();
+    return data.members || [];
+}
+
+/** プロジェクトメンバーを追加 */
+export async function addProjectMember(projectName: string, name: string, role?: string): Promise<import('./issue_types').ProjectMember> {
+    const res = await authFetch(`${API_BASE}/api/issues/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_name: projectName, name, role }),
+    });
+    if (!res.ok) throw new Error(`Failed to add member: ${res.statusText}`);
+    return res.json();
+}
+
+/** プロジェクトメンバーを削除 */
+export async function deleteProjectMember(memberId: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/api/issues/members/${memberId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Failed to delete member: ${res.statusText}`);
 }
 
 /**

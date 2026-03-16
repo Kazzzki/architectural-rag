@@ -16,6 +16,8 @@ export interface Issue {
   template_id: string | null;
   created_at: string;
   updated_at: string;
+  assignee: string | null;
+  context_memo: string | null;
 }
 
 export interface IssueEdge {
@@ -49,4 +51,18 @@ export interface IssuesListResponse {
   issues: Issue[];
   edges: IssueEdge[];
   projects: string[];
+}
+
+export interface IssueCaptureData {
+  issue: Issue;
+  causal_candidates: CausalCandidate[];
+  duplicate_candidates: DuplicateCandidate[];
+}
+
+export interface ProjectMember {
+  id: string;
+  project_name: string;
+  name: string;
+  role: string | null;
+  created_at: string;
 }

@@ -27,6 +27,7 @@ router = APIRouter(tags=["Issues"])
 UPDATABLE_FIELDS = {
     "status", "priority", "action_next", "is_collapsed",
     "pos_x", "pos_y", "project_name", "title", "description",
+    "assignee", "context_memo",
 }
 
 
@@ -53,6 +54,14 @@ class IssueUpdateRequest(BaseModel):
     project_name: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
+    assignee: Optional[str] = None
+    context_memo: Optional[str] = None
+
+
+class MemberCreateRequest(BaseModel):
+    project_name: str
+    name: str
+    role: Optional[str] = None
 
 
 # ---------- ヘルパー ----------
@@ -66,8 +75,10 @@ def _issue_row_to_dict(row) -> dict:
         "id", "project_name", "title", "raw_input", "category", "priority",
         "status", "description", "cause", "impact", "action_next",
         "is_collapsed", "pos_x", "pos_y", "template_id", "created_at", "updated_at",
+        "assignee", "context_memo",
     ]
-    return dict(zip(keys, row))
+    # rowの長さに合わせてキーを切り取る（古いDBとの互換性）
+    return dict(zip(keys[:len(row)], row))
 
 
 def _edge_row_to_dict(row) -> dict:
@@ -144,33 +155,18 @@ def _call_gemini_capture(raw_input: str, existing_issues: list) -> dict:
         raise
 
 
-# ---------- エンドポイント ----------
+# ---------- 再利用可能なコアロジック ----------
 
-@router.get("/api/issues/projects")
-def list_projects(db=Depends(get_db)):
-    """登録済みプロジェクト名のユニーク一覧"""
-    rows = db.execute(
-        text("SELECT DISTINCT project_name FROM issues ORDER BY project_name")
-    ).fetchall()
-    return {"projects": [r[0] for r in rows]}
-
-
-@router.post("/api/issues/capture")
-def capture_issue(req: CaptureRequest, db=Depends(get_db)):
-    """課題テキストを AI で構造化して DB に保存し、因果・重複候補を返す"""
-    # 同プロジェクトの既存課題を取得（コンテキスト用）
+def capture_issue_core(raw_input: str, project_name: str, db) -> dict:
+    """課題テキストをAI構造化してDBに保存し、因果・重複候補を返す。
+    chat.py からも呼べるよう独立関数として定義。"""
     rows = db.execute(
         text("SELECT id, title, description FROM issues WHERE project_name = :pn"),
-        {"pn": req.project_name},
+        {"pn": project_name},
     ).fetchall()
     existing = [{"id": r[0], "title": r[1], "description": r[2]} for r in rows]
 
-    # Gemini 呼び出し
-    try:
-        result = _call_gemini_capture(req.raw_input, existing)
-    except Exception as e:
-        logger.error(f"Gemini capture failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"AI処理エラー: {str(e)}")
+    result = _call_gemini_capture(raw_input, existing)
 
     now = _now_iso()
     issue_id = str(uuid.uuid4())
@@ -189,9 +185,9 @@ def capture_issue(req: CaptureRequest, db=Depends(get_db)):
         """),
         {
             "id": issue_id,
-            "project_name": req.project_name,
-            "title": (result.get("title") or req.raw_input)[:20],
-            "raw_input": req.raw_input,
+            "project_name": project_name,
+            "title": (result.get("title") or raw_input)[:20],
+            "raw_input": raw_input,
             "category": result.get("category") or "工程",
             "priority": result.get("priority") or "normal",
             "status": result.get("status") or "発生中",
@@ -210,7 +206,6 @@ def capture_issue(req: CaptureRequest, db=Depends(get_db)):
     ).fetchone()
     issue = _issue_row_to_dict(row)
 
-    # 閾値フィルター（Gemini 側でも適用しているが念のため）
     causal_candidates = [
         c for c in result.get("causal_candidates", [])
         if isinstance(c.get("confidence"), (int, float)) and c["confidence"] >= 0.7
@@ -225,6 +220,27 @@ def capture_issue(req: CaptureRequest, db=Depends(get_db)):
         "causal_candidates": causal_candidates,
         "duplicate_candidates": duplicate_candidates,
     }
+
+
+# ---------- エンドポイント ----------
+
+@router.get("/api/issues/projects")
+def list_projects(db=Depends(get_db)):
+    """登録済みプロジェクト名のユニーク一覧"""
+    rows = db.execute(
+        text("SELECT DISTINCT project_name FROM issues ORDER BY project_name")
+    ).fetchall()
+    return {"projects": [r[0] for r in rows]}
+
+
+@router.post("/api/issues/capture")
+def capture_issue(req: CaptureRequest, db=Depends(get_db)):
+    """課題テキストを AI で構造化して DB に保存し、因果・重複候補を返す"""
+    try:
+        return capture_issue_core(req.raw_input, req.project_name, db)
+    except Exception as e:
+        logger.error(f"Gemini capture failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"AI処理エラー: {str(e)}")
 
 
 @router.post("/api/issues/edges/confirm")
@@ -243,6 +259,37 @@ def confirm_edge(req: EdgeConfirmRequest, db=Depends(get_db)):
     )
     db.commit()
     return {"ok": True, "saved": True, "edge_id": edge_id}
+
+
+@router.get("/api/issues/members")
+def list_members(project_name: str, db=Depends(get_db)):
+    """プロジェクトメンバー一覧を返す"""
+    rows = db.execute(
+        text("SELECT id, project_name, name, role, created_at FROM project_members WHERE project_name = :pn ORDER BY name"),
+        {"pn": project_name},
+    ).fetchall()
+    keys = ["id", "project_name", "name", "role", "created_at"]
+    return {"members": [dict(zip(keys, r)) for r in rows]}
+
+
+@router.post("/api/issues/members")
+def add_member(req: MemberCreateRequest, db=Depends(get_db)):
+    """プロジェクトメンバーを追加する"""
+    member_id = str(uuid.uuid4())
+    db.execute(
+        text("INSERT INTO project_members (id, project_name, name, role, created_at) VALUES (:id, :pn, :name, :role, :created_at)"),
+        {"id": member_id, "pn": req.project_name, "name": req.name, "role": req.role, "created_at": _now_iso()},
+    )
+    db.commit()
+    return {"id": member_id, "project_name": req.project_name, "name": req.name, "role": req.role}
+
+
+@router.delete("/api/issues/members/{member_id}")
+def delete_member(member_id: str, db=Depends(get_db)):
+    """プロジェクトメンバーを削除する"""
+    db.execute(text("DELETE FROM project_members WHERE id = :id"), {"id": member_id})
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/api/issues")

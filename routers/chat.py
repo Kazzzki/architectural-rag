@@ -58,6 +58,9 @@ class ChatRequest(BaseModel):
     use_web_search: bool = False
     # v4.1: session_id を body でも受け取れるようにする
     session_id: Optional[str] = None
+    # 課題整理モード
+    capture_issues: bool = False
+    project_name: Optional[str] = None  # 課題グラフのプロジェクト名
 
 class ChatResponse(BaseModel):
     answer: str
@@ -75,6 +78,26 @@ class SessionDetailResponse(SessionResponse):
 
 class SessionUpdateRequest(BaseModel):
     title: str
+
+ISSUE_KEYWORDS = ["課題", "問題", "遅延", "コスト超過", "品質", "安全", "不具合", "トラブル", "クレーム", "障害", "リスク"]
+
+
+def _try_capture_issue_from_chat(question: str, project_name: str) -> Optional[dict]:
+    """チャットメッセージから課題を検出してキャプチャ。失敗しても例外を出さない。"""
+    if not any(kw in question for kw in ISSUE_KEYWORDS):
+        return None
+    try:
+        from database import SessionLocal
+        from routers.issues import capture_issue_core
+        db = SessionLocal()
+        try:
+            return capture_issue_core(question, project_name, db)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"チャットからの課題キャプチャ失敗: {e}", exc_info=True)
+        return None
+
 
 def run_memory_pipeline(user_message: str, assistant_response: str, project_id: Optional[str] = None):
     """
@@ -366,6 +389,12 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                         web_sources_collected = part["data"]
                         yield f"data: {json.dumps({'type': 'web_sources', 'data': web_sources_collected}, ensure_ascii=False)}\n\n"
                 
+                # 課題整理モード: キャプチャ結果をSSEで送出
+                if request.capture_issues and request.project_name and full_answer.strip():
+                    capture_result = _try_capture_issue_from_chat(request.question, request.project_name)
+                    if capture_result:
+                        yield f"data: {json.dumps({'type': 'issue_capture', 'data': capture_result}, ensure_ascii=False)}\n\n"
+
                 # 正常終了時の後継タスク登録（副作用の分離） (#31, #35)
                 # 空回答時 (#29) は memory pipeline をスキップ
                 if full_answer.strip():

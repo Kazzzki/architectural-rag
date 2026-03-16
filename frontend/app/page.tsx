@@ -19,15 +19,18 @@ import {
     X,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { 
-    SourceFile, 
-    StreamUpdate, 
-    fetchSessions as apiFetchSessions, 
+import {
+    SourceFile,
+    StreamUpdate,
+    fetchSessions as apiFetchSessions,
     fetchModels as apiFetchModels,
     createSession as apiCreateSession,
     fetchSessionDetail as apiFetchSessionDetail,
-    saveMessages as apiSaveMessages
+    saveMessages as apiSaveMessages,
+    fetchProjectMembers as apiFetchProjectMembers,
 } from '../lib/api';
+import { IssueCaptureData, ProjectMember } from '../lib/issue_types';
+import IssueLinkingCard from '../components/issues/IssueLinkingCard';
 import SourceCard from './components/SourceCard';
 const PDFViewer = dynamic(() => import('./components/PDFViewer'), { ssr: false });
 import Library from './components/Library';
@@ -112,6 +115,7 @@ interface Message {
     content: string;
     sources?: SourceFile[];
     webSources?: { title: string; url: string }[];
+    issueCaptureData?: IssueCaptureData;
 }
 
 interface Session {
@@ -151,6 +155,11 @@ export default function Home() {
 
     const [isUserScrolled, setIsUserScrolled] = useState(false);
 
+    // 課題整理モード
+    const [captureIssuesMode, setCaptureIssuesMode] = useState(false);
+    const [issueCaptureProjectName, setIssueCaptureProjectName] = useState('');
+    const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
+
     const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
         messagesEndRef.current?.scrollIntoView({ behavior });
         setIsUserScrolled(false);
@@ -183,6 +192,17 @@ export default function Home() {
             setIsPanelOpen(saved === 'true');
         }
     }, []);
+
+    // 課題整理モードでプロジェクト名が入力されたらメンバーを取得
+    useEffect(() => {
+        if (captureIssuesMode && issueCaptureProjectName.trim()) {
+            apiFetchProjectMembers(issueCaptureProjectName.trim())
+                .then(setProjectMembers)
+                .catch(console.error);
+        } else {
+            setProjectMembers([]);
+        }
+    }, [captureIssuesMode, issueCaptureProjectName]);
 
     const handleNavSelect = (id: NavItemId | null) => {
         if (id === null) {
@@ -295,7 +315,9 @@ export default function Home() {
                 use_web_search: useWebSearch,
                 contextSheet: activeLayerB,
                 history: historySnapshot.length > 0 ? historySnapshot : undefined,
-                signal: abortController.signal
+                signal: abortController.signal,
+                capture_issues: captureIssuesMode,
+                project_name: captureIssuesMode ? issueCaptureProjectName : undefined,
             });
 
             for await (const update of stream) {
@@ -329,6 +351,15 @@ export default function Home() {
                         const last = next[next.length - 1];
                         if (last && last.role === 'assistant') {
                             last.webSources = currentWebSources;
+                        }
+                        return next;
+                    });
+                } else if (update.type === 'issue_capture') {
+                    setMessages(prev => {
+                        const next = [...prev];
+                        const last = next[next.length - 1];
+                        if (last && last.role === 'assistant') {
+                            last.issueCaptureData = update.data;
                         }
                         return next;
                     });
@@ -560,10 +591,10 @@ export default function Home() {
                                                 {msg.webSources && msg.webSources.length > 0 && (
                                                     <div className="mt-4 pt-3 border-t border-[var(--border)]">                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                                              {msg.webSources.map((ws, j) => (
-                                                                 <a 
-                                                                     key={j} 
-                                                                     href={ws.url} 
-                                                                     target="_blank" 
+                                                                 <a
+                                                                     key={j}
+                                                                     href={ws.url}
+                                                                     target="_blank"
                                                                      rel="noopener noreferrer"
                                                                      className="flex items-center gap-2.5 p-2 rounded-xl bg-blue-50/50 border border-blue-100/50 text-[11px] text-blue-700 hover:bg-blue-100 hover:border-blue-200 transition-all group shadow-sm active:scale-[0.98]"
                                                                  >
@@ -579,6 +610,15 @@ export default function Home() {
                                                              ))}
                                                          </div>
                                                     </div>
+                                                )}
+
+                                                {/* Issue Linking Card */}
+                                                {msg.issueCaptureData && (
+                                                    <IssueLinkingCard
+                                                        data={msg.issueCaptureData}
+                                                        members={projectMembers}
+                                                        projectName={issueCaptureProjectName}
+                                                    />
                                                 )}
                                             </div>
                                         </div>
@@ -647,6 +687,25 @@ export default function Home() {
                                             <Globe className="w-3.5 h-3.5" />
                                             ウェブ検索 {useWebSearch ? 'ON' : 'OFF'}
                                         </button>
+
+                                        {/* Issue Capture Toggle */}
+                                        <button
+                                            type="button"
+                                            onClick={() => setCaptureIssuesMode(!captureIssuesMode)}
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${captureIssuesMode ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'}`}
+                                        >
+                                            <FileText className="w-3.5 h-3.5" />
+                                            課題整理
+                                        </button>
+                                        {captureIssuesMode && (
+                                            <input
+                                                type="text"
+                                                value={issueCaptureProjectName}
+                                                onChange={e => setIssueCaptureProjectName(e.target.value)}
+                                                placeholder="プロジェクト名"
+                                                className="w-32 text-xs border border-orange-200 rounded-full px-3 py-1.5 bg-orange-50 focus:outline-none focus:ring-2 focus:ring-orange-300 placeholder-orange-300 text-orange-800"
+                                            />
+                                        )}
 
                                         {/* Layer B Button (Mobile/Small) */}
                                         <button

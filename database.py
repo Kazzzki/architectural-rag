@@ -590,6 +590,17 @@ def _run_migrations():
             confirmed  INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )""",
+        # 課題因果グラフ: issues テーブルへの担当者・判断メモ列追加
+        "ALTER TABLE issues ADD COLUMN assignee TEXT",
+        "ALTER TABLE issues ADD COLUMN context_memo TEXT",
+        # 課題因果グラフ: project_members テーブル新規作成
+        """CREATE TABLE IF NOT EXISTS project_members (
+            id           TEXT PRIMARY KEY,
+            project_name TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            role         TEXT,
+            created_at   TEXT NOT NULL
+        )""",
     ]
     with engine.connect() as conn:
         for sql in migrations:
