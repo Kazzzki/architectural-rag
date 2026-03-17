@@ -7,7 +7,7 @@ import IssueFilterBar, { PriorityFilter } from '@/components/issues/IssueFilterB
 import IssueChatPanel from '@/components/issues/IssueChatPanel';
 import IssueCausalGraph from '@/components/issues/IssueCausalGraph';
 import IssueDetailDrawer from '@/components/issues/IssueDetailDrawer';
-import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Smartphone } from 'lucide-react';
+import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Smartphone, Network } from 'lucide-react';
 import Link from 'next/link';
 
 // ────────────────────────────────────────────────
@@ -139,6 +139,7 @@ function ProjectGraphView({
   const [categoryFilter, setCategoryFilter] = useState('');
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'graph' | 'chat'>('graph');
 
   const fetchIssues = useCallback(async () => {
     setLoading(true);
@@ -202,8 +203,8 @@ function ProjectGraphView({
       />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* 左パネル: チャット入力 */}
-        <div className="w-72 flex-shrink-0 border-r border-gray-200 flex flex-col overflow-hidden">
+        {/* 左パネル: チャット入力 (デスクトップ専用) */}
+        <div className="hidden md:flex md:flex-col w-72 flex-shrink-0 border-r border-gray-200 overflow-hidden">
           <IssueChatPanel
             projectName={projectName}
             issues={issues}
@@ -211,8 +212,8 @@ function ProjectGraphView({
           />
         </div>
 
-        {/* 右パネル: ReactFlow グラフ */}
-        <div className="flex-1 overflow-hidden relative">
+        {/* グラフパネル (モバイルではグラフタブ選択時のみ表示) */}
+        <div className={`flex-1 overflow-hidden relative ${activeTab === 'chat' ? 'hidden md:block' : 'block'}`}>
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
               <span className="text-sm text-gray-400">読み込み中…</span>
@@ -226,6 +227,37 @@ function ProjectGraphView({
             onRefresh={fetchIssues}
           />
         </div>
+
+        {/* モバイル専用チャットパネル (チャットタブ選択時のみ表示) */}
+        <div className={`md:hidden flex-1 overflow-hidden flex-col ${activeTab === 'graph' ? 'hidden' : 'flex'}`}>
+          <IssueChatPanel
+            projectName={projectName}
+            issues={issues}
+            onIssueAdded={handleIssueAdded}
+          />
+        </div>
+      </div>
+
+      {/* モバイル専用ボトムタブバー */}
+      <div className="md:hidden flex border-t border-gray-200 bg-white flex-shrink-0">
+        <button
+          onClick={() => setActiveTab('graph')}
+          className={`flex-1 py-3 flex flex-col items-center gap-0.5 text-xs transition-colors ${
+            activeTab === 'graph' ? 'text-blue-600' : 'text-gray-400'
+          }`}
+        >
+          <Network size={18} />
+          グラフ
+        </button>
+        <button
+          onClick={() => setActiveTab('chat')}
+          className={`flex-1 py-3 flex flex-col items-center gap-0.5 text-xs transition-colors ${
+            activeTab === 'chat' ? 'text-blue-600' : 'text-gray-400'
+          }`}
+        >
+          <MessageCircle size={18} />
+          チャット
+        </button>
       </div>
 
       <IssueDetailDrawer

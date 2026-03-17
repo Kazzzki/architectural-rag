@@ -57,7 +57,7 @@ export default function IssueDetailDrawer({ issue, onClose, onUpdated }: IssueDe
 
   return (
     <div
-      className="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl border-l border-gray-200 z-50 flex flex-col"
+      className="fixed z-50 bg-white shadow-2xl flex flex-col inset-x-0 bottom-0 h-[60vh] rounded-t-2xl border-t border-gray-200 md:left-auto md:right-0 md:top-0 md:bottom-auto md:h-full md:w-80 md:rounded-none md:border-l md:border-t-0"
       style={{ transition: 'transform 0.2s' }}
     >
       {/* ヘッダー */}

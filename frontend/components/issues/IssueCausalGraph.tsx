@@ -192,11 +192,14 @@ export default function IssueCausalGraph({
       >
         <Background gap={16} color="#e5e7eb" />
         <Controls />
-        <MiniMap nodeColor={(n) => {
-          const iss = issues.find((i) => i.id === n.id);
-          if (!iss) return '#ccc';
-          return iss.priority === 'critical' ? '#F7C1C1' : iss.priority === 'minor' ? '#F1EFE8' : '#B5D4F4';
-        }} />
+        <MiniMap
+          className="hidden md:block"
+          nodeColor={(n) => {
+            const iss = issues.find((i) => i.id === n.id);
+            if (!iss) return '#ccc';
+            return iss.priority === 'critical' ? '#F7C1C1' : iss.priority === 'minor' ? '#F1EFE8' : '#B5D4F4';
+          }}
+        />
       </ReactFlow>
     </div>
   );
