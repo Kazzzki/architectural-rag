@@ -7,7 +7,7 @@ import IssueFilterBar, { PriorityFilter } from '@/components/issues/IssueFilterB
 import IssueChatPanel from '@/components/issues/IssueChatPanel';
 import IssueCausalGraph from '@/components/issues/IssueCausalGraph';
 import IssueDetailDrawer from '@/components/issues/IssueDetailDrawer';
-import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Smartphone } from 'lucide-react';
+import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Smartphone, Network } from 'lucide-react';
 import Link from 'next/link';
 
 // ────────────────────────────────────────────────
@@ -139,6 +139,8 @@ function ProjectGraphView({
   const [categoryFilter, setCategoryFilter] = useState('');
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [loading, setLoading] = useState(false);
+  // モバイル用タブ: 'graph' | 'chat'
+  const [mobileTab, setMobileTab] = useState<'graph' | 'chat'>('graph');
 
   const fetchIssues = useCallback(async () => {
     setLoading(true);
@@ -173,11 +175,45 @@ function ProjectGraphView({
     if (selectedIssue?.id === updated.id) setSelectedIssue(updated);
   }
 
+  const graphPanel = (
+    <div className="flex-1 overflow-hidden relative">
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
+          <span className="text-sm text-gray-400">読み込み中…</span>
+        </div>
+      )}
+      <IssueCausalGraph
+        issues={issues}
+        edges={edges}
+        priorityFilter={priorityFilter}
+        onNodeClick={(issue) => {
+          setSelectedIssue(issue);
+          // モバイルでグラフタップ時はグラフタブにとどまる
+        }}
+        onRefresh={fetchIssues}
+      />
+    </div>
+  );
+
+  const chatPanel = (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <IssueChatPanel
+        projectName={projectName}
+        issues={issues}
+        onIssueAdded={(resp) => {
+          handleIssueAdded(resp);
+          // 課題追加後はグラフタブへ自動切り替え
+          setMobileTab('graph');
+        }}
+      />
+    </div>
+  );
+
   return (
     <div className="flex flex-col h-screen bg-white overflow-hidden">
       {/* ヘッダー */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white z-10">
-        <button onClick={onBack} className="text-gray-400 hover:text-gray-700">
+        <button onClick={onBack} className="text-gray-400 hover:text-gray-700 p-1 -ml-1">
           <ArrowLeft size={18} />
         </button>
         <ClipboardList size={20} className="text-blue-600 flex-shrink-0" />
@@ -186,14 +222,14 @@ function ProjectGraphView({
         </div>
         <Link
           href={`/issues/capture?project=${encodeURIComponent(projectName)}`}
-          className="flex items-center gap-1 text-xs text-blue-600 border border-blue-300 rounded px-2 py-1 hover:bg-blue-50 flex-shrink-0"
+          className="flex items-center gap-1 text-xs text-blue-600 border border-blue-300 rounded-lg px-2.5 py-1.5 hover:bg-blue-50 flex-shrink-0 transition-colors"
         >
           <Smartphone size={14} />
-          モバイル入力
+          <span className="hidden sm:inline">モバイル入力</span>
         </Link>
       </div>
 
-      {/* フィルターバー（プロジェクト選択なし） */}
+      {/* フィルターバー */}
       <IssueFilterBar
         priorityFilter={priorityFilter}
         onPriorityFilter={setPriorityFilter}
@@ -201,8 +237,8 @@ function ProjectGraphView({
         onCategoryFilter={setCategoryFilter}
       />
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* 左パネル: チャット入力 */}
+      {/* ─── デスクトップ: 左右分割 ─── */}
+      <div className="hidden md:flex flex-1 overflow-hidden">
         <div className="w-72 flex-shrink-0 border-r border-gray-200 flex flex-col overflow-hidden">
           <IssueChatPanel
             projectName={projectName}
@@ -210,8 +246,6 @@ function ProjectGraphView({
             onIssueAdded={handleIssueAdded}
           />
         </div>
-
-        {/* 右パネル: ReactFlow グラフ */}
         <div className="flex-1 overflow-hidden relative">
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
@@ -226,6 +260,33 @@ function ProjectGraphView({
             onRefresh={fetchIssues}
           />
         </div>
+      </div>
+
+      {/* ─── モバイル: タブコンテンツ ─── */}
+      <div className="flex flex-1 overflow-hidden md:hidden">
+        {mobileTab === 'graph' ? graphPanel : chatPanel}
+      </div>
+
+      {/* ─── モバイル: ボトムタブバー ─── */}
+      <div className="md:hidden flex-shrink-0 flex items-center border-t border-gray-200 bg-white pb-safe">
+        <button
+          onClick={() => setMobileTab('graph')}
+          className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors ${
+            mobileTab === 'graph' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
+          }`}
+        >
+          <Network size={22} strokeWidth={mobileTab === 'graph' ? 2.5 : 1.8} />
+          <span>グラフ</span>
+        </button>
+        <button
+          onClick={() => setMobileTab('chat')}
+          className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors ${
+            mobileTab === 'chat' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
+          }`}
+        >
+          <MessageCircle size={22} strokeWidth={mobileTab === 'chat' ? 2.5 : 1.8} />
+          <span>課題入力</span>
+        </button>
       </div>
 
       <IssueDetailDrawer

@@ -20,9 +20,9 @@ export default function IssueFilterBar({
   onCategoryFilter,
 }: IssueFilterBarProps) {
   return (
-    <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-200 bg-gray-50 flex-wrap">
+    <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-200 bg-gray-50 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {/* 重要度フィルター */}
-      <div className="flex gap-1">
+      <div className="flex gap-1.5 flex-shrink-0">
         {([
           ['all', '全表示'],
           ['normal_up', 'Normal以上'],
@@ -31,10 +31,10 @@ export default function IssueFilterBar({
           <button
             key={val}
             onClick={() => onPriorityFilter(val)}
-            className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+            className={`text-xs px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${
               priorityFilter === val
                 ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'
+                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100 active:bg-gray-200'
             }`}
           >
             {label}
@@ -46,7 +46,7 @@ export default function IssueFilterBar({
       <select
         value={categoryFilter}
         onChange={(e) => onCategoryFilter(e.target.value)}
-        className="text-sm border border-gray-300 rounded px-2 py-1 bg-white"
+        className="flex-shrink-0 text-sm border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
       >
         {CATEGORIES.map((c) => (
           <option key={c} value={c === '全カテゴリ' ? '' : c}>{c}</option>
