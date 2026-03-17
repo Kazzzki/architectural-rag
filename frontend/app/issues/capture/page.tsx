@@ -68,6 +68,25 @@ export default function CapturePage() {
     setText(naturalText);
   }
 
+  function pollAnalysis(issueId: string, attempt = 0) {
+    if (attempt >= 20) return;
+    setTimeout(async () => {
+      try {
+        const res = await authFetch(`/api/issues/${issueId}/analysis`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.ai_status === 'done') {
+          setExistingIssues((prev) => prev.map((iss) => iss.id === issueId ? data.issue : iss));
+          if (data.causal_candidates.length > 0) {
+            setPendingCausal({ newIssueId: issueId, candidates: data.causal_candidates });
+          }
+        } else if (data.ai_status === 'analyzing') {
+          pollAnalysis(issueId, attempt + 1);
+        }
+      } catch { /* ignore */ }
+    }, 600);
+  }
+
   async function handleSubmit() {
     if (!text.trim()) return;
     if (!projectName) {
@@ -84,18 +103,19 @@ export default function CapturePage() {
       if (!res.ok) throw new Error(await res.text());
       const data: CaptureResponse = await res.json();
 
-      // 既存 issues に追加
+      // 既存 issues に追加（仮タイトルで即時表示）
       setExistingIssues((prev) => [...prev, data.issue]);
 
       // リセット
       setText('');
       setSelectedTemplate(null);
+      showToast('登録しました ✓');
 
-      // 因果候補があれば確認ダイアログ表示
-      if (data.causal_candidates.length > 0) {
+      // バックグラウンドでAI分析完了をポーリング
+      if (data.ai_status === 'analyzing') {
+        pollAnalysis(data.issue.id);
+      } else if (data.causal_candidates.length > 0) {
         setPendingCausal({ newIssueId: data.issue.id, candidates: data.causal_candidates });
-      } else {
-        showToast('登録しました ✓');
       }
     } catch (e: any) {
       showToast(`エラー: ${e.message ?? '送信に失敗しました'}`);

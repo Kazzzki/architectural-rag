@@ -590,6 +590,13 @@ def _run_migrations():
             confirmed  INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )""",
+        # 課題キャプチャ高速化: ai_status と causal_candidates_json 列追加
+        "ALTER TABLE issues ADD COLUMN ai_status TEXT NOT NULL DEFAULT 'done'",
+        "ALTER TABLE issues ADD COLUMN causal_candidates_json TEXT",
+        # パフォーマンス改善用インデックス
+        "CREATE INDEX IF NOT EXISTS idx_issues_project_created ON issues(project_name, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_issue_edges_from ON issue_edges(from_id)",
+        "CREATE INDEX IF NOT EXISTS idx_issue_edges_to ON issue_edges(to_id)",
     ]
     with engine.connect() as conn:
         for sql in migrations:

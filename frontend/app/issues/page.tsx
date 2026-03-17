@@ -260,6 +260,37 @@ function ProjectGraphView({
             onRefresh={fetchIssues}
           />
         </div>
+
+        {/* モバイル専用チャットパネル (チャットタブ選択時のみ表示) */}
+        <div className={`md:hidden flex-1 overflow-hidden flex-col ${activeTab === 'graph' ? 'hidden' : 'flex'}`}>
+          <IssueChatPanel
+            projectName={projectName}
+            issues={issues}
+            onIssueAdded={handleIssueAdded}
+          />
+        </div>
+      </div>
+
+      {/* モバイル専用ボトムタブバー */}
+      <div className="md:hidden flex border-t border-gray-200 bg-white flex-shrink-0">
+        <button
+          onClick={() => setActiveTab('graph')}
+          className={`flex-1 py-3 flex flex-col items-center gap-0.5 text-xs transition-colors ${
+            activeTab === 'graph' ? 'text-blue-600' : 'text-gray-400'
+          }`}
+        >
+          <Network size={18} />
+          グラフ
+        </button>
+        <button
+          onClick={() => setActiveTab('chat')}
+          className={`flex-1 py-3 flex flex-col items-center gap-0.5 text-xs transition-colors ${
+            activeTab === 'chat' ? 'text-blue-600' : 'text-gray-400'
+          }`}
+        >
+          <MessageCircle size={18} />
+          チャット
+        </button>
       </div>
 
       {/* ─── モバイル: タブコンテンツ ─── */}

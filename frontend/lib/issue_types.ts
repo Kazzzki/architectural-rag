@@ -43,6 +43,7 @@ export interface CaptureResponse {
   issue: Issue;
   causal_candidates: CausalCandidate[];
   duplicate_candidates: DuplicateCandidate[];
+  ai_status?: 'analyzing' | 'done' | 'error';
 }
 
 export interface IssuesListResponse {
