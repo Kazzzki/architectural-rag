@@ -36,6 +36,21 @@ UPDATABLE_FIELDS = {
 class CaptureRequest(BaseModel):
     raw_input: str
     project_name: str
+    skip_ai: bool = False
+
+
+class TriageGenerateRequest(BaseModel):
+    project_name: str
+    template_id: str
+
+
+class TriageApplyRequest(BaseModel):
+    raw_input: str
+    project_name: str
+    phase_value: Optional[str] = None
+    category_value: Optional[str] = None
+    related_node_ids: list = []
+    assignee: Optional[str] = None
 
 
 class EdgeConfirmRequest(BaseModel):
@@ -222,6 +237,99 @@ def capture_issue_core(raw_input: str, project_name: str, db) -> dict:
     }
 
 
+def _generate_triage_questions(project_name: str, template_id: str, db) -> dict:
+    """マインドマップのノード・フェーズ・カテゴリを Gemini に渡し、
+    課題トリアージ用の質問セットを生成して DB に保存する。"""
+    from gemini_client import get_client
+    from google.genai import types
+    import mindmap.template_loader as template_loader
+
+    # テンプレート ID として試みる（raw dict 返却）
+    try:
+        data = template_loader.load_template(template_id)
+    except Exception:
+        # プロジェクト ID として試みる → テンプレート ID を取得して再ロード
+        import mindmap.project_store as project_store
+        proj_data = project_store.get_project_data(template_id)
+        if not proj_data:
+            raise ValueError(f"template_id='{template_id}' はテンプレートでもプロジェクトでも見つかりません")
+        tmpl_id = proj_data["project"]["template_id"]
+        data = template_loader.load_template(tmpl_id)
+
+    raw_nodes = data.get("nodes", [])
+    raw_phases = data.get("phases", [])
+    raw_categories = data.get("categories", [])
+
+    node_summaries = [
+        {
+            "id": n.get("id", ""),
+            "label": n.get("label", ""),
+            "phase": n.get("phase", ""),
+            "category": n.get("category", ""),
+            "key_stakeholders": (n.get("key_stakeholders") or [])[:3],
+        }
+        for n in raw_nodes[:50]
+    ]
+    phases = [{"id": p.get("id", ""), "name": p.get("name", "")} for p in raw_phases]
+    categories = [{"id": c.get("id", ""), "name": c.get("name", "")} for c in raw_categories]
+
+    prompt = f"""建設プロジェクトのマインドマップから課題トリアージ用の質問セットを生成してください。
+
+フェーズ: {json.dumps(phases, ensure_ascii=False)}
+カテゴリ: {json.dumps(categories, ensure_ascii=False)}
+ノード（上位50件）: {json.dumps(node_summaries, ensure_ascii=False)}
+
+以下の JSON 形式のみで返答してください:
+{{"phase_question":{{"label":"この課題はどの工程フェーズで発生しましたか？","options":[{{"value":"phase_id","label":"フェーズ名","node_ids":["n1","n2"]}}]}},"category_question":{{"label":"この課題はどの専門分野に関係しますか？","options":[{{"value":"cat_id","label":"カテゴリ名","node_ids":["n1"]}}]}},"node_questions":[{{"node_id":"n1","node_label":"ノード名","question":"この課題は〇〇と関連がありますか？","typical_assignee":"担当役割"}}],"assignee_question":{{"label":"この課題の主担当者はどの役割ですか？","options":["役割1","役割2"]}}}}
+
+- node_questions は最重要ノード（フェーズ横断・多くの依存関係を持つ）を優先して最大15件
+- typical_assignee は key_stakeholders から推測
+- 日本語で回答"""
+
+    client = get_client()
+    config = types.GenerateContentConfig(
+        system_instruction="建設PM/CMの課題整理アシスタント。指定のJSON形式のみで返答せよ。",
+        temperature=0.1,
+    )
+    response = client.models.generate_content(
+        model="gemini-3.1-flash-lite",
+        contents=prompt,
+        config=config,
+    )
+
+    import re as _re
+    raw = response.text.strip()
+    raw = _re.sub(r'^```(?:json)?\s*', '', raw)
+    raw = _re.sub(r'\s*```$', '', raw).strip()
+    start = raw.find('{')
+    end = raw.rfind('}')
+    if start != -1 and end != -1:
+        raw = raw[start:end + 1]
+    question_data = json.loads(raw)
+
+    now = _now_iso()
+    record_id = str(uuid.uuid4())
+    db.execute(
+        text("DELETE FROM issue_triage_questions WHERE project_name = :pn"),
+        {"pn": project_name},
+    )
+    db.execute(
+        text("""
+            INSERT INTO issue_triage_questions (id, project_name, question_json, generated_at, template_id)
+            VALUES (:id, :pn, :qj, :ga, :tid)
+        """),
+        {
+            "id": record_id,
+            "pn": project_name,
+            "qj": json.dumps(question_data, ensure_ascii=False),
+            "ga": now,
+            "tid": template_id,
+        },
+    )
+    db.commit()
+    return question_data
+
+
 # ---------- エンドポイント ----------
 
 @router.get("/api/issues/projects")
@@ -235,12 +343,131 @@ def list_projects(db=Depends(get_db)):
 
 @router.post("/api/issues/capture")
 def capture_issue(req: CaptureRequest, db=Depends(get_db)):
-    """課題テキストを AI で構造化して DB に保存し、因果・重複候補を返す"""
+    """課題テキストを DB に保存し、因果・重複候補を返す。skip_ai=True のとき AI 処理をスキップ。"""
     try:
+        if req.skip_ai:
+            now = _now_iso()
+            issue_id = str(uuid.uuid4())
+            db.execute(text("""
+                INSERT INTO issues (
+                    id, project_name, title, raw_input, category, priority, status,
+                    description, cause, impact, action_next,
+                    is_collapsed, pos_x, pos_y, template_id, created_at, updated_at
+                ) VALUES (
+                    :id, :project_name, :title, :raw_input, '工程', 'normal', '発生中',
+                    '', '', '', '', 0, 0.0, 0.0, NULL, :created_at, :updated_at
+                )
+            """), {
+                "id": issue_id,
+                "project_name": req.project_name,
+                "title": req.raw_input[:20],
+                "raw_input": req.raw_input,
+                "created_at": now,
+                "updated_at": now,
+            })
+            db.commit()
+            row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+            return {"issue": _issue_row_to_dict(row), "causal_candidates": [], "duplicate_candidates": []}
         return capture_issue_core(req.raw_input, req.project_name, db)
     except Exception as e:
-        logger.error(f"Gemini capture failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"AI処理エラー: {str(e)}")
+        logger.error(f"Issue capture failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"処理エラー: {str(e)}")
+
+
+@router.post("/api/issues/triage-questions/generate")
+def generate_triage_questions(req: TriageGenerateRequest, db=Depends(get_db)):
+    """マインドマップを Gemini で分析して課題トリアージ質問を事前生成・保存する。
+    重い処理なので事前に（プロジェクト設定時などに）呼ぶ想定。"""
+    try:
+        result = _generate_triage_questions(req.project_name, req.template_id, db)
+        return {"status": "ok", "questions": result}
+    except Exception as e:
+        logger.error(f"Triage question generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"質問生成エラー: {str(e)}")
+
+
+@router.get("/api/issues/triage-questions")
+def get_triage_questions(project_name: str, db=Depends(get_db)):
+    """事前生成済みの質問セットを即座に返す（AI なし）。未生成の場合は 404。"""
+    row = db.execute(
+        text("""
+            SELECT question_json, generated_at, template_id
+            FROM issue_triage_questions
+            WHERE project_name = :pn
+            ORDER BY generated_at DESC LIMIT 1
+        """),
+        {"pn": project_name},
+    ).fetchone()
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail="質問セット未生成。先に POST /api/issues/triage-questions/generate を呼んでください。",
+        )
+    return {
+        "questions": json.loads(row[0]),
+        "generated_at": row[1],
+        "template_id": row[2],
+    }
+
+
+@router.post("/api/issues/triage-apply")
+def triage_apply(req: TriageApplyRequest, db=Depends(get_db)):
+    """ユーザーの選択（フェーズ・カテゴリ・関連ノード・担当者）を受け取り
+    ノード保存とエッジを一括作成する。"""
+    try:
+        now = _now_iso()
+        issue_id = str(uuid.uuid4())
+
+        db.execute(text("""
+            INSERT INTO issues (
+                id, project_name, title, raw_input, category, priority, status,
+                description, cause, impact, action_next,
+                is_collapsed, pos_x, pos_y, template_id, created_at, updated_at, assignee
+            ) VALUES (
+                :id, :project_name, :title, :raw_input, :category, 'normal', '発生中',
+                '', '', '', '', 0, 0.0, 0.0, NULL, :created_at, :updated_at, :assignee
+            )
+        """), {
+            "id": issue_id,
+            "project_name": req.project_name,
+            "title": req.raw_input[:20],
+            "raw_input": req.raw_input,
+            "category": req.category_value or "工程",
+            "created_at": now,
+            "updated_at": now,
+            "assignee": req.assignee or "",
+        })
+
+        edges_created = []
+        for node_id in req.related_node_ids:
+            existing = db.execute(
+                text("""
+                    SELECT id FROM issues
+                    WHERE project_name = :pn AND template_id = :nid
+                    LIMIT 1
+                """),
+                {"pn": req.project_name, "nid": node_id},
+            ).fetchone()
+            if existing:
+                edge_id = str(uuid.uuid4())
+                db.execute(text("""
+                    INSERT INTO issue_edges (id, from_id, to_id, confirmed, created_at)
+                    VALUES (:id, :from_id, :to_id, 1, :created_at)
+                """), {
+                    "id": edge_id,
+                    "from_id": existing[0],
+                    "to_id": issue_id,
+                    "created_at": now,
+                })
+                edges_created.append({"from_id": existing[0], "to_id": issue_id})
+
+        db.commit()
+        row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+        return {"issue": _issue_row_to_dict(row), "edges_created": edges_created}
+
+    except Exception as e:
+        logger.error(f"Triage apply failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"処理エラー: {str(e)}")
 
 
 @router.post("/api/issues/edges/confirm")

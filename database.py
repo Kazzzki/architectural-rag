@@ -601,6 +601,15 @@ def _run_migrations():
             role         TEXT,
             created_at   TEXT NOT NULL
         )""",
+        # 課題トリアージ: 事前生成質問セットテーブル
+        """CREATE TABLE IF NOT EXISTS issue_triage_questions (
+            id           TEXT PRIMARY KEY,
+            project_name TEXT NOT NULL,
+            question_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            template_id  TEXT
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_itq_project ON issue_triage_questions(project_name)""",
     ]
     with engine.connect() as conn:
         for sql in migrations:
