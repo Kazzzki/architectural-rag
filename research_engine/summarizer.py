@@ -1,19 +1,18 @@
 """
 research_engine/summarizer.py
 
-Ollamaを使ってMarkdownソースを300文字以内に要約する。
+Gemini Flash を使ってMarkdownソースを300文字以内に要約する。
 """
+import asyncio
 import logging
-import os
 
-import httpx
+from config import GEMINI_MODEL_FLASH
+from gemini_client import get_client
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+_MAX_INPUT_CHARS = 12000
 
-_MAX_INPUT_CHARS = 8000
 _SYSTEM_TEMPLATE = """\
 あなたはPM/CM専門の文書要約者です。
 以下の文書を300文字以内で要約してください。
@@ -23,25 +22,26 @@ _SYSTEM_TEMPLATE = """\
 """
 
 
+def _call_gemini_sync(prompt: str) -> str:
+    client = get_client()
+    response = client.models.generate_content(
+        model=GEMINI_MODEL_FLASH,
+        contents=prompt,
+    )
+    return response.text or ""
+
+
 async def summarize_source(markdown_content: str, category: str, url: str = "") -> str:
     """
     Markdownコンテンツを300文字以内で要約して返す。
-    Ollama呼び出しに失敗した場合は空文字を返す。
+    失敗した場合は空文字を返す。
     """
     text = markdown_content[:_MAX_INPUT_CHARS]
     system = _SYSTEM_TEMPLATE.format(category=category)
+    prompt = f"{system}\n\n{text}"
 
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": text,
-        "system": system,
-        "stream": False,
-    }
     try:
-        async with httpx.AsyncClient(timeout=1800.0) as client:
-            resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
-            resp.raise_for_status()
-            return resp.json().get("response", "").strip()
+        return await asyncio.to_thread(_call_gemini_sync, prompt)
     except Exception as e:
         logger.warning(f"summarize_source failed [{url}]: {e}")
         return ""

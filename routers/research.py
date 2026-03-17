@@ -63,7 +63,6 @@ async def run_research_pipeline(research_id: str, question: str, mode: str) -> N
         )
         month_str = datetime.now(timezone.utc).strftime("%Y-%m")
         Path(RESEARCH_VAULT_PATH).mkdir(parents=True, exist_ok=True)
-        (Path(RESEARCH_VAULT_PATH) / "raw" / month_str / research_id).mkdir(parents=True, exist_ok=True)
         (Path(RESEARCH_VAULT_PATH) / "markdown" / month_str / research_id).mkdir(parents=True, exist_ok=True)
 
         # Step 2: プラン生成（4人格ディスカッション: Phase1→Phase2→Phase3）
@@ -107,8 +106,13 @@ async def run_research_pipeline(research_id: str, question: str, mode: str) -> N
         raw_sources = await collect_sources(plan, research_id, progress_callback)
 
         # Step 5: 各ソースを要約
+        # Gemini グラウンディング済みソースは summary が設定済みのためスキップ。
+        # summary が空のソース（フォールバック）のみ summarize_source を呼ぶ。
         sources_with_summary = []
         for s in raw_sources:
+            if s.get("summary"):
+                sources_with_summary.append(s)
+                continue
             md_path = s.get("markdown_path", "")
             md_content = ""
             if md_path:
