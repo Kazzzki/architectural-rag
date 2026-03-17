@@ -30,8 +30,34 @@ const PRIORITY_LABEL: Record<string, string> = {
 // ─── IssueDraftCard ───────────────────────────────────────────────────────────
 
 function IssueDraftCard({ draft }: { draft: CaptureResponse }) {
-  const { issue, causal_candidates } = draft;
+  const [currentDraft, setCurrentDraft] = useState(draft);
+  const { issue, causal_candidates } = currentDraft;
+  const analyzing = currentDraft.ai_status === 'analyzing';
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
+
+  // ai_status === 'analyzing' の間、ポーリングで結果を取得
+  useEffect(() => {
+    if (draft.ai_status !== 'analyzing') return;
+    let cancelled = false;
+    let attempts = 0;
+    const poll = async () => {
+      if (cancelled || attempts >= 20) return;
+      attempts++;
+      try {
+        const r = await authFetch(`/api/issues/${draft.issue.id}/analysis`);
+        if (r.ok) {
+          const d = await r.json();
+          if (d.ai_status === 'done' || d.ai_status === 'error') {
+            if (!cancelled) setCurrentDraft(d);
+            return;
+          }
+        }
+      } catch { /* ignore */ }
+      if (!cancelled) setTimeout(poll, 600);
+    };
+    setTimeout(poll, 600);
+    return () => { cancelled = true; };
+  }, []);
 
   async function confirmEdge(fromId: string, toId: string, key: string) {
     try {
@@ -52,13 +78,19 @@ function IssueDraftCard({ draft }: { draft: CaptureResponse }) {
       <div className="px-4 py-3">
         <div className="flex items-start justify-between gap-2 mb-1.5">
           <span className="font-semibold text-gray-800 leading-snug">{issue.title}</span>
-          <span
-            className={`text-xs px-2 py-0.5 rounded-full border flex-shrink-0 font-medium ${
-              PRIORITY_STYLE[issue.priority] ?? PRIORITY_STYLE['normal']
-            }`}
-          >
-            {PRIORITY_LABEL[issue.priority] ?? issue.priority}
-          </span>
+          {analyzing ? (
+            <span className="text-xs px-2 py-0.5 rounded-full border flex-shrink-0 font-medium border-amber-200 bg-amber-50 text-amber-600">
+              AI分析中…
+            </span>
+          ) : (
+            <span
+              className={`text-xs px-2 py-0.5 rounded-full border flex-shrink-0 font-medium ${
+                PRIORITY_STYLE[issue.priority] ?? PRIORITY_STYLE['normal']
+              }`}
+            >
+              {PRIORITY_LABEL[issue.priority] ?? issue.priority}
+            </span>
+          )}
         </div>
         <div className="flex gap-3 text-xs text-gray-400 mb-2">
           <span>{issue.category}</span>
@@ -217,10 +249,11 @@ export default function IssueChatPage() {
       });
       if (!res.ok) throw new Error(await res.text());
       const data: CaptureResponse = await res.json();
+      const statusText = data.ai_status === 'analyzing' ? '登録しました（AI分析中…）' : '課題を整理しました ✓';
 
       setMessages((prev) => [
         ...prev,
-        { id: nextId(), role: 'ai', text: '課題を整理しました ✓', draft: data },
+        { id: nextId(), role: 'ai', text: statusText, draft: data },
       ]);
     } catch (e: any) {
       setMessages((prev) => [

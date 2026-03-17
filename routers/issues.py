@@ -2,7 +2,8 @@
 routers/issues.py — 課題因果グラフ API
 
 エンドポイント:
-  POST   /api/issues/capture          課題テキストをAI構造化 + 保存
+  POST   /api/issues/capture          課題テキストを即座に保存 → バックグラウンドでAI構造化
+  GET    /api/issues/{issue_id}/analysis  AI分析結果ポーリング
   POST   /api/issues/edges/confirm    因果エッジを確定
   GET    /api/issues                  課題・エッジ一覧
   GET    /api/issues/projects         プロジェクト名一覧
@@ -15,7 +16,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -66,8 +67,12 @@ def _issue_row_to_dict(row) -> dict:
         "id", "project_name", "title", "raw_input", "category", "priority",
         "status", "description", "cause", "impact", "action_next",
         "is_collapsed", "pos_x", "pos_y", "template_id", "created_at", "updated_at",
+        "ai_status", "causal_candidates_json",
     ]
-    return dict(zip(keys, row))
+    d = dict(zip(keys, row))
+    d.setdefault("ai_status", "done")
+    d.setdefault("causal_candidates_json", None)
+    return d
 
 
 def _edge_row_to_dict(row) -> dict:
@@ -144,6 +149,77 @@ def _call_gemini_capture(raw_input: str, existing_issues: list) -> dict:
         raise
 
 
+def _analyze_issue_bg(issue_id: str, raw_input: str, project_name: str) -> None:
+    """バックグラウンドでGemini分析を実行し、issueをUPDATEする"""
+    from database import get_session
+    db = get_session()
+    try:
+        # 既存課題を最新30件に制限して取得（現在の課題は除外）
+        rows = db.execute(
+            text("""
+                SELECT id, title, description FROM issues
+                WHERE project_name = :pn AND id != :current_id
+                ORDER BY created_at DESC LIMIT 30
+            """),
+            {"pn": project_name, "current_id": issue_id},
+        ).fetchall()
+        existing = [{"id": r[0], "title": r[1], "description": r[2]} for r in rows]
+
+        result = _call_gemini_capture(raw_input, existing)
+
+        causal_candidates = [
+            c for c in result.get("causal_candidates", [])
+            if isinstance(c.get("confidence"), (int, float)) and c["confidence"] >= 0.7
+        ]
+        duplicate_candidates = [
+            c for c in result.get("duplicate_candidates", [])
+            if isinstance(c.get("similarity"), (int, float)) and c["similarity"] >= 0.85
+        ]
+
+        db.execute(
+            text("""
+                UPDATE issues SET
+                    title = :title, category = :category, priority = :priority,
+                    status = :status, description = :description, cause = :cause,
+                    impact = :impact, action_next = :action_next,
+                    ai_status = 'done',
+                    causal_candidates_json = :candidates_json,
+                    updated_at = :updated_at
+                WHERE id = :id
+            """),
+            {
+                "id": issue_id,
+                "title": (result.get("title") or raw_input)[:20],
+                "category": result.get("category") or "工程",
+                "priority": result.get("priority") or "normal",
+                "status": result.get("status") or "発生中",
+                "description": result.get("description") or "",
+                "cause": result.get("cause") or "",
+                "impact": result.get("impact") or "",
+                "action_next": result.get("action_next") or "",
+                "candidates_json": json.dumps(
+                    {"causal": causal_candidates, "duplicate": duplicate_candidates},
+                    ensure_ascii=False,
+                ),
+                "updated_at": _now_iso(),
+            },
+        )
+        db.commit()
+        logger.info(f"Background analysis done for issue {issue_id}")
+    except Exception as e:
+        logger.error(f"Background analysis failed for {issue_id}: {e}", exc_info=True)
+        try:
+            db.execute(
+                text("UPDATE issues SET ai_status = 'error', updated_at = :now WHERE id = :id"),
+                {"id": issue_id, "now": _now_iso()},
+            )
+            db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 # ---------- エンドポイント ----------
 
 @router.get("/api/issues/projects")
@@ -156,22 +232,8 @@ def list_projects(db=Depends(get_db)):
 
 
 @router.post("/api/issues/capture")
-def capture_issue(req: CaptureRequest, db=Depends(get_db)):
-    """課題テキストを AI で構造化して DB に保存し、因果・重複候補を返す"""
-    # 同プロジェクトの既存課題を取得（コンテキスト用）
-    rows = db.execute(
-        text("SELECT id, title, description FROM issues WHERE project_name = :pn"),
-        {"pn": req.project_name},
-    ).fetchall()
-    existing = [{"id": r[0], "title": r[1], "description": r[2]} for r in rows]
-
-    # Gemini 呼び出し
-    try:
-        result = _call_gemini_capture(req.raw_input, existing)
-    except Exception as e:
-        logger.error(f"Gemini capture failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"AI処理エラー: {str(e)}")
-
+def capture_issue(req: CaptureRequest, background_tasks: BackgroundTasks, db=Depends(get_db)):
+    """課題テキストを即座に DB に保存し、バックグラウンドで AI 構造化する"""
     now = _now_iso()
     issue_id = str(uuid.uuid4())
 
@@ -180,47 +242,91 @@ def capture_issue(req: CaptureRequest, db=Depends(get_db)):
             INSERT INTO issues (
                 id, project_name, title, raw_input, category, priority, status,
                 description, cause, impact, action_next,
-                is_collapsed, pos_x, pos_y, template_id, created_at, updated_at
+                is_collapsed, pos_x, pos_y, template_id, created_at, updated_at,
+                ai_status, causal_candidates_json
             ) VALUES (
                 :id, :project_name, :title, :raw_input, :category, :priority, :status,
                 :description, :cause, :impact, :action_next,
-                0, 0.0, 0.0, NULL, :created_at, :updated_at
+                0, 0.0, 0.0, NULL, :created_at, :updated_at,
+                'analyzing', NULL
             )
         """),
         {
             "id": issue_id,
             "project_name": req.project_name,
-            "title": (result.get("title") or req.raw_input)[:20],
+            "title": req.raw_input[:20],
             "raw_input": req.raw_input,
-            "category": result.get("category") or "工程",
-            "priority": result.get("priority") or "normal",
-            "status": result.get("status") or "発生中",
-            "description": result.get("description") or "",
-            "cause": result.get("cause") or "",
-            "impact": result.get("impact") or "",
-            "action_next": result.get("action_next") or "",
+            "category": "工程",
+            "priority": "normal",
+            "status": "発生中",
+            "description": "",
+            "cause": "",
+            "impact": "",
+            "action_next": "",
             "created_at": now,
             "updated_at": now,
         },
     )
     db.commit()
 
+    # バックグラウンドでAI分析を実行（レスポンス送信後に起動）
+    background_tasks.add_task(_analyze_issue_bg, issue_id, req.raw_input, req.project_name)
+
+    issue = {
+        "id": issue_id,
+        "project_name": req.project_name,
+        "title": req.raw_input[:20],
+        "raw_input": req.raw_input,
+        "category": "工程",
+        "priority": "normal",
+        "status": "発生中",
+        "description": "",
+        "cause": "",
+        "impact": "",
+        "action_next": "",
+        "is_collapsed": 0,
+        "pos_x": 0.0,
+        "pos_y": 0.0,
+        "template_id": None,
+        "created_at": now,
+        "updated_at": now,
+        "ai_status": "analyzing",
+        "causal_candidates_json": None,
+    }
+
+    return {
+        "issue": issue,
+        "ai_status": "analyzing",
+        "causal_candidates": [],
+        "duplicate_candidates": [],
+    }
+
+
+@router.get("/api/issues/{issue_id}/analysis")
+def get_issue_analysis(issue_id: str, db=Depends(get_db)):
+    """AI分析結果をポーリング取得する（analyzing/done/error）"""
     row = db.execute(
         text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}
     ).fetchone()
-    issue = _issue_row_to_dict(row)
+    if not row:
+        raise HTTPException(status_code=404, detail="課題が見つかりません")
 
-    # 閾値フィルター（Gemini 側でも適用しているが念のため）
-    causal_candidates = [
-        c for c in result.get("causal_candidates", [])
-        if isinstance(c.get("confidence"), (int, float)) and c["confidence"] >= 0.7
-    ]
-    duplicate_candidates = [
-        c for c in result.get("duplicate_candidates", [])
-        if isinstance(c.get("similarity"), (int, float)) and c["similarity"] >= 0.85
-    ]
+    issue = _issue_row_to_dict(row)
+    ai_status = issue.get("ai_status", "done")
+    candidates_json = issue.get("causal_candidates_json")
+
+    causal_candidates: list = []
+    duplicate_candidates: list = []
+    if candidates_json:
+        try:
+            parsed = json.loads(candidates_json)
+            causal_candidates = parsed.get("causal", [])
+            duplicate_candidates = parsed.get("duplicate", [])
+        except Exception:
+            pass
 
     return {
+        "ai_status": ai_status,
         "issue": issue,
         "causal_candidates": causal_candidates,
         "duplicate_candidates": duplicate_candidates,

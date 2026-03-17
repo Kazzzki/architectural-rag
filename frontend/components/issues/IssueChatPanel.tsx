@@ -120,8 +120,38 @@ function ResultCard({
   issues: Issue[];
   onEdgeConfirmed: () => void;
 }) {
-  const { issue, causal_candidates } = resp;
+  const [currentResp, setCurrentResp] = useState(resp);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+
+  // ai_status === 'analyzing' の間、ポーリングで結果を取得
+  useEffect(() => {
+    if (resp.ai_status !== 'analyzing') return;
+    let cancelled = false;
+    let attempts = 0;
+    const poll = async () => {
+      if (cancelled || attempts >= 20) return;
+      attempts++;
+      try {
+        const r = await authFetch(`/api/issues/${resp.issue.id}/analysis`);
+        if (r.ok) {
+          const d = await r.json();
+          if (d.ai_status === 'done' || d.ai_status === 'error') {
+            if (!cancelled) {
+              setCurrentResp(d);
+              if (d.causal_candidates?.length > 0) onEdgeConfirmed();
+            }
+            return;
+          }
+        }
+      } catch { /* ignore */ }
+      if (!cancelled) setTimeout(poll, 600);
+    };
+    setTimeout(poll, 600);
+    return () => { cancelled = true; };
+  }, []);
+
+  const { issue, causal_candidates } = currentResp;
+  const analyzing = currentResp.ai_status === 'analyzing';
   const prStyle = PRIORITY_STYLE[issue.priority] ?? PRIORITY_STYLE['normal'];
 
   async function confirmEdge(fromId: string, toId: string) {
@@ -140,9 +170,15 @@ function ResultCard({
       <div className="px-3 py-2.5 space-y-1">
         <div className="flex items-center justify-between gap-2">
           <span className="font-semibold text-gray-800 text-sm leading-tight">{issue.title}</span>
-          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium flex-shrink-0 ${prStyle}`}>
-            {PRIORITY_LABEL[issue.priority] ?? issue.priority}
-          </span>
+          {analyzing ? (
+            <span className="text-xs px-2 py-0.5 rounded-full border font-medium flex-shrink-0 border-amber-200 bg-amber-50 text-amber-600">
+              AI分析中…
+            </span>
+          ) : (
+            <span className={`text-xs px-2 py-0.5 rounded-full border font-medium flex-shrink-0 ${prStyle}`}>
+              {PRIORITY_LABEL[issue.priority] ?? issue.priority}
+            </span>
+          )}
         </div>
         <div className="flex gap-2 text-gray-400">
           <span>{issue.category}</span><span>·</span><span>{issue.status}</span>
