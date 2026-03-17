@@ -590,13 +590,17 @@ def _run_migrations():
             confirmed  INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )""",
-        # 課題キャプチャ高速化: ai_status と causal_candidates_json 列追加
-        "ALTER TABLE issues ADD COLUMN ai_status TEXT NOT NULL DEFAULT 'done'",
-        "ALTER TABLE issues ADD COLUMN causal_candidates_json TEXT",
-        # パフォーマンス改善用インデックス
-        "CREATE INDEX IF NOT EXISTS idx_issues_project_created ON issues(project_name, created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_issue_edges_from ON issue_edges(from_id)",
-        "CREATE INDEX IF NOT EXISTS idx_issue_edges_to ON issue_edges(to_id)",
+        # 課題因果グラフ: issues テーブルへの担当者・判断メモ列追加
+        "ALTER TABLE issues ADD COLUMN assignee TEXT",
+        "ALTER TABLE issues ADD COLUMN context_memo TEXT",
+        # 課題因果グラフ: project_members テーブル新規作成
+        """CREATE TABLE IF NOT EXISTS project_members (
+            id           TEXT PRIMARY KEY,
+            project_name TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            role         TEXT,
+            created_at   TEXT NOT NULL
+        )""",
     ]
     with engine.connect() as conn:
         for sql in migrations:

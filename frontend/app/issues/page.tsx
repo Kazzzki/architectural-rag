@@ -7,7 +7,7 @@ import IssueFilterBar, { PriorityFilter } from '@/components/issues/IssueFilterB
 import IssueChatPanel from '@/components/issues/IssueChatPanel';
 import IssueCausalGraph from '@/components/issues/IssueCausalGraph';
 import IssueDetailDrawer from '@/components/issues/IssueDetailDrawer';
-import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Smartphone, Network } from 'lucide-react';
+import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, Maximize2, X } from 'lucide-react';
 import Link from 'next/link';
 
 // ────────────────────────────────────────────────
@@ -21,7 +21,6 @@ function ProjectListView({
   const [projects, setProjects] = useState<{ name: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
-  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     authFetch('/api/issues')
@@ -139,8 +138,8 @@ function ProjectGraphView({
   const [categoryFilter, setCategoryFilter] = useState('');
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [loading, setLoading] = useState(false);
-  // モバイル用タブ: 'graph' | 'chat'
-  const [mobileTab, setMobileTab] = useState<'graph' | 'chat'>('graph');
+  const [mobilePanel, setMobilePanel] = useState<'none' | 'chat' | 'filter'>('none');
+  const [fitViewTrigger, setFitViewTrigger] = useState(0);
 
   const fetchIssues = useCallback(async () => {
     setLoading(true);
@@ -175,77 +174,40 @@ function ProjectGraphView({
     if (selectedIssue?.id === updated.id) setSelectedIssue(updated);
   }
 
-  const graphPanel = (
-    <div className="flex-1 overflow-hidden relative">
-      {loading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
-          <span className="text-sm text-gray-400">読み込み中…</span>
-        </div>
-      )}
-      <IssueCausalGraph
-        issues={issues}
-        edges={edges}
-        priorityFilter={priorityFilter}
-        onNodeClick={(issue) => {
-          setSelectedIssue(issue);
-          // モバイルでグラフタップ時はグラフタブにとどまる
-        }}
-        onRefresh={fetchIssues}
-      />
-    </div>
-  );
-
-  const chatPanel = (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <IssueChatPanel
-        projectName={projectName}
-        issues={issues}
-        onIssueAdded={(resp) => {
-          handleIssueAdded(resp);
-          // 課題追加後はグラフタブへ自動切り替え
-          setMobileTab('graph');
-        }}
-      />
-    </div>
-  );
-
   return (
     <div className="flex flex-col h-screen bg-white overflow-hidden">
       {/* ヘッダー */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white z-10">
-        <button onClick={onBack} className="text-gray-400 hover:text-gray-700 p-1 -ml-1">
+        <button onClick={onBack} className="text-gray-400 hover:text-gray-700 flex-shrink-0">
           <ArrowLeft size={18} />
         </button>
         <ClipboardList size={20} className="text-blue-600 flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <h1 className="text-base font-semibold text-gray-800 truncate">{projectName}</h1>
         </div>
-        <Link
-          href={`/issues/capture?project=${encodeURIComponent(projectName)}`}
-          className="flex items-center gap-1 text-xs text-blue-600 border border-blue-300 rounded-lg px-2.5 py-1.5 hover:bg-blue-50 flex-shrink-0 transition-colors"
-        >
-          <Smartphone size={14} />
-          <span className="hidden sm:inline">モバイル入力</span>
-        </Link>
       </div>
 
-      {/* フィルターバー */}
-      <IssueFilterBar
-        priorityFilter={priorityFilter}
-        onPriorityFilter={setPriorityFilter}
-        categoryFilter={categoryFilter}
-        onCategoryFilter={setCategoryFilter}
-      />
+      {/* フィルターバー（デスクトップのみ） */}
+      <div className="hidden md:block">
+        <IssueFilterBar
+          priorityFilter={priorityFilter}
+          onPriorityFilter={setPriorityFilter}
+          categoryFilter={categoryFilter}
+          onCategoryFilter={setCategoryFilter}
+        />
+      </div>
 
-      {/* ─── デスクトップ: 左右分割 ─── */}
-      <div className="hidden md:flex flex-1 overflow-hidden">
-        <div className="w-72 flex-shrink-0 border-r border-gray-200 flex flex-col overflow-hidden">
+      <div className="flex flex-1 overflow-hidden">
+        {/* 左パネル: チャット入力（デスクトップのみ） */}
+        <div className="hidden md:flex w-72 flex-shrink-0 border-r border-gray-200 flex-col overflow-hidden">
           <IssueChatPanel
             projectName={projectName}
             issues={issues}
             onIssueAdded={handleIssueAdded}
           />
         </div>
+
+        {/* グラフ（モバイルで全画面） */}
         <div className="flex-1 overflow-hidden relative">
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
@@ -258,67 +220,82 @@ function ProjectGraphView({
             priorityFilter={priorityFilter}
             onNodeClick={setSelectedIssue}
             onRefresh={fetchIssues}
-          />
-        </div>
-
-        {/* モバイル専用チャットパネル (チャットタブ選択時のみ表示) */}
-        <div className={`md:hidden flex-1 overflow-hidden flex-col ${activeTab === 'graph' ? 'hidden' : 'flex'}`}>
-          <IssueChatPanel
-            projectName={projectName}
-            issues={issues}
-            onIssueAdded={handleIssueAdded}
+            fitViewTrigger={fitViewTrigger}
           />
         </div>
       </div>
 
-      {/* モバイル専用ボトムタブバー */}
-      <div className="md:hidden flex border-t border-gray-200 bg-white flex-shrink-0">
+      {/* モバイル専用底部バー */}
+      <div className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 p-1 bg-white/90 backdrop-blur border border-gray-200 rounded-2xl shadow-2xl">
         <button
-          onClick={() => setActiveTab('graph')}
-          className={`flex-1 py-3 flex flex-col items-center gap-0.5 text-xs transition-colors ${
-            activeTab === 'graph' ? 'text-blue-600' : 'text-gray-400'
+          onClick={() => setMobilePanel(mobilePanel === 'chat' ? 'none' : 'chat')}
+          className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${
+            mobilePanel === 'chat' ? 'bg-blue-600 text-white shadow-inner' : 'text-gray-500 hover:bg-gray-50'
           }`}
         >
-          <Network size={18} />
-          グラフ
+          <MessageCircle size={20} />
+          <span className="text-[9px] font-bold">課題追加</span>
         </button>
         <button
-          onClick={() => setActiveTab('chat')}
-          className={`flex-1 py-3 flex flex-col items-center gap-0.5 text-xs transition-colors ${
-            activeTab === 'chat' ? 'text-blue-600' : 'text-gray-400'
+          onClick={() => setMobilePanel(mobilePanel === 'filter' ? 'none' : 'filter')}
+          className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${
+            mobilePanel === 'filter' ? 'bg-blue-600 text-white shadow-inner' : 'text-gray-500 hover:bg-gray-50'
           }`}
         >
-          <MessageCircle size={18} />
-          チャット
+          <Filter size={20} />
+          <span className="text-[9px] font-bold">フィルタ</span>
+        </button>
+        <div className="w-px h-8 bg-gray-200 mx-1" />
+        <button
+          onClick={() => setFitViewTrigger((v) => v + 1)}
+          className="flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all text-gray-500 hover:bg-gray-50"
+        >
+          <Maximize2 size={20} />
+          <span className="text-[9px] font-bold">全体表示</span>
         </button>
       </div>
 
-      {/* ─── モバイル: タブコンテンツ ─── */}
-      <div className="flex flex-1 overflow-hidden md:hidden">
-        {mobileTab === 'graph' ? graphPanel : chatPanel}
-      </div>
-
-      {/* ─── モバイル: ボトムタブバー ─── */}
-      <div className="md:hidden flex-shrink-0 flex items-center border-t border-gray-200 bg-white pb-safe">
-        <button
-          onClick={() => setMobileTab('graph')}
-          className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors ${
-            mobileTab === 'graph' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
-          }`}
+      {/* モバイル ボトムシート */}
+      {mobilePanel !== 'none' && (
+        <div
+          className="md:hidden fixed inset-0 z-[60] flex flex-col bg-black/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setMobilePanel('none'); }}
         >
-          <Network size={22} strokeWidth={mobileTab === 'graph' ? 2.5 : 1.8} />
-          <span>グラフ</span>
-        </button>
-        <button
-          onClick={() => setMobileTab('chat')}
-          className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors ${
-            mobileTab === 'chat' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
-          }`}
-        >
-          <MessageCircle size={22} strokeWidth={mobileTab === 'chat' ? 2.5 : 1.8} />
-          <span>課題入力</span>
-        </button>
-      </div>
+          <div className="mt-auto bg-white rounded-t-2xl shadow-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+              <h3 className="font-semibold text-gray-800 flex items-center gap-2 text-sm">
+                {mobilePanel === 'chat' && <><MessageCircle size={16} className="text-blue-600" /> 課題を追加</>}
+                {mobilePanel === 'filter' && <><Filter size={16} className="text-blue-600" /> フィルター</>}
+              </h3>
+              <button
+                onClick={() => setMobilePanel('none')}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {mobilePanel === 'chat' && (
+                <IssueChatPanel
+                  projectName={projectName}
+                  issues={issues}
+                  onIssueAdded={(resp) => { handleIssueAdded(resp); setMobilePanel('none'); }}
+                />
+              )}
+              {mobilePanel === 'filter' && (
+                <div className="p-4">
+                  <IssueFilterBar
+                    priorityFilter={priorityFilter}
+                    onPriorityFilter={setPriorityFilter}
+                    categoryFilter={categoryFilter}
+                    onCategoryFilter={setCategoryFilter}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <IssueDetailDrawer
         issue={selectedIssue}

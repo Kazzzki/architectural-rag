@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import logging
 import json
+import concurrent.futures
 from datetime import datetime, timezone
 from retriever import search, build_context, get_source_files
 from generator import generate_answer, generate_answer_stream, generate_answer_direct, generate_answer_stream_direct
@@ -13,6 +14,11 @@ from backend.conversation_scope import ConversationScope
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
+
+# 課題キャプチャ用スレッドプール（メイン LLM ストリームと並列実行するため）
+_capture_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="issue_capture"
+)
 
 
 def _resolve_model(model: str, question: str, has_rag: bool) -> str:
@@ -58,6 +64,9 @@ class ChatRequest(BaseModel):
     use_web_search: bool = False
     # v4.1: session_id を body でも受け取れるようにする
     session_id: Optional[str] = None
+    # 課題整理モード
+    capture_issues: bool = False
+    project_name: Optional[str] = None  # 課題グラフのプロジェクト名
 
 class ChatResponse(BaseModel):
     answer: str
@@ -75,6 +84,26 @@ class SessionDetailResponse(SessionResponse):
 
 class SessionUpdateRequest(BaseModel):
     title: str
+
+ISSUE_KEYWORDS = ["課題", "問題", "遅延", "コスト超過", "品質", "安全", "不具合", "トラブル", "クレーム", "障害", "リスク"]
+
+
+def _try_capture_issue_from_chat(question: str, project_name: str) -> Optional[dict]:
+    """チャットメッセージから課題を検出してキャプチャ。失敗しても例外を出さない。"""
+    if not any(kw in question for kw in ISSUE_KEYWORDS):
+        return None
+    try:
+        from database import SessionLocal
+        from routers.issues import capture_issue_core
+        db = SessionLocal()
+        try:
+            return capture_issue_core(question, project_name, db)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"チャットからの課題キャプチャ失敗: {e}", exc_info=True)
+        return None
+
 
 def run_memory_pipeline(user_message: str, assistant_response: str, project_id: Optional[str] = None):
     """
@@ -335,6 +364,16 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
             # 初期情報の送出
             yield f"data: {json.dumps({'type': 'sources', 'data': source_files}, ensure_ascii=False)}\n\n"
 
+            # 課題キャプチャをメインストリームと並列で開始（ラグ解消）
+            capture_future = None
+            if (request.capture_issues and request.project_name and
+                    any(kw in request.question for kw in ISSUE_KEYWORDS)):
+                capture_future = _capture_executor.submit(
+                    _try_capture_issue_from_chat,
+                    request.question,
+                    request.project_name,
+                )
+
             try:
                 # generator の呼び出し整理 (#33)
                 if request.use_rag or request.use_web_search:
@@ -366,6 +405,17 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                         web_sources_collected = part["data"]
                         yield f"data: {json.dumps({'type': 'web_sources', 'data': web_sources_collected}, ensure_ascii=False)}\n\n"
                 
+                # 課題キャプチャ結果を取得（並列実行済みのため待機時間 ≈ 0）
+                if capture_future is not None and full_answer.strip():
+                    try:
+                        capture_result = capture_future.result(timeout=15)
+                        if capture_result:
+                            yield f"data: {json.dumps({'type': 'issue_capture', 'data': capture_result}, ensure_ascii=False)}\n\n"
+                    except concurrent.futures.TimeoutError:
+                        logger.warning("Issue capture timed out after 15s, skipping")
+                    except Exception as e:
+                        logger.error(f"Issue capture future failed: {e}", exc_info=True)
+
                 # 正常終了時の後継タスク登録（副作用の分離） (#31, #35)
                 # 空回答時 (#29) は memory pipeline をスキップ
                 if full_answer.strip():
@@ -388,6 +438,9 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                     )
 
             except Exception as e:
+                # キャプチャ未完了なら中断
+                if capture_future is not None:
+                    capture_future.cancel()
                 # エラーイベントの多重送信防止・排他制御 (#32, #34, #31)
                 if not error_sent and not done_sent:
                     logger.error(f"Stream generation exception: {e}", exc_info=True)
