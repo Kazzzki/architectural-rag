@@ -20,7 +20,7 @@ import SaveStatusOverlay from '../../../components/mindmap/SaveStatusOverlay';
 import KeyboardShortcutsModal from '../../../components/mindmap/KeyboardShortcutsModal'; // New
 import GapAdvisorModal from '../../../components/mindmap/GapAdvisorModal'; // New
 import { useAutoRag } from '../../../hooks/useAutoRag'; // New
-import { Building2, ArrowLeft, Filter, ChevronDown, Plus, Edit2, Trash2, CornerDownRight, Minimize2, Maximize2, Sidebar, X, GitBranch, Loader2 } from 'lucide-react';
+import { Building2, ArrowLeft, Filter, ChevronDown, Plus, Edit2, Trash2, CornerDownRight, Minimize2, Maximize2, Sidebar, X, GitBranch, Loader2, ClipboardList } from 'lucide-react';
 import Link from 'next/link';
 import { PHASES, CATEGORIES, CATEGORY_COLORS } from '@/lib/mindmapConstants';
 
@@ -1304,6 +1304,14 @@ export default function ProjectMapPage() {
                         <Link href="/mindmap" className="flex items-center gap-2 text-[var(--muted)] hover:text-[var(--foreground)] transition-colors">
                             <ArrowLeft className="w-4 h-4" />
                             <span className="text-sm">ダッシュボード</span>
+                        </Link>
+                        <Link
+                            href={`/issues?project=${encodeURIComponent(project?.name ?? '')}`}
+                            className="flex items-center gap-1.5 text-xs text-blue-600 border border-blue-200 rounded-lg px-2.5 py-1 hover:bg-blue-50 transition-colors"
+                            title="課題因果グラフへ"
+                        >
+                            <ClipboardList className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">課題因果</span>
                         </Link>
                         <div className="w-px h-6 bg-[var(--border)]" />
                         <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">

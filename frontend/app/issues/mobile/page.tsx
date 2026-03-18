@@ -6,19 +6,15 @@ import { authFetch } from '@/lib/api';
 import { Issue, IssueEdge, CaptureResponse, IssuesListResponse } from '@/lib/issue_types';
 import IssueFilterBar, { PriorityFilter } from '@/components/issues/IssueFilterBar';
 import IssueChatPanel from '@/components/issues/IssueChatPanel';
-import IssueCausalGraph from '@/components/issues/IssueCausalGraph';
+import MobileTreeView from '@/components/issues/MobileTreeView';
 import IssueDetailDrawer from '@/components/issues/IssueDetailDrawer';
-import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, Maximize2, X, Map, Smartphone } from 'lucide-react';
+import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, X, Map, Monitor } from 'lucide-react';
 import Link from 'next/link';
 
 // ────────────────────────────────────────────────
-// プロジェクト一覧画面
+// プロジェクト一覧（スマホ用）
 // ────────────────────────────────────────────────
-function ProjectListView({
-  onSelect,
-}: {
-  onSelect: (name: string) => void;
-}) {
+function MobileProjectListView({ onSelect }: { onSelect: (name: string) => void }) {
   const [projects, setProjects] = useState<{ name: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
@@ -37,15 +33,8 @@ function ProjectListView({
       .finally(() => setLoading(false));
   }, []);
 
-  function handleCreate() {
-    const trimmed = newName.trim();
-    if (!trimmed) return;
-    onSelect(trimmed);
-  }
-
   return (
     <div className="flex flex-col h-screen bg-white overflow-hidden">
-      {/* ヘッダー */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white">
         <Link href="/" className="text-gray-400 hover:text-gray-700">
           <ArrowLeft size={18} />
@@ -61,23 +50,20 @@ function ProjectListView({
             マインドマップ
           </Link>
           <Link
-            href="/issues/chat"
-            className="flex items-center gap-1 text-xs text-blue-600 border border-blue-300 rounded px-2 py-1 hover:bg-blue-50"
+            href="/issues"
+            className="flex items-center gap-1 text-xs text-gray-500 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50"
           >
-            <MessageCircle size={14} />
-            チャット入力
+            <Monitor size={14} />
+            PC表示
           </Link>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 max-w-xl mx-auto w-full">
-        <h2 className="text-sm font-semibold text-gray-500 mb-4">プロジェクトを選択</h2>
+      <div className="flex-1 overflow-y-auto p-4">
+        <h2 className="text-sm font-semibold text-gray-500 mb-3">プロジェクトを選択</h2>
 
-        {loading && (
-          <div className="text-sm text-gray-400 py-8 text-center">読み込み中…</div>
-        )}
+        {loading && <div className="text-sm text-gray-400 py-8 text-center">読み込み中…</div>}
 
-        {/* プロジェクトカード一覧 */}
         <div className="space-y-2 mb-6">
           {projects.map(({ name, count }) => (
             <button
@@ -93,15 +79,12 @@ function ProjectListView({
               <ChevronRight size={16} className="text-gray-300 group-hover:text-blue-400 flex-shrink-0" />
             </button>
           ))}
-
           {!loading && projects.length === 0 && (
-            <div className="text-sm text-gray-400 py-6 text-center">
-              まだプロジェクトがありません
-            </div>
+            <div className="text-sm text-gray-400 py-6 text-center">まだプロジェクトがありません</div>
           )}
         </div>
 
-        {/* 新規プロジェクト作成 */}
+        {/* 新規プロジェクト */}
         <div className="border border-dashed border-gray-300 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-3">
             <Plus size={16} className="text-gray-400" />
@@ -112,12 +95,12 @@ function ProjectListView({
               type="text"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+              onKeyDown={(e) => e.key === 'Enter' && newName.trim() && onSelect(newName.trim())}
               placeholder="プロジェクト名を入力…"
               className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
             <button
-              onClick={handleCreate}
+              onClick={() => newName.trim() && onSelect(newName.trim())}
               disabled={!newName.trim()}
               className="text-sm bg-blue-600 text-white rounded-lg px-4 py-2 hover:bg-blue-700 disabled:opacity-40 transition-colors"
             >
@@ -131,9 +114,9 @@ function ProjectListView({
 }
 
 // ────────────────────────────────────────────────
-// プロジェクト内グラフ画面（PC専用）
+// プロジェクト内ツリー画面（スマホ専用）
 // ────────────────────────────────────────────────
-function ProjectGraphView({
+function MobileTreeViewPage({
   projectName,
   onBack,
 }: {
@@ -146,8 +129,7 @@ function ProjectGraphView({
   const [categoryFilter, setCategoryFilter] = useState('');
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [loading, setLoading] = useState(false);
-  const [mobilePanel, setMobilePanel] = useState<'none' | 'chat' | 'filter'>('none');
-  const [fitViewTrigger, setFitViewTrigger] = useState(0);
+  const [panel, setPanel] = useState<'none' | 'chat' | 'filter'>('none');
 
   const fetchIssues = useCallback(async () => {
     setLoading(true);
@@ -164,21 +146,17 @@ function ProjectGraphView({
     }
   }, [projectName, categoryFilter]);
 
-  useEffect(() => {
-    fetchIssues();
-  }, [fetchIssues]);
+  useEffect(() => { fetchIssues(); }, [fetchIssues]);
 
   function handleIssueAdded(resp: CaptureResponse) {
     if (resp.issue) {
-      setIssues((prev) =>
-        prev.find((iss) => iss.id === resp.issue.id) ? prev : [...prev, resp.issue]
-      );
+      setIssues((prev) => prev.find((i) => i.id === resp.issue.id) ? prev : [...prev, resp.issue]);
     }
     fetchIssues();
   }
 
   function handleIssueUpdated(updated: Issue) {
-    setIssues((prev) => prev.map((iss) => (iss.id === updated.id ? updated : iss)));
+    setIssues((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
     if (selectedIssue?.id === updated.id) setSelectedIssue(updated);
   }
 
@@ -193,123 +171,86 @@ function ProjectGraphView({
         <div className="flex-1 min-w-0">
           <h1 className="text-base font-semibold text-gray-800 truncate">{projectName}</h1>
         </div>
-        {/* ナビゲーション */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <Link
-            href={`/issues/mobile?project=${encodeURIComponent(projectName)}`}
-            className="flex items-center gap-1 text-xs text-gray-500 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50 md:flex hidden"
-            title="スマホ用ツリー表示"
+            href={`/issues?project=${encodeURIComponent(projectName)}`}
+            className="flex items-center gap-1 text-xs text-gray-500 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50"
+            title="PC用グラフ表示"
           >
-            <Smartphone size={13} />
-            スマホ表示
+            <Monitor size={13} />
+            PC表示
           </Link>
           <Link
             href="/mindmap"
             className="flex items-center gap-1 text-xs text-violet-600 border border-violet-300 rounded px-2 py-1 hover:bg-violet-50"
-            title="マインドマップへ"
           >
             <Map size={13} />
-            <span className="hidden sm:inline">マインドマップ</span>
           </Link>
         </div>
       </div>
 
-      {/* フィルターバー（デスクトップのみ） */}
-      <div className="hidden md:block">
-        <IssueFilterBar
+      {/* ツリー本体 */}
+      <div className="flex-1 overflow-hidden relative">
+        {loading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
+            <span className="text-sm text-gray-400">読み込み中…</span>
+          </div>
+        )}
+        <MobileTreeView
+          issues={issues}
+          edges={edges}
           priorityFilter={priorityFilter}
-          onPriorityFilter={setPriorityFilter}
-          categoryFilter={categoryFilter}
-          onCategoryFilter={setCategoryFilter}
+          onNodeClick={setSelectedIssue}
         />
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* 左パネル: チャット入力（デスクトップのみ） */}
-        <div className="hidden md:flex w-72 flex-shrink-0 border-r border-gray-200 flex-col overflow-hidden">
-          <IssueChatPanel
-            projectName={projectName}
-            issues={issues}
-            onIssueAdded={handleIssueAdded}
-          />
-        </div>
-
-        {/* グラフエリア（PC専用 ReactFlow） */}
-        <div className="flex-1 overflow-hidden relative">
-          {loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
-              <span className="text-sm text-gray-400">読み込み中…</span>
-            </div>
-          )}
-          <IssueCausalGraph
-            issues={issues}
-            edges={edges}
-            priorityFilter={priorityFilter}
-            onNodeClick={setSelectedIssue}
-            onRefresh={fetchIssues}
-            fitViewTrigger={fitViewTrigger}
-          />
-        </div>
-      </div>
-
-      {/* モバイル専用底部バー */}
-      <div className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 p-1 bg-white/90 backdrop-blur border border-gray-200 rounded-2xl shadow-2xl">
+      {/* 底部バー */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 p-1 bg-white/90 backdrop-blur border border-gray-200 rounded-2xl shadow-2xl">
         <button
-          onClick={() => setMobilePanel(mobilePanel === 'chat' ? 'none' : 'chat')}
+          onClick={() => setPanel(panel === 'chat' ? 'none' : 'chat')}
           className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${
-            mobilePanel === 'chat' ? 'bg-blue-600 text-white shadow-inner' : 'text-gray-500 hover:bg-gray-50'
+            panel === 'chat' ? 'bg-blue-600 text-white shadow-inner' : 'text-gray-500 hover:bg-gray-50'
           }`}
         >
           <MessageCircle size={20} />
           <span className="text-[9px] font-bold">課題追加</span>
         </button>
         <button
-          onClick={() => setMobilePanel(mobilePanel === 'filter' ? 'none' : 'filter')}
+          onClick={() => setPanel(panel === 'filter' ? 'none' : 'filter')}
           className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${
-            mobilePanel === 'filter' ? 'bg-blue-600 text-white shadow-inner' : 'text-gray-500 hover:bg-gray-50'
+            panel === 'filter' ? 'bg-blue-600 text-white shadow-inner' : 'text-gray-500 hover:bg-gray-50'
           }`}
         >
           <Filter size={20} />
           <span className="text-[9px] font-bold">フィルタ</span>
         </button>
-        <div className="w-px h-8 bg-gray-200 mx-1" />
-        <button
-          onClick={() => setFitViewTrigger((v) => v + 1)}
-          className="flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all text-gray-500 hover:bg-gray-50"
-        >
-          <Maximize2 size={20} />
-          <span className="text-[9px] font-bold">全体表示</span>
-        </button>
       </div>
 
-      {/* モバイル ボトムシート */}
-      {mobilePanel !== 'none' && (
+      {/* ボトムシート */}
+      {panel !== 'none' && (
         <div
-          className="md:hidden fixed inset-0 z-[60] flex flex-col bg-black/40 backdrop-blur-sm"
-          onClick={(e) => { if (e.target === e.currentTarget) setMobilePanel('none'); }}
+          className="fixed inset-0 z-[60] flex flex-col bg-black/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setPanel('none'); }}
         >
           <div className="mt-auto bg-white rounded-t-2xl shadow-2xl max-h-[85vh] flex flex-col">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
               <h3 className="font-semibold text-gray-800 flex items-center gap-2 text-sm">
-                {mobilePanel === 'chat' && <><MessageCircle size={16} className="text-blue-600" /> 課題を追加</>}
-                {mobilePanel === 'filter' && <><Filter size={16} className="text-blue-600" /> フィルター</>}
+                {panel === 'chat' && <><MessageCircle size={16} className="text-blue-600" /> 課題を追加</>}
+                {panel === 'filter' && <><Filter size={16} className="text-blue-600" /> フィルター</>}
               </h3>
-              <button
-                onClick={() => setMobilePanel('none')}
-                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg"
-              >
+              <button onClick={() => setPanel('none')} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
                 <X size={18} />
               </button>
             </div>
             <div className="flex-1 overflow-y-auto">
-              {mobilePanel === 'chat' && (
+              {panel === 'chat' && (
                 <IssueChatPanel
                   projectName={projectName}
                   issues={issues}
-                  onIssueAdded={(resp) => { handleIssueAdded(resp); setMobilePanel('none'); }}
+                  onIssueAdded={(resp) => { handleIssueAdded(resp); setPanel('none'); }}
                 />
               )}
-              {mobilePanel === 'filter' && (
+              {panel === 'filter' && (
                 <div className="p-4">
                   <IssueFilterBar
                     priorityFilter={priorityFilter}
@@ -334,29 +275,29 @@ function ProjectGraphView({
 }
 
 // ────────────────────────────────────────────────
-// ページエントリ（URLパラメータ対応）
+// ページエントリ
 // ────────────────────────────────────────────────
-function IssuesContent() {
+function MobileIssuesContent() {
   const searchParams = useSearchParams();
   const initialProject = searchParams.get('project');
   const [selectedProject, setSelectedProject] = useState<string | null>(initialProject);
 
   if (selectedProject === null) {
-    return <ProjectListView onSelect={setSelectedProject} />;
+    return <MobileProjectListView onSelect={setSelectedProject} />;
   }
 
   return (
-    <ProjectGraphView
+    <MobileTreeViewPage
       projectName={selectedProject}
       onBack={() => setSelectedProject(null)}
     />
   );
 }
 
-export default function IssuesPage() {
+export default function MobileIssuesPage() {
   return (
     <Suspense>
-      <IssuesContent />
+      <MobileIssuesContent />
     </Suspense>
   );
 }
