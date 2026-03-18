@@ -49,7 +49,7 @@ class TriageApplyRequest(BaseModel):
     project_name: str
     phase_value: Optional[str] = None
     category_value: Optional[str] = None
-    related_node_ids: list = []
+    related_issue_ids: list = []   # 因果マップ上の既存 issue UUID
     assignee: Optional[str] = None
 
 
@@ -387,8 +387,9 @@ def generate_triage_questions(req: TriageGenerateRequest, db=Depends(get_db)):
 
 
 @router.get("/api/issues/triage-questions")
-def get_triage_questions(project_name: str, db=Depends(get_db)):
-    """事前生成済みの質問セットを即座に返す（AI なし）。未生成の場合は 404。"""
+def get_triage_questions(project_name: str, raw_input: str = "", db=Depends(get_db)):
+    """事前生成済みの構造的質問セットを即座に返す（AI なし）。
+    raw_input を渡すとキーワードマッチで既存課題の候補も追加返却する。"""
     row = db.execute(
         text("""
             SELECT question_json, generated_at, template_id
@@ -403,8 +404,48 @@ def get_triage_questions(project_name: str, db=Depends(get_db)):
             status_code=404,
             detail="質問セット未生成。先に POST /api/issues/triage-questions/generate を呼んでください。",
         )
+
+    questions = json.loads(row[0])
+
+    # raw_input が渡されたとき、キーワードマッチで既存課題候補を動的に追加
+    related_issues_options = []
+    if raw_input.strip():
+        import re as _re
+        _STOP = frozenset({
+            "の","に","は","を","が","で","と","も","な","や","へ","から","まで","です",
+            "ます","した","して","します","ある","あり","いる","この","その","こと","もの",
+        })
+        tokens = _re.split(r"[\s\u3000、。，．,.\-／/\(\)「」【】！？!?]+", raw_input.strip())
+        keywords = [t for t in tokens if len(t) >= 2 and t not in _STOP][:8]
+        if keywords:
+            like_conds = " OR ".join(
+                [f"(title LIKE :kw{i} OR description LIKE :kw{i})" for i in range(len(keywords))]
+            )
+            params: dict = {"pn": project_name}
+            for i, kw in enumerate(keywords):
+                params[f"kw{i}"] = f"%{kw}%"
+            rows = db.execute(
+                text(f"""
+                    SELECT id, title, category, status, assignee
+                    FROM issues
+                    WHERE project_name = :pn AND ({like_conds})
+                    ORDER BY updated_at DESC LIMIT 10
+                """),
+                params,
+            ).fetchall()
+            for r in rows:
+                related_issues_options.append({
+                    "id": r[0], "title": r[1],
+                    "category": r[2], "status": r[3], "assignee": r[4],
+                })
+
+    questions["related_issues_question"] = {
+        "label": "関連する既存課題を選択してください（複数選択可・スキップ可）",
+        "options": related_issues_options,
+    }
+
     return {
-        "questions": json.loads(row[0]),
+        "questions": questions,
         "generated_at": row[1],
         "template_id": row[2],
     }
@@ -439,27 +480,18 @@ def triage_apply(req: TriageApplyRequest, db=Depends(get_db)):
         })
 
         edges_created = []
-        for node_id in req.related_node_ids:
-            existing = db.execute(
-                text("""
-                    SELECT id FROM issues
-                    WHERE project_name = :pn AND template_id = :nid
-                    LIMIT 1
-                """),
-                {"pn": req.project_name, "nid": node_id},
-            ).fetchone()
-            if existing:
-                edge_id = str(uuid.uuid4())
-                db.execute(text("""
-                    INSERT INTO issue_edges (id, from_id, to_id, confirmed, created_at)
-                    VALUES (:id, :from_id, :to_id, 1, :created_at)
-                """), {
-                    "id": edge_id,
-                    "from_id": existing[0],
-                    "to_id": issue_id,
-                    "created_at": now,
-                })
-                edges_created.append({"from_id": existing[0], "to_id": issue_id})
+        for related_id in req.related_issue_ids:
+            edge_id = str(uuid.uuid4())
+            db.execute(text("""
+                INSERT INTO issue_edges (id, from_id, to_id, confirmed, created_at)
+                VALUES (:id, :from_id, :to_id, 1, :created_at)
+            """), {
+                "id": edge_id,
+                "from_id": related_id,
+                "to_id": issue_id,
+                "created_at": now,
+            })
+            edges_created.append({"from_id": related_id, "to_id": issue_id})
 
         db.commit()
         row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
