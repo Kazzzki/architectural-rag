@@ -218,7 +218,7 @@ function ProjectGraphView({
         </div>
 
         {/* グラフエリア: モバイル = Collapsible Tree / デスクトップ = ReactFlow */}
-        <div className="flex-1 overflow-hidden relative flex flex-col">
+        <div className="flex-1 overflow-hidden relative">
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
               <span className="text-sm text-gray-400">読み込み中…</span>
