@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { authFetch } from '@/lib/api';
 import { Issue, CausalCandidate, CaptureResponse } from '@/lib/issue_types';
-import { Send } from 'lucide-react';
+import { Send, Camera, X } from 'lucide-react';
 
 interface IssueChatPanelProps {
   projectName: string;
@@ -13,6 +13,7 @@ interface IssueChatPanelProps {
 
 type ChatEntry =
   | { id: number; kind: 'user'; text: string }
+  | { id: number; kind: 'user-photo'; previewUrl: string; text: string }
   | { id: number; kind: 'result'; resp: CaptureResponse }
   | { id: number; kind: 'error'; text: string };
 
@@ -219,8 +220,11 @@ export default function IssueChatPanel({ projectName, issues, onIssueAdded }: Is
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -234,13 +238,57 @@ export default function IssueChatPanel({ projectName, issues, onIssueAdded }: Is
     }
   }, [text]);
 
+  function handlePhotoSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhotoFile(file);
+    const url = URL.createObjectURL(file);
+    setPhotoPreview(url);
+    // reset input so same file can be re-selected
+    e.target.value = '';
+  }
+
+  function clearPhoto() {
+    setPhotoFile(null);
+    if (photoPreview) {
+      URL.revokeObjectURL(photoPreview);
+      setPhotoPreview(null);
+    }
+  }
+
   async function handleSubmit() {
-    const trimmed = text.trim();
-    if (!trimmed || loading) return;
+    if (loading) return;
     if (!projectName) {
       setEntries((prev) => [...prev, { id: uid(), kind: 'error', text: 'プロジェクトを選択してください' }]);
       return;
     }
+
+    // 写真送信モード
+    if (photoFile) {
+      const preview = photoPreview!;
+      setEntries((prev) => [...prev, { id: uid(), kind: 'user-photo', previewUrl: preview, text: '写真から課題を抽出中…' }]);
+      clearPhoto();
+      setLoading(true);
+      try {
+        const form = new FormData();
+        form.append('image', photoFile);
+        form.append('project_name', projectName);
+        const res = await authFetch('/api/issues/capture-photo', { method: 'POST', body: form });
+        if (!res.ok) throw new Error(await res.text());
+        const data: CaptureResponse & { extracted_text?: string } = await res.json();
+        onIssueAdded(data);
+        setEntries((prev) => [...prev, { id: uid(), kind: 'result', resp: data }]);
+      } catch (e: any) {
+        setEntries((prev) => [...prev, { id: uid(), kind: 'error', text: e.message ?? '写真解析エラー' }]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // テキスト送信モード
+    const trimmed = text.trim();
+    if (!trimmed) return;
 
     setEntries((prev) => [...prev, { id: uid(), kind: 'user', text: trimmed }]);
     setText('');
@@ -288,6 +336,16 @@ export default function IssueChatPanel({ projectName, issues, onIssueAdded }: Is
               </div>
             );
           }
+          if (entry.kind === 'user-photo') {
+            return (
+              <div key={entry.id} className="flex justify-end">
+                <div className="max-w-[85%] space-y-1">
+                  <img src={entry.previewUrl} alt="送信した写真" className="rounded-xl max-h-40 object-cover border border-blue-200 shadow-sm" />
+                  <div className="text-[10px] text-gray-400 text-right">{entry.text}</div>
+                </div>
+              </div>
+            );
+          }
           if (entry.kind === 'error') {
             return (
               <div key={entry.id} className="text-xs text-red-500 text-center py-1">
@@ -324,8 +382,41 @@ export default function IssueChatPanel({ projectName, issues, onIssueAdded }: Is
         <div ref={bottomRef} />
       </div>
 
+      {/* 写真プレビュー */}
+      {photoPreview && (
+        <div className="flex-shrink-0 px-3 pt-2 flex items-start gap-2">
+          <div className="relative inline-block">
+            <img src={photoPreview} alt="選択中の写真" className="h-20 rounded-lg object-cover border border-gray-200 shadow-sm" />
+            <button
+              onClick={clearPhoto}
+              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-gray-700 text-white flex items-center justify-center hover:bg-gray-900"
+            >
+              <X size={10} />
+            </button>
+          </div>
+          <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">この写真を送信すると<br />Gemini Vision で課題を抽出します</p>
+        </div>
+      )}
+
       {/* 入力エリア */}
       <div className="flex-shrink-0 border-t border-gray-200 bg-white px-2 py-2 flex items-end gap-2">
+        {/* 写真アップロードボタン */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handlePhotoSelect}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={loading}
+          title="写真から課題を抽出"
+          className="flex-shrink-0 w-9 h-9 rounded-full border border-gray-300 text-gray-500 flex items-center justify-center hover:bg-gray-100 disabled:opacity-40 transition-all active:scale-95"
+        >
+          <Camera size={15} />
+        </button>
         <textarea
           ref={textareaRef}
           value={text}
@@ -336,15 +427,15 @@ export default function IssueChatPanel({ projectName, issues, onIssueAdded }: Is
               handleSubmit();
             }
           }}
-          placeholder="課題を入力… (Enter送信)"
-          disabled={loading}
+          placeholder={photoFile ? '（写真を選択中）送信ボタンで解析' : '課題を入力… (Enter送信)'}
+          disabled={loading || !!photoFile}
           rows={1}
           style={{ fontSize: 13, minHeight: 36, maxHeight: 100 }}
-          className="flex-1 resize-none border border-gray-300 rounded-xl px-3 py-2 text-gray-800 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:bg-white transition-colors"
+          className="flex-1 resize-none border border-gray-300 rounded-xl px-3 py-2 text-gray-800 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:bg-white transition-colors disabled:opacity-60"
         />
         <button
           onClick={handleSubmit}
-          disabled={loading || !text.trim()}
+          disabled={loading || (!text.trim() && !photoFile)}
           className="flex-shrink-0 w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700 disabled:opacity-40 transition-all active:scale-95 shadow-sm"
         >
           <Send size={14} />

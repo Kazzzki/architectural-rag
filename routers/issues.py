@@ -3,6 +3,7 @@ routers/issues.py — 課題因果グラフ API
 
 エンドポイント:
   POST   /api/issues/capture          課題テキストをAI構造化 + 保存
+  POST   /api/issues/capture-photo    写真から課題を抽出してAI構造化 + 保存
   POST   /api/issues/edges/confirm    因果エッジを確定
   GET    /api/issues                  課題・エッジ一覧
   GET    /api/issues/projects         プロジェクト名一覧
@@ -15,7 +16,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -372,6 +373,70 @@ def capture_issue(req: CaptureRequest, db=Depends(get_db)):
     except Exception as e:
         logger.error(f"Issue capture failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"処理エラー: {str(e)}")
+
+
+@router.post("/api/issues/capture-photo")
+async def capture_issue_from_photo(
+    image: UploadFile = File(...),
+    project_name: str = Form(...),
+    db=Depends(get_db),
+):
+    """写真（PNG/JPEG）を Gemini Vision で分析し、課題テキストを抽出してDBに保存する。"""
+    from gemini_client import get_client
+    from google.genai import types as genai_types
+
+    ALLOWED_MIME = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
+    mime = image.content_type or "image/jpeg"
+    if mime not in ALLOWED_MIME:
+        raise HTTPException(status_code=400, detail=f"対応形式: PNG/JPEG/WebP。受信: {mime}")
+
+    try:
+        img_bytes = await image.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"画像読み込みエラー: {e}")
+
+    if len(img_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="画像サイズは10MB以内にしてください")
+
+    # Gemini Vision で画像を分析して課題テキストを生成
+    try:
+        client = get_client()
+        image_part = genai_types.Part.from_bytes(data=img_bytes, mime_type=mime)
+        vision_prompt = """この建設現場の写真を分析し、写っている課題・問題点を日本語で簡潔に説明してください。
+
+以下の観点で確認してください:
+- 安全上の問題（足場、養生、保護具など）
+- 品質上の問題（仕上がり、寸法、材料など）
+- 工程上の問題（遅延、未完了作業など）
+- コスト上の問題（材料の無駄、やり直しなど）
+
+写真に写っている具体的な課題を2〜3文で記述してください。課題が見当たらない場合は「問題なし」と答えてください。"""
+
+        config = genai_types.GenerateContentConfig(
+            system_instruction="建設現場の写真から課題を抽出するアシスタント。日本語で簡潔に回答せよ。",
+            temperature=0.1,
+        )
+        vision_response = client.models.generate_content(
+            model="gemini-3.1-flash-lite",
+            contents=[image_part, vision_prompt],
+            config=config,
+        )
+        extracted_text = vision_response.text.strip()
+    except Exception as e:
+        logger.error(f"Gemini Vision analysis failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"画像解析エラー: {str(e)}")
+
+    if extracted_text == "問題なし" or not extracted_text:
+        raise HTTPException(status_code=422, detail="写真から課題を検出できませんでした")
+
+    # 抽出したテキストで通常の課題キャプチャを実行
+    try:
+        result = capture_issue_core(extracted_text, project_name, db)
+        # 元の画像由来であることを raw_input に付記（任意）
+        return {**result, "extracted_text": extracted_text}
+    except Exception as e:
+        logger.error(f"Issue capture from photo failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"課題登録エラー: {str(e)}")
 
 
 @router.post("/api/issues/triage-questions/generate")
