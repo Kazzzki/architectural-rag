@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import ReactFlow, {
   Background,
   Controls,
@@ -63,6 +63,8 @@ function IssueCausalGraphInner({
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges] = useEdgesState([]);
   const { fitView } = useReactFlow();
+  // 初回データロード後に自動fitViewするためのフラグ
+  const initialFitDone = useRef(false);
 
   // fitViewTrigger が変わるたびに fitView を実行
   useEffect(() => {
@@ -170,7 +172,13 @@ function IssueCausalGraphInner({
 
     setRfNodes(finalNodes);
     setRfEdges(visibleEdges);
-  }, [issues, edges, priorityFilter, visibleIssues, hiddenChildCounts, onNodeClick]);
+
+    // 初回データロード時に fitView を実行（非同期ロード後もノードが画面内に収まるよう）
+    if (finalNodes.length > 0 && !initialFitDone.current) {
+      initialFitDone.current = true;
+      setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
+    }
+  }, [issues, edges, priorityFilter, visibleIssues, hiddenChildCounts, onNodeClick, fitView]);
 
   const handleNodeDragStop = useCallback(
     async (_: React.MouseEvent, node: Node) => {
