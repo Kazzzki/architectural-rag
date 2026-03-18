@@ -6,6 +6,7 @@ import { Issue, IssueEdge, CaptureResponse, IssuesListResponse } from '@/lib/iss
 import IssueFilterBar, { PriorityFilter } from '@/components/issues/IssueFilterBar';
 import IssueChatPanel from '@/components/issues/IssueChatPanel';
 import IssueCausalGraph from '@/components/issues/IssueCausalGraph';
+import MobileTreeView from '@/components/issues/MobileTreeView';
 import IssueDetailDrawer from '@/components/issues/IssueDetailDrawer';
 import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, Maximize2, X } from 'lucide-react';
 import Link from 'next/link';
@@ -141,6 +142,15 @@ function ProjectGraphView({
   const [mobilePanel, setMobilePanel] = useState<'none' | 'chat' | 'filter'>('none');
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
 
+  // モバイル判定（SSR対応: window はマウント後のみ参照）
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    function checkMobile() { setIsMobile(window.innerWidth < 768); }
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   const fetchIssues = useCallback(async () => {
     setLoading(true);
     try {
@@ -207,21 +217,32 @@ function ProjectGraphView({
           />
         </div>
 
-        {/* グラフ（モバイルで全画面） */}
-        <div className="flex-1 overflow-hidden relative">
+        {/* グラフエリア: モバイル = Collapsible Tree / デスクトップ = ReactFlow */}
+        <div className="flex-1 overflow-hidden relative flex flex-col">
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
               <span className="text-sm text-gray-400">読み込み中…</span>
             </div>
           )}
-          <IssueCausalGraph
-            issues={issues}
-            edges={edges}
-            priorityFilter={priorityFilter}
-            onNodeClick={setSelectedIssue}
-            onRefresh={fetchIssues}
-            fitViewTrigger={fitViewTrigger}
-          />
+          {isMobile ? (
+            // モバイル: 因果階層をインデント付き縦ツリーで表示
+            <MobileTreeView
+              issues={issues}
+              edges={edges}
+              priorityFilter={priorityFilter}
+              onNodeClick={setSelectedIssue}
+            />
+          ) : (
+            // デスクトップ: ReactFlow による無限キャンバスを維持
+            <IssueCausalGraph
+              issues={issues}
+              edges={edges}
+              priorityFilter={priorityFilter}
+              onNodeClick={setSelectedIssue}
+              onRefresh={fetchIssues}
+              fitViewTrigger={fitViewTrigger}
+            />
+          )}
         </div>
       </div>
 
