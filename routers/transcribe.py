@@ -2,13 +2,15 @@
 routers/transcribe.py — Gemini 音声文字起こし API
 
 POST /api/transcribe   multipart/form-data で音声ファイルを受け取り
-                       Gemini 3-flash-preview で日本語テキストに変換して返す
+                       Gemini で日本語テキストに変換して返す
+使用モデルは config.GEMINI_MODEL_TRANSCRIPTION で設定可能（デフォルト: gemini-3-flash-preview）
 """
 import logging
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from google.genai import types
 
+import config
 from gemini_client import get_client
 
 logger = logging.getLogger(__name__)
@@ -28,7 +30,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
     try:
         client = get_client()
         response = client.models.generate_content(
-            model="gemini-3-flash-preview",
+            model=config.GEMINI_MODEL_TRANSCRIPTION,
             contents=[
                 types.Part(inline_data=types.Blob(mime_type=mime_type, data=audio_bytes)),
                 types.Part(
