@@ -27,10 +27,27 @@ class PipelineManager:
             # 2. 拡張子チェック
             ext = file_path.suffix.lower()
             is_image = ext in (".png", ".jpg", ".jpeg")
-            source_kind = "pdf" if ext == ".pdf" else ("image" if is_image else "document")
-            
+            is_audio = ext in (".mp3", ".wav")
+            is_video = ext in (".mp4", ".mov")
+            if ext == ".pdf":
+                source_kind = "pdf"
+            elif is_image:
+                source_kind = "image"
+            elif is_audio:
+                source_kind = "audio"
+            elif is_video:
+                source_kind = "video"
+            else:
+                source_kind = "document"
+
             # 3. doc_type の決定
-            doc_type_map = {"Drawing": "drawing", "Document": "catalog"}
+            doc_type_map = {
+                "Drawing": "drawing",
+                "Document": "catalog",
+                "Mixed": "mixed",
+                "Audio": "audio",
+                "Video": "video",
+            }
             doc_type = doc_type_map.get(file_type, "catalog")
             
             # 4. オーケストレーターにキューイング

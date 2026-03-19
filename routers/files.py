@@ -7,9 +7,42 @@ import os
 import time
 import logging
 import traceback
+import json
+import subprocess
+import tempfile
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Files & Upload"])
+
+AUDIO_EXTENSIONS = {".mp3", ".wav"}
+VIDEO_EXTENSIONS = {".mp4", ".mov"}
+AUDIO_MAX_DURATION_SEC = 80
+VIDEO_MAX_DURATION_SEC = 120
+
+
+def _get_media_duration(content: bytes, ext: str) -> Optional[float]:
+    """ffprobeでメディアの長さ（秒）を取得する。ffprobeが利用不可の場合はNoneを返す。"""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", tmp_path],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                info = json.loads(result.stdout)
+                duration = info.get("format", {}).get("duration")
+                return float(duration) if duration else None
+        finally:
+            os.unlink(tmp_path)
+    except FileNotFoundError:
+        logger.warning("ffprobe not found; skipping duration validation")
+    except Exception as e:
+        logger.warning(f"Duration check failed: {e}")
+    return None
+
 
 class DeleteFileRequest(BaseModel):
     file_path: str
@@ -23,7 +56,8 @@ async def upload_multiple_files(
     files: List[UploadFile] = File(...)
 ):
     """Web画面から複数ファイルを一括アップロードし、file_storeに登録する"""
-    ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".md", ".txt"}
+    ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".md", ".txt",
+                          ".mp3", ".wav", ".mp4", ".mov"}
     MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
     
     from config import BASE_DIR, KNOWLEDGE_BASE_DIR, UNCATEGORIZED_FOLDER
@@ -69,9 +103,31 @@ async def upload_multiple_files(
                 
             import hashlib
             source_pdf_hash = hashlib.sha256(content).hexdigest()
-                
-            content_type = "application/pdf" if ext == ".pdf" else f"image/{ext[1:]}"
-            source_kind = "pdf" if ext == ".pdf" else ("image" if ext in ['.png', '.jpg', '.jpeg'] else "document")
+
+            # 音声・動画ファイルの長さチェック
+            if ext in AUDIO_EXTENSIONS:
+                duration = _get_media_duration(content, ext)
+                if duration is not None and duration > AUDIO_MAX_DURATION_SEC:
+                    errors.append({"filename": filename, "error": f"Audio too long: {duration:.1f}s (max {AUDIO_MAX_DURATION_SEC}s)"})
+                    continue
+                content_type = f"audio/{'mpeg' if ext == '.mp3' else 'wav'}"
+                source_kind = "audio"
+            elif ext in VIDEO_EXTENSIONS:
+                duration = _get_media_duration(content, ext)
+                if duration is not None and duration > VIDEO_MAX_DURATION_SEC:
+                    errors.append({"filename": filename, "error": f"Video too long: {duration:.1f}s (max {VIDEO_MAX_DURATION_SEC}s)"})
+                    continue
+                content_type = f"video/{'mp4' if ext == '.mp4' else 'quicktime'}"
+                source_kind = "video"
+            elif ext == ".pdf":
+                content_type = "application/pdf"
+                source_kind = "pdf"
+            elif ext in {'.png', '.jpg', '.jpeg'}:
+                content_type = f"image/{ext[1:]}"
+                source_kind = "image"
+            else:
+                content_type = "text/plain"
+                source_kind = "document"
 
             # Phase 2: MetadataRepositoryへの登録 (file_storeの代替)
             from metadata_repository import MetadataRepository
@@ -94,7 +150,7 @@ async def upload_multiple_files(
 
             logger.info(f"File uploaded: {file_path}, Size: {len(content)} bytes, ID: {file_id}")
 
-            if ext in (".pdf", ".png", ".jpg", ".jpeg"):
+            if ext in (".pdf", ".png", ".jpg", ".jpeg", ".mp3", ".wav", ".mp4", ".mov"):
                 from pipeline_manager import process_file_pipeline
                 background_tasks.add_task(process_file_pipeline, str(file_path), source_pdf_hash, version_id)
                 logger.info(f"パイプライン処理をバックグラウンドタスクに登録: {file_path} (hash: {source_pdf_hash}, version: {version_id})")

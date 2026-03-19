@@ -17,20 +17,38 @@ class ContentRouter:
         if not GEMINI_API_KEY:
              raise ValueError("GEMINI_API_KEY is not set")
 
-    @retry_gemini_call()
     def classify(self, file_path: Path) -> str:
         """
-        ファイルをGemini Flashで分析し、'Drawing' または 'Document' に分類する。
+        ファイルをGemini Flashで分析し、5種類に分類する。
+        戻り値: 'Document' | 'Drawing' | 'Mixed' | 'Audio' | 'Video'
+
+        Audio/VideoはMIME/拡張子で即判定（Gemini API不要）。
+        PDF/画像はGemini Flashで Drawing / Document / Mixed に分類する。
         """
+        file_path = Path(file_path)
+        ext = file_path.suffix.lower()
+
+        # 音声・動画はファイル拡張子で即判定（Gemini API不要）
+        if ext in (".mp3", ".wav"):
+            logger.info(f"Classification: Audio (by extension) for {file_path.name}")
+            return "Audio"
+        if ext in (".mp4", ".mov"):
+            logger.info(f"Classification: Video (by extension) for {file_path.name}")
+            return "Video"
+
+        return self._classify_with_ai(file_path)
+
+    @retry_gemini_call()
+    def _classify_with_ai(self, file_path: Path) -> str:
+        """PDF/画像をGemini Flashで Drawing / Document / Mixed に分類する。"""
         # ファイル存在確認（Google Drive eviction等によるファイル消失を早期検出）
-        if not Path(file_path).exists():
+        if not file_path.exists():
             raise FileNotFoundError(f"File not found before classification: {file_path}")
 
         client = get_client()
 
         # 日本語ファイル名対策: httpxはHTTPヘッダにASCII以外を送信できないため、
         # 一時的にASCII名のコピーを作成してアップロードする
-        file_path = Path(file_path)
         upload_path = file_path
         temp_dir = None
 
@@ -49,9 +67,10 @@ class ContentRouter:
             このファイルの内容を確認し、以下の基準で分類してください。
 
             - Drawing: 建築図面、CAD図面、詳細図、矩計図、平面図など、図形情報が主体のもの。
-            - Document: カタログ、仕様書、技術基準書、報告書、テキストが主体のもの。
+            - Document: テキストが主体のPDF、仕様書、技術基準書、報告書など。
+            - Mixed: テキストと図表・写真が混在するカタログ、製品技術資料、施工マニュアルなど。
 
-            出力はJSON形式のみで、キー "type" に "Drawing" または "Document" を設定してください。
+            出力はJSON形式のみで、キー "type" に "Drawing"、"Document"、または "Mixed" を設定してください。
             それ以外の余計なテキストは含めないでください。
             """
 
@@ -65,17 +84,15 @@ class ContentRouter:
 
             try:
                 result = json.loads(response.text)
-                classification = result.get("type", "Document")  # Default to Document
-                if classification not in ["Drawing", "Document"]:
+                classification = result.get("type", "Document")
+                if classification not in ["Drawing", "Document", "Mixed"]:
                     classification = "Document"
                 logger.info(f"AI Classification result for {file_path.name}: {classification}")
                 return classification
             except json.JSONDecodeError as e:
-                # JSONパース失敗時はデフォルトとしてDocument
                 logger.warning(f"JSON Decode Error in classification for {file_path.name}: {e}")
                 return "Document"
         finally:
-            # 一時ファイルのクリーンアップ
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 

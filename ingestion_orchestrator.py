@@ -7,6 +7,10 @@ from ocr_processor import process_pdf_background
 from metadata_enricher import MetadataEnricher
 # from chunk_builder import build_3tier_chunks
 from indexer import index_file
+from visual_indexer import index_visual_file
+from audio_indexer import index_audio_file
+from video_indexer import index_video_file
+from mixed_indexer import index_mixed_file
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +43,91 @@ class IngestionOrchestrator:
         logger.info(f"[Orchestrator] Enqueuing job for version_id={version_id}")
         self.repo.update_ingest_stage_by_version_id(version_id, "processing")
         self.repo.update_ingest_stage(file_path, "processing")
-        
-        # 非同期スレッドでOCR処理を開始
-        threading.Thread(
-            target=self._run_ocr_stage,
-            args=(version_id, file_path, source_pdf_hash, source_kind, doc_type),
-            daemon=True
-        ).start()
+
+        # モダリティに応じたパイプラインへルーティング
+        if source_kind == "audio":
+            threading.Thread(
+                target=self._run_audio_stage,
+                args=(version_id, file_path, source_pdf_hash),
+                daemon=True,
+            ).start()
+        elif source_kind == "video":
+            threading.Thread(
+                target=self._run_video_stage,
+                args=(version_id, file_path, source_pdf_hash),
+                daemon=True,
+            ).start()
+        elif doc_type == "drawing":
+            threading.Thread(
+                target=self._run_visual_stage,
+                args=(version_id, file_path, source_pdf_hash),
+                daemon=True,
+            ).start()
+        elif doc_type == "mixed":
+            threading.Thread(
+                target=self._run_mixed_stage,
+                args=(version_id, file_path, source_pdf_hash),
+                daemon=True,
+            ).start()
+        else:
+            # 既存テキストパイプライン（Document）
+            threading.Thread(
+                target=self._run_ocr_stage,
+                args=(version_id, file_path, source_pdf_hash, source_kind, doc_type),
+                daemon=True,
+            ).start()
+
+    def _run_visual_stage(self, version_id: str, file_path: str, source_pdf_hash: str):
+        """Drawing ファイルをビジュアルベクトルとしてインデックスする。"""
+        try:
+            original_filename = Path(file_path).name
+            count = index_visual_file(file_path, source_pdf_hash, version_id, original_filename)
+            logger.info(f"[Orchestrator] Visual indexing completed: {count} vectors for {version_id}")
+            self.repo.update_ingest_stage_by_version_id(version_id, "completed")
+            self.repo.update_ingest_stage(file_path, "completed")
+            self.repo.mark_as_searchable(file_path)
+        except Exception as e:
+            logger.error(f"[Orchestrator] Visual stage failed for {file_path}: {e}", exc_info=True)
+            self.repo.fail_processing(file_path, f"[Visual Stage Error] {str(e)}")
+
+    def _run_audio_stage(self, version_id: str, file_path: str, source_pdf_hash: str):
+        """音声ファイルを音声ベクトルとしてインデックスする。"""
+        try:
+            original_filename = Path(file_path).name
+            count = index_audio_file(file_path, source_pdf_hash, version_id, original_filename)
+            logger.info(f"[Orchestrator] Audio indexing completed: {count} vectors for {version_id}")
+            self.repo.update_ingest_stage_by_version_id(version_id, "completed")
+            self.repo.update_ingest_stage(file_path, "completed")
+            self.repo.mark_as_searchable(file_path)
+        except Exception as e:
+            logger.error(f"[Orchestrator] Audio stage failed for {file_path}: {e}", exc_info=True)
+            self.repo.fail_processing(file_path, f"[Audio Stage Error] {str(e)}")
+
+    def _run_video_stage(self, version_id: str, file_path: str, source_pdf_hash: str):
+        """動画ファイルを動画ベクトルとしてインデックスする。"""
+        try:
+            original_filename = Path(file_path).name
+            count = index_video_file(file_path, source_pdf_hash, version_id, original_filename)
+            logger.info(f"[Orchestrator] Video indexing completed: {count} vectors for {version_id}")
+            self.repo.update_ingest_stage_by_version_id(version_id, "completed")
+            self.repo.update_ingest_stage(file_path, "completed")
+            self.repo.mark_as_searchable(file_path)
+        except Exception as e:
+            logger.error(f"[Orchestrator] Video stage failed for {file_path}: {e}", exc_info=True)
+            self.repo.fail_processing(file_path, f"[Video Stage Error] {str(e)}")
+
+    def _run_mixed_stage(self, version_id: str, file_path: str, source_pdf_hash: str):
+        """Mixed PDF をインターリーブベクトルとしてインデックスする。"""
+        try:
+            original_filename = Path(file_path).name
+            count = index_mixed_file(file_path, source_pdf_hash, version_id, original_filename)
+            logger.info(f"[Orchestrator] Mixed indexing completed: {count} vectors for {version_id}")
+            self.repo.update_ingest_stage_by_version_id(version_id, "completed")
+            self.repo.update_ingest_stage(file_path, "completed")
+            self.repo.mark_as_searchable(file_path)
+        except Exception as e:
+            logger.error(f"[Orchestrator] Mixed stage failed for {file_path}: {e}", exc_info=True)
+            self.repo.fail_processing(file_path, f"[Mixed Stage Error] {str(e)}")
 
     def _run_ocr_stage(self, version_id: str, file_path: str, source_pdf_hash: str, source_kind: str, doc_type: str):
         try:

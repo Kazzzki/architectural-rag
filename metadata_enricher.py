@@ -71,7 +71,8 @@ class MetadataEnricher:
                 "source_pdf": source_pdf_hash,
                 "pdf_filename": filename,
                 "drive_file_id": "",
-                "version_id": version_id
+                "version_id": version_id,
+                "modality": "text",
             }
             frontmatter = self.classifier.generate_frontmatter(classification_result, extra_meta)
             full_md_text = frontmatter + markdown_text

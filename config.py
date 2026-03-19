@@ -130,6 +130,14 @@ MEMORY_MONTHLY_RETENTION_MONTHS = int(os.environ.get("MEMORY_MONTHLY_RETENTION_M
 # ChromaDBコレクション名
 COLLECTION_NAME = "architectural_knowledge"
 PERSONAL_CONTEXT_COLLECTION = "personal_contexts"
+VISUAL_VECTORS_COLLECTION = "visual_vectors"
+AUDIO_VECTORS_COLLECTION = "audio_vectors"
+VIDEO_VECTORS_COLLECTION = "video_vectors"
+MIXED_VECTORS_COLLECTION = "mixed_vectors"
+
+# Gemini Embedding 2 設定
+EMBEDDING_MODEL_V2 = "gemini-embedding-2-preview"
+EMBED_SEMAPHORE_LIMIT = int(os.getenv("EMBED_SEMAPHORE_LIMIT", "5"))
 
 # 除外フォルダ（インデックス対象外）
 EXCLUDE_FOLDERS = [
