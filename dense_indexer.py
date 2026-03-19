@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from gemini_client import get_client
 from google.genai import types
 from threading import Lock
-from config import CHROMA_DB_DIR, COLLECTION_NAME, EMBEDDING_MODEL
+from config import CHROMA_DB_DIR, COLLECTION_NAME, EMBEDDING_MODEL, EMBEDDING_OUTPUT_DIMENSIONALITY
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,14 @@ _EMBED_MAX_RETRIES = 4
 _EMBED_BASE_WAIT = 2.0   # 指数バックオフの基準秒数
 
 
+def _make_embed_config(task_type: str) -> types.EmbedContentConfig:
+    """task_type と output_dimensionality を組み合わせた EmbedContentConfig を生成する"""
+    kwargs: dict = {"task_type": task_type}
+    if EMBEDDING_OUTPUT_DIMENSIONALITY is not None:
+        kwargs["output_dimensionality"] = EMBEDDING_OUTPUT_DIMENSIONALITY
+    return types.EmbedContentConfig(**kwargs)
+
+
 def _embed_batch_with_retry(gemini_client, texts: List[str]) -> Optional[List[List[float]]]:
     """
     テキストリストをバッチで embed_content に渡し、エンベディングを返す。
@@ -48,7 +56,7 @@ def _embed_batch_with_retry(gemini_client, texts: List[str]) -> Optional[List[Li
             res = gemini_client.models.embed_content(
                 model=EMBEDDING_MODEL,
                 contents=texts,
-                config=types.EmbedContentConfig(task_type="retrieval_document")
+                config=_make_embed_config("retrieval_document")
             )
             return [e.values for e in res.embeddings]
         except Exception as e:

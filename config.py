@@ -91,7 +91,18 @@ TEMPERATURE = 0.2  # 技術的正確性を重視
 
 GEMINI_MODEL_RAG = "gemini-3-flash-preview"  # RAG用
 GEMINI_MODEL_OCR = "gemini-3-flash-preview"  # OCR用
-GEMINI_MODEL_EMBEDDING = "models/gemini-embedding-001"
+# Embeddingモデル（環境変数で切替可能）
+# 利用可能なモデル:
+#   models/gemini-embedding-001       - テキスト専用・安定版（デフォルト）
+#   models/gemini-embedding-2-preview - マルチモーダル対応・プレビュー版（2026/03リリース）
+# 注意: モデルを切り替えた場合、ChromaDBの全コレクションを削除して再インデックスが必要
+GEMINI_MODEL_EMBEDDING = os.environ.get(
+    "GEMINI_MODEL_EMBEDDING", "models/gemini-embedding-001"
+)
+# Matryoshka次元削減（None=デフォルト3072。推奨値: 768, 1536, 3072）
+# 注意: 変更した場合も再インデックスが必要
+_embedding_dim_env = os.environ.get("EMBEDDING_OUTPUT_DIMENSIONALITY")
+EMBEDDING_OUTPUT_DIMENSIONALITY: int | None = int(_embedding_dim_env) if _embedding_dim_env else None
 
 # ===== モデルルーティング定数 =====
 # route_model.py / route_classifier.py で使用
