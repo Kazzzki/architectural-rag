@@ -19,13 +19,16 @@ const STATUS_COLOR: Record<string, string> = {
 interface IssueNodeData {
   issue: Issue;
   hiddenChildCount?: number;
+  hasChildren?: boolean;
   onClick?: (issue: Issue) => void;
+  onCollapseToggle?: (issue: Issue) => void;
 }
 
 function IssueNode({ data }: NodeProps<IssueNodeData>) {
-  const { issue, hiddenChildCount = 0, onClick } = data;
+  const { issue, hiddenChildCount = 0, hasChildren = false, onClick, onCollapseToggle } = data;
   const style = PRIORITY_STYLES[issue.priority] ?? PRIORITY_STYLES.normal;
   const statusColor = STATUS_COLOR[issue.status] ?? '#999';
+  const showCollapseBtn = hasChildren || issue.is_collapsed === 1;
 
   return (
     <div
@@ -87,6 +90,32 @@ function IssueNode({ data }: NodeProps<IssueNodeData>) {
         >
           +{hiddenChildCount}
         </div>
+      )}
+
+      {/* 折りたたみトグルボタン */}
+      {showCollapseBtn && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onCollapseToggle?.(issue);
+          }}
+          title={issue.is_collapsed === 1 ? '子ノードを展開' : '子ノードを折りたたむ'}
+          style={{
+            position: 'absolute',
+            bottom: 4,
+            left: 6,
+            fontSize: 10,
+            background: issue.is_collapsed === 1 ? '#4B9EF5' : '#888',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 4,
+            padding: '1px 5px',
+            cursor: 'pointer',
+            lineHeight: 1.5,
+          }}
+        >
+          {issue.is_collapsed === 1 ? '▶ 展開' : '▼ 折りたたむ'}
+        </button>
       )}
 
       <Handle type="source" position={Position.Right} style={{ background: '#888' }} />

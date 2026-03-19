@@ -697,6 +697,18 @@ def update_issue(issue_id: str, req: IssueUpdateRequest, db=Depends(get_db)):
     return _issue_row_to_dict(row)
 
 
+@router.delete("/api/issues/edges/{edge_id}")
+def delete_edge(edge_id: str, db=Depends(get_db)):
+    """因果エッジを削除"""
+    result = db.execute(
+        text("DELETE FROM issue_edges WHERE id = :id"), {"id": edge_id}
+    )
+    db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Edge not found")
+    return {"ok": True}
+
+
 @router.delete("/api/issues/{issue_id}")
 def delete_issue(issue_id: str, db=Depends(get_db)):
     """課題と関連エッジを物理削除"""

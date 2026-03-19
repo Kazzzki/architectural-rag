@@ -7,6 +7,7 @@ import ReactFlow, {
   MiniMap,
   Node,
   Edge,
+  Connection,
   useNodesState,
   useEdgesState,
   useReactFlow,
@@ -18,9 +19,11 @@ import dagre from 'dagre';
 import { authFetch } from '@/lib/api';
 import { Issue, IssueEdge } from '@/lib/issue_types';
 import IssueNodeComponent from './IssueNode';
+import DeletableEdge from './DeletableEdge';
 import type { PriorityFilter } from './IssueFilterBar';
 
 const NODE_TYPES = { issueNode: IssueNodeComponent };
+const EDGE_TYPES = { deletable: DeletableEdge };
 
 const NODE_W = 220;
 const NODE_H = 80;
@@ -58,6 +61,7 @@ function IssueCausalGraphInner({
   edges,
   priorityFilter,
   onNodeClick,
+  onRefresh,
   fitViewTrigger,
 }: IssueCausalGraphProps) {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState([]);
@@ -106,6 +110,41 @@ function IssueCausalGraphInner({
     return counts;
   }, [issues, edges]);
 
+  // 子ノードを持つ issue の id セット
+  const issueIdsWithChildren = useMemo(() => {
+    return new Set(edges.map((e) => e.from_id));
+  }, [edges]);
+
+  // エッジ削除ハンドラ
+  const handleDeleteEdge = useCallback(
+    async (edgeId: string) => {
+      try {
+        await authFetch(`/api/issues/edges/${edgeId}`, { method: 'DELETE' });
+        onRefresh();
+      } catch (e) {
+        console.error('edge delete failed', e);
+      }
+    },
+    [onRefresh]
+  );
+
+  // 折りたたみトグルハンドラ
+  const handleCollapseToggle = useCallback(
+    async (issue: Issue) => {
+      try {
+        const res = await authFetch(`/api/issues/${issue.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_collapsed: issue.is_collapsed === 1 ? 0 : 1 }),
+        });
+        if (res.ok) onRefresh();
+      } catch (e) {
+        console.error('collapse toggle failed', e);
+      }
+    },
+    [onRefresh]
+  );
+
   useEffect(() => {
     const visibleIds = new Set(visibleIssues.map((iss) => iss.id));
 
@@ -140,7 +179,9 @@ function IssueCausalGraphInner({
         data: {
           issue: iss,
           hiddenChildCount: hiddenChildCounts[iss.id] ?? 0,
+          hasChildren: issueIdsWithChildren.has(iss.id),
           onClick: onNodeClick,
+          onCollapseToggle: handleCollapseToggle,
         },
       };
     });
@@ -156,6 +197,7 @@ function IssueCausalGraphInner({
         id: e.id,
         source: e.from_id,
         target: e.to_id,
+        type: 'deletable',
         animated: e.confirmed === 0,
         style: e.confirmed === 1
           ? { stroke: '#E24B4A', strokeWidth: 2 }
@@ -164,6 +206,7 @@ function IssueCausalGraphInner({
           type: MarkerType.ArrowClosed,
           color: e.confirmed === 1 ? '#E24B4A' : '#B4B2A9',
         },
+        data: { onDeleteEdge: handleDeleteEdge },
       }));
 
     const finalNodes = needsLayout
@@ -178,7 +221,7 @@ function IssueCausalGraphInner({
       initialFitDone.current = true;
       setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
     }
-  }, [issues, edges, priorityFilter, visibleIssues, hiddenChildCounts, onNodeClick, fitView]);
+  }, [issues, edges, priorityFilter, visibleIssues, hiddenChildCounts, issueIdsWithChildren, onNodeClick, handleCollapseToggle, handleDeleteEdge, fitView]);
 
   const handleNodeDragStop = useCallback(
     async (_: React.MouseEvent, node: Node) => {
@@ -195,14 +238,43 @@ function IssueCausalGraphInner({
     []
   );
 
+  // ノード間をドラッグして接続するハンドラ
+  const handleConnect = useCallback(
+    async (connection: Connection) => {
+      if (!connection.source || !connection.target) return;
+      // 重複エッジ防止
+      const duplicate = edges.some(
+        (e) => e.from_id === connection.source && e.to_id === connection.target
+      );
+      if (duplicate) return;
+      try {
+        await authFetch('/api/issues/edges/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from_id: connection.source,
+            to_id: connection.target,
+            confirmed: true,
+          }),
+        });
+        onRefresh();
+      } catch (e) {
+        console.error('connect failed', e);
+      }
+    },
+    [edges, onRefresh]
+  );
+
   return (
     <div style={{ width: '100%', height: '100%' }}>
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
         onNodeDragStop={handleNodeDragStop}
+        onConnect={handleConnect}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.1}
