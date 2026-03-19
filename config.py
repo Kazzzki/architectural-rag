@@ -91,6 +91,7 @@ TEMPERATURE = 0.2  # 技術的正確性を重視
 
 GEMINI_MODEL_RAG = "gemini-3-flash-preview"  # RAG用
 GEMINI_MODEL_OCR = "gemini-3-flash-preview"  # OCR用
+GEMINI_MODEL_TRANSCRIPTION = os.getenv("GEMINI_MODEL_TRANSCRIPTION", "gemini-3-flash-preview")  # 音声文字起こし用（WER 3.1%、高速・低コスト）
 # Embeddingモデル（環境変数で切替可能）
 # 利用可能なモデル:
 #   models/gemini-embedding-001       - テキスト専用・安定版（デフォルト）
