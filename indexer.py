@@ -38,7 +38,7 @@ from config import (
     PARENT_CHUNKS_DIR,
     MD_DIR,
 )
-from dense_indexer import get_chroma_client
+from dense_indexer import get_chroma_client, _make_embed_config
 from gemini_client import get_client
 from utils.retry import sync_retry
 
@@ -85,7 +85,7 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
                     client,
                     model=EMBEDDING_MODEL,
                     contents=batch,
-                    config=types.EmbedContentConfig(task_type="retrieval_document")
+                    config=_make_embed_config("retrieval_document")
                 )
                 for emb in result.embeddings:
                     embeddings.append(emb.values)
@@ -102,7 +102,7 @@ def get_query_embedding(text: str) -> List[float]:
         client,
         model=EMBEDDING_MODEL,
         contents=text,
-        config=types.EmbedContentConfig(task_type="retrieval_query")
+        config=_make_embed_config("retrieval_query")
     )
     return result.embeddings[0].values
 

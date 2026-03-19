@@ -24,9 +24,9 @@ from config import GEMINI_API_KEY, GEMINI_MODEL_EMBEDDING
 if GEMINI_API_KEY:
     google_ef = embedding_functions.GoogleGenerativeAiEmbeddingFunction(
         api_key=GEMINI_API_KEY,
-        task_type="RETRIEVAL_DOCUMENT" # default
+        model_name=GEMINI_MODEL_EMBEDDING,
+        task_type="RETRIEVAL_DOCUMENT"
     )
-    # the model name should match config.GEMINI_MODEL_EMBEDDING, but this defaults to 'models/embedding-001'
 else:
     google_ef = embedding_functions.DefaultEmbeddingFunction()
 
