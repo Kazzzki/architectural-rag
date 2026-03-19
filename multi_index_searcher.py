@@ -108,22 +108,48 @@ class MultiIndexSearcher:
         """
         クエリを埋め込み、指定コレクション（省略時は全コレクション）を並行検索する。
 
+        重要: 既存の architectural_knowledge コレクションは gemini-embedding-001 (768次元) で
+        インデックスされているため、旧来の埋め込み関数を使用して互換性を維持する。
+        新コレクション (visual/audio/video/mixed) は gemini-embedding-2-preview (3072次元) を使用。
+
         Returns:
             {collection_name: [SearchResult, ...]} の辞書
         """
-        # クエリを RETRIEVAL_QUERY タイプで埋め込み
-        query_embedding = await self.embed_client.embed_text(
-            query, task_type="RETRIEVAL_QUERY"
-        )
-
         target_collections = collections or list(self._collections.keys())
         active = {k: v for k, v in self._collections.items() if k in target_collections}
 
-        # 全コレクションを並行クエリ（asyncio.to_thread で同期呼び出しをラップ）
-        tasks = {
-            name: asyncio.to_thread(_chroma_query, col, query_embedding, top_k)
-            for name, col in active.items()
+        # テキストコレクションと新コレクションで埋め込みモデルを分ける
+        new_collections = {
+            k: v for k, v in active.items() if k != COLLECTION_NAME
         }
+        has_text_collection = COLLECTION_NAME in active
+
+        # 新コレクション用: gemini-embedding-2-preview で埋め込み
+        v2_embedding: Optional[list[float]] = None
+        if new_collections:
+            v2_embedding = await self.embed_client.embed_text(
+                query, task_type="RETRIEVAL_QUERY"
+            )
+
+        # テキストコレクション用: 既存の gemini-embedding-001 で埋め込み（次元互換性維持）
+        legacy_embedding: Optional[list[float]] = None
+        if has_text_collection:
+            try:
+                from indexer import get_query_embedding as _legacy_embed
+                legacy_embedding = await asyncio.to_thread(_legacy_embed, query)
+            except Exception as e:
+                logger.warning(f"[MultiIndexSearcher] Legacy embedding failed: {e}; skipping text collection")
+                has_text_collection = False
+
+        # 並行クエリを組み立てる
+        tasks: dict[str, any] = {}
+        if has_text_collection and legacy_embedding is not None:
+            tasks[COLLECTION_NAME] = asyncio.to_thread(
+                _chroma_query, active[COLLECTION_NAME], legacy_embedding, top_k
+            )
+        for name, col in new_collections.items():
+            if v2_embedding is not None:
+                tasks[name] = asyncio.to_thread(_chroma_query, col, v2_embedding, top_k)
 
         results: dict[str, list[SearchResult]] = {}
         for name, coro in tasks.items():
