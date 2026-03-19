@@ -130,6 +130,10 @@ MEMORY_MONTHLY_RETENTION_MONTHS = int(os.environ.get("MEMORY_MONTHLY_RETENTION_M
 # ChromaDBコレクション名
 COLLECTION_NAME = "architectural_knowledge"
 PERSONAL_CONTEXT_COLLECTION = "personal_contexts"
+ISSUE_MEMO_COLLECTION = "issue_memos"
+
+# 課題因果メモ Markdown 保存先
+ISSUE_MEMOS_DIR = BASE_DIR / "data" / "issue_memos"
 
 # 除外フォルダ（インデックス対象外）
 EXCLUDE_FOLDERS = [

@@ -8,7 +8,8 @@ import IssueFilterBar, { PriorityFilter } from '@/components/issues/IssueFilterB
 import IssueChatPanel from '@/components/issues/IssueChatPanel';
 import IssueCausalGraph from '@/components/issues/IssueCausalGraph';
 import IssueDetailDrawer from '@/components/issues/IssueDetailDrawer';
-import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, Maximize2, X, Map, Smartphone } from 'lucide-react';
+import IssueMemoSearch from '@/components/issues/IssueMemoSearch';
+import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, Maximize2, X, Map, Smartphone, Search } from 'lucide-react';
 import Link from 'next/link';
 
 // ────────────────────────────────────────────────
@@ -148,6 +149,7 @@ function ProjectGraphView({
   const [loading, setLoading] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'none' | 'chat' | 'filter'>('none');
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
+  const [activeTab, setActiveTab] = useState<'graph' | 'search'>('graph');
 
   const fetchIssues = useCallback(async () => {
     setLoading(true);
@@ -193,6 +195,32 @@ function ProjectGraphView({
         <div className="flex-1 min-w-0">
           <h1 className="text-base font-semibold text-gray-800 truncate">{projectName}</h1>
         </div>
+        {/* タブ切り替え */}
+        <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden flex-shrink-0">
+          <button
+            onClick={() => setActiveTab('graph')}
+            className={`flex items-center gap-1 px-3 py-1.5 text-xs transition-colors ${
+              activeTab === 'graph'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <ClipboardList size={13} />
+            <span className="hidden sm:inline">グラフ</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('search')}
+            className={`flex items-center gap-1 px-3 py-1.5 text-xs transition-colors ${
+              activeTab === 'search'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Search size={13} />
+            <span className="hidden sm:inline">メモ検索</span>
+          </button>
+        </div>
+
         {/* ナビゲーション */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <Link
@@ -214,43 +242,65 @@ function ProjectGraphView({
         </div>
       </div>
 
-      {/* フィルターバー（デスクトップのみ） */}
-      <div className="hidden md:block">
-        <IssueFilterBar
-          priorityFilter={priorityFilter}
-          onPriorityFilter={setPriorityFilter}
-          categoryFilter={categoryFilter}
-          onCategoryFilter={setCategoryFilter}
-        />
-      </div>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* 左パネル: チャット入力（デスクトップのみ） */}
-        <div className="hidden md:flex w-72 flex-shrink-0 border-r border-gray-200 flex-col overflow-hidden">
-          <IssueChatPanel
+      {/* メモ検索タブ */}
+      {activeTab === 'search' && (
+        <div className="flex-1 overflow-y-auto p-4 max-w-2xl mx-auto w-full">
+          <IssueMemoSearch
             projectName={projectName}
-            issues={issues}
-            onIssueAdded={handleIssueAdded}
+            onSelectIssue={(issueId) => {
+              const found = issues.find((iss) => iss.id === issueId);
+              if (found) {
+                setSelectedIssue(found);
+              }
+              // グラフタブへ切り替えて詳細を表示
+              setActiveTab('graph');
+            }}
           />
         </div>
+      )}
 
-        {/* グラフエリア（PC専用 ReactFlow） */}
-        <div className="flex-1 overflow-hidden relative">
-          {loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
-              <span className="text-sm text-gray-400">読み込み中…</span>
+      {/* グラフタブ */}
+      {activeTab === 'graph' && (
+        <>
+          {/* フィルターバー（デスクトップのみ） */}
+          <div className="hidden md:block">
+            <IssueFilterBar
+              priorityFilter={priorityFilter}
+              onPriorityFilter={setPriorityFilter}
+              categoryFilter={categoryFilter}
+              onCategoryFilter={setCategoryFilter}
+            />
+          </div>
+
+          <div className="flex flex-1 overflow-hidden">
+            {/* 左パネル: チャット入力（デスクトップのみ） */}
+            <div className="hidden md:flex w-72 flex-shrink-0 border-r border-gray-200 flex-col overflow-hidden">
+              <IssueChatPanel
+                projectName={projectName}
+                issues={issues}
+                onIssueAdded={handleIssueAdded}
+              />
             </div>
-          )}
-          <IssueCausalGraph
-            issues={issues}
-            edges={edges}
-            priorityFilter={priorityFilter}
-            onNodeClick={setSelectedIssue}
-            onRefresh={fetchIssues}
-            fitViewTrigger={fitViewTrigger}
-          />
-        </div>
-      </div>
+
+            {/* グラフエリア（PC専用 ReactFlow） */}
+            <div className="flex-1 overflow-hidden relative">
+              {loading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 z-10">
+                  <span className="text-sm text-gray-400">読み込み中…</span>
+                </div>
+              )}
+              <IssueCausalGraph
+                issues={issues}
+                edges={edges}
+                priorityFilter={priorityFilter}
+                onNodeClick={setSelectedIssue}
+                onRefresh={fetchIssues}
+                fitViewTrigger={fitViewTrigger}
+              />
+            </div>
+          </div>
+        </>
+      )}
 
       {/* モバイル専用底部バー */}
       <div className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 p-1 bg-white/90 backdrop-blur border border-gray-200 rounded-2xl shadow-2xl">
@@ -262,6 +312,15 @@ function ProjectGraphView({
         >
           <MessageCircle size={20} />
           <span className="text-[9px] font-bold">課題追加</span>
+        </button>
+        <button
+          onClick={() => setActiveTab(activeTab === 'search' ? 'graph' : 'search')}
+          className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${
+            activeTab === 'search' ? 'bg-blue-600 text-white shadow-inner' : 'text-gray-500 hover:bg-gray-50'
+          }`}
+        >
+          <Search size={20} />
+          <span className="text-[9px] font-bold">メモ検索</span>
         </button>
         <button
           onClick={() => setMobilePanel(mobilePanel === 'filter' ? 'none' : 'filter')}
