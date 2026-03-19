@@ -7,6 +7,7 @@ routers/issues.py — 課題因果グラフ API
   POST   /api/issues/edges/confirm    因果エッジを確定
   GET    /api/issues                  課題・エッジ一覧
   GET    /api/issues/projects         プロジェクト名一覧
+  GET    /api/issues/memo-search      課題メモを自然言語で検索（LLM embedding）
   PATCH  /api/issues/{issue_id}       部分更新
   DELETE /api/issues/{issue_id}       物理削除
 """
@@ -21,6 +22,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from database import get_db
+from config import ISSUE_MEMOS_DIR
+from issue_memo_indexer import IssueMemoIndexer
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Issues"])
@@ -84,6 +87,103 @@ class MemberCreateRequest(BaseModel):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _render_issue_markdown(issue: dict, edges: list, db) -> str:
+    """Issue dict + edges リストから Markdown テキストを生成する。"""
+    # 関連課題のタイトルを取得
+    causing_titles = []   # この課題の原因（from_id → issue_id）
+    caused_titles = []    # この課題が引き起こす課題（issue_id → to_id）
+
+    for edge in edges:
+        edge_from = edge[1] if not isinstance(edge, dict) else edge["from_id"]
+        edge_to   = edge[2] if not isinstance(edge, dict) else edge["to_id"]
+        issue_id  = issue["id"]
+
+        if edge_to == issue_id:
+            # edge_from がこの課題の原因
+            row = db.execute(
+                text("SELECT title FROM issues WHERE id = :id"), {"id": edge_from}
+            ).fetchone()
+            causing_titles.append((edge_from, row[0] if row else edge_from))
+        elif edge_from == issue_id:
+            # edge_to がこの課題によって引き起こされる
+            row = db.execute(
+                text("SELECT title FROM issues WHERE id = :id"), {"id": edge_to}
+            ).fetchone()
+            caused_titles.append((edge_to, row[0] if row else edge_to))
+
+    causing_lines = "\n".join(f"- [← {t}]({i})" for i, t in causing_titles) or "（なし）"
+    caused_lines  = "\n".join(f"- [→ {t}]({i})" for i, t in caused_titles)  or "（なし）"
+
+    lines = [
+        "---",
+        f"id: {issue.get('id', '')}",
+        f"title: {issue.get('title', '')}",
+        f"project: {issue.get('project_name', '')}",
+        f"category: {issue.get('category', '')}",
+        f"priority: {issue.get('priority', '')}",
+        f"status: {issue.get('status', '')}",
+        f"assignee: {issue.get('assignee') or ''}",
+        f"created_at: {issue.get('created_at', '')}",
+        f"updated_at: {issue.get('updated_at', '')}",
+        "---",
+        "",
+        f"# {issue.get('title', '')}",
+        "",
+        "## 原因 (Cause)",
+        issue.get("cause") or "（未入力）",
+        "",
+        "## 影響・リスク (Impact)",
+        issue.get("impact") or "（未入力）",
+        "",
+        "## 説明 (Description)",
+        issue.get("description") or "（未入力）",
+        "",
+        "## 対応策 (Action)",
+        issue.get("action_next") or "（未入力）",
+        "",
+        "## メモ (Context Memo)",
+        issue.get("context_memo") or "（未入力）",
+        "",
+        "## 関連課題 (Related Issues)",
+        "### この課題の原因となっている課題（←）",
+        causing_lines,
+        "",
+        "### この課題が引き起こしている課題（→）",
+        caused_lines,
+    ]
+    return "\n".join(lines)
+
+
+def _save_issue_markdown(issue_id: str, db) -> None:
+    """Issue + Edges を読んでMarkdownファイルを書き出し、ChromaDBインデックスも更新する。"""
+    row = db.execute(
+        text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}
+    ).fetchone()
+    if not row:
+        logger.warning(f"[IssueMemo] issue_id={issue_id} not found, skipping markdown save")
+        return
+
+    issue = _issue_row_to_dict(row)
+    edge_rows = db.execute(
+        text("SELECT * FROM issue_edges WHERE from_id = :id OR to_id = :id"),
+        {"id": issue_id},
+    ).fetchall()
+
+    md_content = _render_issue_markdown(issue, edge_rows, db)
+
+    project_dir = ISSUE_MEMOS_DIR / (issue.get("project_name") or "default")
+    project_dir.mkdir(parents=True, exist_ok=True)
+    md_path = project_dir / f"{issue_id}.md"
+    md_path.write_text(md_content, encoding="utf-8")
+    logger.info(f"[IssueMemo] Saved markdown: {md_path}")
+
+    try:
+        indexer = IssueMemoIndexer()
+        indexer.index_file(md_path)
+    except Exception as e:
+        logger.error(f"[IssueMemo] ChromaDB index failed for {issue_id}: {e}")
 
 
 def _issue_row_to_dict(row) -> dict:
@@ -222,6 +322,12 @@ def capture_issue_core(raw_input: str, project_name: str, db) -> dict:
     ).fetchone()
     issue = _issue_row_to_dict(row)
 
+    # Markdown保存 + インデックス更新
+    try:
+        _save_issue_markdown(issue_id, db)
+    except Exception as e:
+        logger.error(f"[IssueMemo] Failed to save markdown for {issue_id}: {e}")
+
     causal_candidates = [
         c for c in result.get("causal_candidates", [])
         if isinstance(c.get("confidence"), (int, float)) and c["confidence"] >= 0.7
@@ -332,6 +438,35 @@ def _generate_triage_questions(project_name: str, template_id: str, db) -> dict:
 
 
 # ---------- エンドポイント ----------
+
+@router.get("/api/issues/memo-search")
+def memo_search(
+    q: str,
+    project_name: Optional[str] = None,
+    top_k: int = 8,
+):
+    """
+    課題因果メモを自然言語クエリで検索する（Obsidian風 LLM 検索）。
+
+    params:
+      q           - 自然言語クエリ（例: "鉄骨納期が遅れている原因"）
+      project_name - プロジェクト名でフィルタ（省略時は全プロジェクト）
+      top_k        - 返す件数（デフォルト8）
+
+    returns:
+      {"results": [{issue_id, title, project_name, category, priority, status, score, snippet}]}
+    """
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="クエリ q が空です")
+    top_k = max(1, min(top_k, 20))
+    try:
+        indexer = IssueMemoIndexer()
+        results = indexer.search(q, project_name=project_name, top_k=top_k)
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"[IssueMemo] memo_search failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"検索エラー: {str(e)}")
+
 
 @router.get("/api/issues/projects")
 def list_projects(db=Depends(get_db)):
@@ -582,6 +717,14 @@ def confirm_edge(req: EdgeConfirmRequest, db=Depends(get_db)):
         {"id": edge_id, "from_id": req.from_id, "to_id": req.to_id, "created_at": _now_iso()},
     )
     db.commit()
+
+    # 因果関係が変わったので両issueのMarkdownを更新
+    for iid in (req.from_id, req.to_id):
+        try:
+            _save_issue_markdown(iid, db)
+        except Exception as e:
+            logger.error(f"[IssueMemo] Failed to update markdown for {iid} after edge confirm: {e}")
+
     return {"ok": True, "saved": True, "edge_id": edge_id}
 
 
@@ -694,6 +837,13 @@ def update_issue(issue_id: str, req: IssueUpdateRequest, db=Depends(get_db)):
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="課題が見つかりません")
+
+    # Markdown更新 + インデックス更新
+    try:
+        _save_issue_markdown(issue_id, db)
+    except Exception as e:
+        logger.error(f"[IssueMemo] Failed to update markdown for {issue_id}: {e}")
+
     return _issue_row_to_dict(row)
 
 
@@ -712,10 +862,39 @@ def delete_edge(edge_id: str, db=Depends(get_db)):
 @router.delete("/api/issues/{issue_id}")
 def delete_issue(issue_id: str, db=Depends(get_db)):
     """課題と関連エッジを物理削除"""
+    # 削除前に関連issueのIDを取得（エッジ更新のため）
+    related_ids: set[str] = set()
+    edge_rows = db.execute(
+        text("SELECT from_id, to_id FROM issue_edges WHERE from_id = :id OR to_id = :id"),
+        {"id": issue_id},
+    ).fetchall()
+    for r in edge_rows:
+        related_ids.update([r[0], r[1]])
+    related_ids.discard(issue_id)
+
     db.execute(
         text("DELETE FROM issue_edges WHERE from_id = :id OR to_id = :id"),
         {"id": issue_id},
     )
     db.execute(text("DELETE FROM issues WHERE id = :id"), {"id": issue_id})
     db.commit()
+
+    # Markdownファイル削除 + インデックス削除
+    try:
+        indexer = IssueMemoIndexer()
+        indexer.delete_from_index(issue_id)
+        # プロジェクトディレクトリ以下を走査してファイル削除
+        for md_path in ISSUE_MEMOS_DIR.rglob(f"{issue_id}.md"):
+            md_path.unlink(missing_ok=True)
+            logger.info(f"[IssueMemo] Deleted markdown file: {md_path}")
+    except Exception as e:
+        logger.error(f"[IssueMemo] Failed to delete markdown for {issue_id}: {e}")
+
+    # 関連issueのMarkdownも更新（因果関係が変わるため）
+    for rid in related_ids:
+        try:
+            _save_issue_markdown(rid, db)
+        except Exception as e:
+            logger.error(f"[IssueMemo] Failed to update markdown for {rid} after delete: {e}")
+
     return {"ok": True}

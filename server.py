@@ -150,6 +150,16 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Resetting stuck jobs failed: {e}")
     finally:
         session.close()
+
+    # 課題因果メモのインデックスを既存 Markdown ファイルと同期
+    try:
+        from issue_memo_indexer import IssueMemoIndexer
+        indexer = IssueMemoIndexer()
+        count = indexer.reindex_all()
+        logger.info(f"Issue memo index synced: {count} files")
+    except Exception as e:
+        logger.warning(f"Issue memo reindex failed (non-fatal): {e}")
+
     yield
     # シャットダウン時の処理（将来必要に応じて追加）
 
