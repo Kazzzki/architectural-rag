@@ -240,6 +240,8 @@ from routers import tasks as tasks_module
 app.include_router(tasks_module.router)
 from routers import meetings as meetings_module
 app.include_router(meetings_module.router)
+from routers import documents as documents_module
+app.include_router(documents_module.router)
 
 @app.get("/")
 async def root():
