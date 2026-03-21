@@ -163,6 +163,24 @@ async def upload_multiple_files(
                 import shutil
                 shutil.move(str(file_path), str(final_md_path))
 
+                # source_pdf_hash がフロントマターにない場合は付与してからインデックス
+                import yaml as _yaml
+                _md_text = final_md_path.read_text(encoding="utf-8")
+                _has_fm = _md_text.startswith("---")
+                if not _has_fm or "source_pdf_hash" not in _md_text[:500]:
+                    _fm_data = {"source_pdf_hash": source_pdf_hash, "version_id": version_id}
+                    if _has_fm:
+                        _parts = _md_text.split("---", 2)
+                        if len(_parts) >= 3:
+                            _existing = _yaml.safe_load(_parts[1]) or {}
+                            _existing.update(_fm_data)
+                            _md_text = "---\n" + _yaml.dump(_existing, allow_unicode=True) + "---" + _parts[2]
+                        else:
+                            _md_text = "---\n" + _yaml.dump(_fm_data, allow_unicode=True) + "---\n" + _md_text
+                    else:
+                        _md_text = "---\n" + _yaml.dump(_fm_data, allow_unicode=True) + "---\n" + _md_text
+                    final_md_path.write_text(_md_text, encoding="utf-8")
+
                 from indexer import index_file
                 background_tasks.add_task(index_file, str(final_md_path))
                 

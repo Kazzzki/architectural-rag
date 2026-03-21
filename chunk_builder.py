@@ -92,12 +92,10 @@ class ChunkBuilder:
         return all_chunks
 
     def _split_by_headers(self, text: str) -> List[str]:
-        """Markdownの見出しでテキストを分割。"""
-        # "## " または "# " で始まる行の直前で分割
-        pattern = r'(?m)^(?:#{1,3}\s+.*|\[\[PAGE_\d+\]\].*)'
+        """Markdownの見出しでテキストを分割（ヘッダーをセクション先頭に保持）。"""
+        # lookahead を使って分割点の直前で切る → ヘッダー行が次のセクションの先頭に残る
+        pattern = r'(?m)(?=^(?:#{1,3}\s|\[\[PAGE_\d+\]\]))'
         parts = re.split(pattern, text)
-        # re.splitはデリミタを除去してしまうので、findallでデリミタも拾って結合するのが丁寧だが、
-        # ここでは簡易的に空でないパーツを返す。
         return [p for p in parts if p.strip()]
 
     def _split_into_leaves(self, text: str, size: int, overlap: int) -> List[str]:

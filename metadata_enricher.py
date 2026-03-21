@@ -68,7 +68,7 @@ class MetadataEnricher:
             # --- Frontmatter生成とファイル書き出し ---
             # 旧実装互換のため drive_file_id などを空で渡す
             extra_meta = {
-                "source_pdf": source_pdf_hash,
+                "source_pdf_hash": source_pdf_hash,
                 "pdf_filename": filename,
                 "drive_file_id": "",
                 "version_id": version_id,
