@@ -1,20 +1,29 @@
 import uuid
 import re
+import hashlib
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# 句点・感嘆符・疑問符・全角スペース区切り（日本語文末判定）
+_SENTENCE_END_RE = re.compile(r'(?<=[。！？\n])')
+
+# ヘッダー行パターン（lookahead で分割するのでヘッダー行が各チャンクの先頭に残る）
+_HEADER_SPLIT_RE = re.compile(r'(?m)(?=^(?:#{1,3}\s+|\[\[PAGE_\d+\]\]))', )
+
+
 class ChunkBuilder:
     """
     Phase 3: 3層チャンク（Leaf, Section, Page）を構築する。
-    
+
     - Page Chunk: 1ページ全体のコンテキスト。
     - Section Chunk: Markdownの見出し(#, ##)で区切られた論理セクション。
-    - Leaf Chunk: 検索精度のための最小単位（200-400文字程度）。
+    - Leaf Chunk: 検索精度のための最小単位（日本語向け 500 文字程度）。
     """
-    def __init__(self, leaf_size: int = 300, leaf_overlap: int = 50):
+    def __init__(self, leaf_size: int = 500, leaf_overlap: int = 100):
+        # 日本語向け推奨: 500〜800文字, overlap 100〜150文字
         self.leaf_size = leaf_size
         self.leaf_overlap = leaf_overlap
 
@@ -25,24 +34,28 @@ class ChunkBuilder:
         """
         source_metadata = source_metadata or {}
         all_chunks = []
-        version_id = source_metadata.get("version_id", "unknown") # version_idをsource_metadataから取得
+        version_id = source_metadata.get("version_id", "unknown")
+        source_file = source_metadata.get("rel_path") or source_metadata.get("filename", "")
 
         # 1. Page Chunks
-        # ocr_results は [{'text': '...', 'index': 0, 'label': 'Page 1', ...}] の形式
         page_chunks = []
         for res in ocr_results:
             page_text = res.get("text", "").strip()
             if not page_text:
                 continue
-                
+
             page_no = res.get("start_page", 0)
+            # 決定論的ID: UUIDなし（同一version_id・同一ページは常に同じIDになり重複防止）
+            chunk_id = f"page_{version_id}_{page_no}"
             chunk = {
-                "id": f"page_{version_id}_{page_no}_{uuid.uuid4().hex[:6]}",
+                "id": chunk_id,
                 "version_id": version_id,
                 "chunk_type": "page",
                 "content": page_text,
                 "metadata": {
-                    "page_no": page_no,
+                    "page_number": page_no,
+                    "section_title": "",
+                    "source_file": source_file,
                     "label": res.get("label", f"Page {page_no}"),
                     **source_metadata
                 }
@@ -51,21 +64,28 @@ class ChunkBuilder:
             all_chunks.append(chunk)
 
         # 2. Section Chunks
-        # 見出しで分割する。OCR結果には [[PAGE_N]] や ## Page N が含まれている。
-        # ここでは単純に "## " または "# " で分割を試みる。
-        sections = self._split_by_headers(md_text) # Changed markdown_text to md_text
+        # lookahead split でヘッダー行を各セクションの先頭に保持する
+        sections = self._split_by_headers(md_text)
         section_chunks = []
         for i, sec_text in enumerate(sections):
-            if len(sec_text.strip()) < 50: # あまりに短いものはスキップ
+            stripped = sec_text.strip()
+            if len(stripped) < 50:
                 continue
-                
+
+            # セクションタイトルを1行目から抽出
+            section_title = self._extract_title(stripped.splitlines()[0])
+            # 決定論的ID
+            chunk_id = f"section_{version_id}_{i}"
             chunk = {
-                "id": f"section_{version_id}_{i}_{uuid.uuid4().hex[:6]}",
+                "id": chunk_id,
                 "version_id": version_id,
                 "chunk_type": "section",
-                "content": sec_text.strip(),
+                "content": stripped,
                 "metadata": {
                     "section_index": i,
+                    "section_title": section_title,
+                    "page_number": None,   # セクション単位では不定（leafに引き継ぐ）
+                    "source_file": source_file,
                     **source_metadata
                 }
             }
@@ -73,16 +93,25 @@ class ChunkBuilder:
             all_chunks.append(chunk)
 
             # 3. Leaf Chunks (Sectionをさらに細分化)
-            leaves = self._split_into_leaves(sec_text, self.leaf_size, self.leaf_overlap)
+            leaves = self._split_into_leaves(stripped, self.leaf_size, self.leaf_overlap)
             for j, leaf_text in enumerate(leaves):
+                leaf_stripped = leaf_text.strip()
+                # 50文字未満の極短チャンクはスキップ
+                if len(leaf_stripped) < 50:
+                    continue
+                # 決定論的ID
+                leaf_id = f"leaf_{version_id}_{i}_{j}"
                 leaf_chunk = {
-                    "id": f"leaf_{version_id}_{i}_{j}_{uuid.uuid4().hex[:6]}",
+                    "id": leaf_id,
                     "version_id": version_id,
-                    "chunk_type": "leaf", # Changed from "type" to "chunk_type" to match existing schema
-                    "content": leaf_text.strip(), # Added .strip() to match existing content field
+                    "chunk_type": "leaf",
+                    "content": leaf_stripped,
                     "metadata": {
-                        "section_id": chunk["id"], # Kept original section_id
-                        "leaf_index": j, # Kept original leaf_index
+                        "section_id": chunk_id,
+                        "section_title": section_title,
+                        "leaf_index": j,
+                        "page_number": None,
+                        "source_file": source_file,
                         **source_metadata
                     }
                 }
@@ -92,25 +121,48 @@ class ChunkBuilder:
         return all_chunks
 
     def _split_by_headers(self, text: str) -> List[str]:
-        """Markdownの見出しでテキストを分割。"""
-        # "## " または "# " で始まる行の直前で分割
-        pattern = r'(?m)^(?:#{1,3}\s+.*|\[\[PAGE_\d+\]\].*)'
-        parts = re.split(pattern, text)
-        # re.splitはデリミタを除去してしまうので、findallでデリミタも拾って結合するのが丁寧だが、
-        # ここでは簡易的に空でないパーツを返す。
+        """
+        Markdownの見出しでテキストを分割。
+        lookahead split によりヘッダー行は次チャンクの先頭に残る。
+        """
+        parts = _HEADER_SPLIT_RE.split(text)
         return [p for p in parts if p.strip()]
 
+    def _extract_title(self, header_line: str) -> str:
+        """ヘッダー行からタイトル文字列を抽出する。"""
+        # ## タイトル → タイトル
+        title = re.sub(r'^#{1,3}\s*', '', header_line.strip())
+        # [[PAGE_N]] マーカーを除去
+        title = re.sub(r'^\[\[PAGE_\d+\]\]\s*', '', title)
+        return title.strip()
+
     def _split_into_leaves(self, text: str, size: int, overlap: int) -> List[str]:
-        """テキストを固定サイズの小チャンクに分割。"""
+        """
+        テキストを日本語文末（句点・感嘆符・疑問符・改行）境界を優先して分割。
+        境界が見つからない場合は固定サイズでフォールバック。
+        """
         if not text:
             return []
         chunks = []
         start = 0
-        while start < len(text):
-            end = min(start + size, len(text))
-            chunk = text[start:end]
-            chunks.append(chunk)
-            if end >= len(text):
+        text_len = len(text)
+        while start < text_len:
+            end = min(start + size, text_len)
+            if end < text_len:
+                # [start, end] の範囲内で最後の文末境界を探す
+                segment = text[start:end]
+                last_boundary = -1
+                for m in _SENTENCE_END_RE.finditer(segment):
+                    last_boundary = m.start()
+                if last_boundary > 0:
+                    end = start + last_boundary
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            if end >= text_len:
                 break
-            start += (size - overlap)
+            start = end - overlap
+            # 無限ループ防止: 進んでいなければ強制前進
+            if start <= (end - size):
+                start = end
         return chunks

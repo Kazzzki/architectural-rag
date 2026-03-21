@@ -212,7 +212,16 @@ def extract_text(filepath: str) -> List[Dict[str, Any]]:
 
 
 def _extract_pdf(filepath: str) -> List[Dict[str, Any]]:
-    """PDF からテキストとページ情報を抽出"""
+    """PDF からテキストとページ情報を抽出（PyMuPDF → pypdf フォールバック）"""
+    try:
+        return _extract_pdf_pymupdf(filepath)
+    except Exception as e:
+        logger.warning(f"PyMuPDF extraction failed for {filepath}: {e}. Trying pypdf fallback.")
+        return _extract_pdf_pypdf(filepath)
+
+
+def _extract_pdf_pymupdf(filepath: str) -> List[Dict[str, Any]]:
+    """PyMuPDF を使った PDF テキスト抽出"""
     pages = []
     doc = fitz.open(filepath)
     for page_num, page in enumerate(doc, start=1):
@@ -230,10 +239,33 @@ def _extract_pdf(filepath: str) -> List[Dict[str, Any]]:
     return pages
 
 
+def _extract_pdf_pypdf(filepath: str) -> List[Dict[str, Any]]:
+    """pypdf を使った PDF テキスト抽出（フォールバック）"""
+    pages = []
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(filepath)
+        for page_num, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append({
+                    "text":        text,
+                    "page_number": page_num,
+                    "has_image":   False,
+                })
+    except Exception as e:
+        logger.error(f"pypdf fallback also failed for {filepath}: {e}")
+    return pages
+
+
 def _extract_text_file(filepath: str) -> List[Dict[str, Any]]:
     """Markdown / テキストファイルを抽出（Frontmatter を除去）"""
-    with open(filepath, "r", encoding="utf-8") as f:
-        text = f.read()
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except Exception as e:
+        logger.error(f"Failed to read text file {filepath}: {e}")
+        return []
     if text.startswith("---"):
         parts = text.split("---", 2)
         if len(parts) >= 3:

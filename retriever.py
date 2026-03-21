@@ -135,7 +135,11 @@ def _search_single(
     metas = results.get("metadatas", [[]])[0]
     dists = results.get("distances", [[]])[0]
 
+    # コサイン距離 > 1.0 はコサイン類似度 < 0（ほぼ無関係）なので除外
+    _MAX_VECTOR_DISTANCE = 1.0
     for doc, meta, dist in zip(docs, metas, dists):
+        if dist > _MAX_VECTOR_DISTANCE:
+            continue
         hits.append({
             "document":  doc,
             "metadata":  meta,

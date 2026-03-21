@@ -174,12 +174,20 @@ class DenseIndexer:
             return
 
         # --- ChromaDB に upsert ---
-        self.collection.upsert(
-            ids=final_ids,
-            embeddings=final_embeddings,
-            documents=final_documents,
-            metadatas=final_metadatas
-        )
+        try:
+            self.collection.upsert(
+                ids=final_ids,
+                embeddings=final_embeddings,
+                documents=final_documents,
+                metadatas=final_metadatas
+            )
+        except Exception as e:
+            logger.error(
+                f"[DenseIndexer] ChromaDB upsert failed for version_id={version_id} "
+                f"({len(final_ids)} chunks): {e}",
+                exc_info=True,
+            )
+            raise
         logger.info(
             f"[DenseIndexer] Indexed {len(final_ids)} leaf chunks into ChromaDB for {version_id}"
         )
