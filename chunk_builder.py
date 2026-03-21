@@ -34,7 +34,7 @@ class ChunkBuilder:
             page_text = res.get("text", "").strip()
             if not page_text:
                 continue
-                
+
             page_no = res.get("start_page", 0)
             chunk = {
                 "id": f"page_{version_id}_{page_no}_{uuid.uuid4().hex[:6]}",
@@ -53,19 +53,21 @@ class ChunkBuilder:
         # 2. Section Chunks
         # 見出しで分割する。OCR結果には [[PAGE_N]] や ## Page N が含まれている。
         # ここでは単純に "## " または "# " で分割を試みる。
-        sections = self._split_by_headers(md_text) # Changed markdown_text to md_text
+        sections = self._split_by_headers(md_text)
         section_chunks = []
-        for i, sec_text in enumerate(sections):
-            if len(sec_text.strip()) < 50: # あまりに短いものはスキップ
+        for i, (header, content) in enumerate(sections):
+            full_section_text = (header + "\n" + content).strip() if header else content.strip()
+            if len(full_section_text) < 50: # あまりに短いものはスキップ
                 continue
-                
+
             chunk = {
                 "id": f"section_{version_id}_{i}_{uuid.uuid4().hex[:6]}",
                 "version_id": version_id,
                 "chunk_type": "section",
-                "content": sec_text.strip(),
+                "content": full_section_text,
                 "metadata": {
                     "section_index": i,
+                    "section_title": header,  # セクションタイトルをメタデータに付与
                     **source_metadata
                 }
             }
@@ -73,16 +75,17 @@ class ChunkBuilder:
             all_chunks.append(chunk)
 
             # 3. Leaf Chunks (Sectionをさらに細分化)
-            leaves = self._split_into_leaves(sec_text, self.leaf_size, self.leaf_overlap)
+            leaves = self._split_into_leaves(full_section_text, self.leaf_size, self.leaf_overlap)
             for j, leaf_text in enumerate(leaves):
                 leaf_chunk = {
                     "id": f"leaf_{version_id}_{i}_{j}_{uuid.uuid4().hex[:6]}",
                     "version_id": version_id,
-                    "chunk_type": "leaf", # Changed from "type" to "chunk_type" to match existing schema
-                    "content": leaf_text.strip(), # Added .strip() to match existing content field
+                    "chunk_type": "leaf",
+                    "content": leaf_text.strip(),
                     "metadata": {
-                        "section_id": chunk["id"], # Kept original section_id
-                        "leaf_index": j, # Kept original leaf_index
+                        "section_id": chunk["id"],
+                        "section_title": header,  # リーフチャンクにもセクションタイトルを付与
+                        "leaf_index": j,
                         **source_metadata
                     }
                 }
@@ -91,26 +94,52 @@ class ChunkBuilder:
         logger.info(f"[ChunkBuilder] Generated {len(all_chunks)} chunks (Pages: {len(page_chunks)}, Sections: {len(section_chunks)})")
         return all_chunks
 
-    def _split_by_headers(self, text: str) -> List[str]:
-        """Markdownの見出しでテキストを分割。"""
-        # "## " または "# " で始まる行の直前で分割
-        pattern = r'(?m)^(?:#{1,3}\s+.*|\[\[PAGE_\d+\]\].*)'
+    def _split_by_headers(self, text: str) -> List[tuple]:
+        """Markdownの見出しでテキストを分割し、(header, content) のタプルリストを返す。
+
+        ヘッダー行をデリミタとして保持することで、section_title を正確に付与できる。
+        """
+        # キャプチャグループを使ってヘッダー行を保持する
+        pattern = r'(?m)^(#{1,3}\s+.*|\[\[PAGE_\d+\]\].*)'
         parts = re.split(pattern, text)
-        # re.splitはデリミタを除去してしまうので、findallでデリミタも拾って結合するのが丁寧だが、
-        # ここでは簡易的に空でないパーツを返す。
-        return [p for p in parts if p.strip()]
+        # parts の構造: [pre_header_text, header1, content1, header2, content2, ...]
+        sections = []
+        i = 0
+        # ヘッダー前のテキスト（あれば）をヘッダーなしセクションとして追加
+        if parts and not re.match(r'(?m)^#{1,3}\s+|\[\[PAGE_\d+\]\]', parts[0]):
+            if parts[0].strip():
+                sections.append(("", parts[0]))
+            i = 1
+        # ヘッダーとコンテンツをペアにして追加
+        while i + 1 < len(parts):
+            header = parts[i].strip()
+            content = parts[i + 1]
+            sections.append((header, content))
+            i += 2
+        return sections
 
     def _split_into_leaves(self, text: str, size: int, overlap: int) -> List[str]:
-        """テキストを固定サイズの小チャンクに分割。"""
+        """テキストを固定サイズの小チャンクに分割（文境界を優先）。"""
         if not text:
             return []
         chunks = []
         start = 0
         while start < len(text):
             end = min(start + size, len(text))
-            chunk = text[start:end]
-            chunks.append(chunk)
+            # 文の途中で切れないよう、size 範囲内で最後の文境界を探す
+            if end < len(text):
+                boundary = max(
+                    text.rfind('。', start, end),
+                    text.rfind('\n', start, end),
+                    text.rfind('．', start, end),
+                    text.rfind('. ', start, end),
+                )
+                if boundary > start + overlap:
+                    end = boundary + 1
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
             if end >= len(text):
                 break
-            start += (size - overlap)
+            start = end - overlap
         return chunks

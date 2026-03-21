@@ -31,12 +31,14 @@ from google.genai import types
 
 # ─── Collection ────────────────────────────────────────────────────────────────
 def get_collection():
-    """ChromaDB コレクションを取得"""
+    """ChromaDB コレクションを取得。
+    embedding_function は指定しない（DenseIndexer と統一）。
+    クエリ時は query_embeddings を直接渡すため EF は不要。
+    """
     client = get_chroma_client()
-    embedding_function = GeminiEmbeddingFunction()
     return client.get_or_create_collection(
         name=COLLECTION_NAME,
-        embedding_function=embedding_function,
+        metadata={"hnsw:space": "cosine"},
     )
 
 
@@ -153,9 +155,10 @@ def _search_lexical(query_text: str, n: int = TOP_K_RESULTS) -> List[Dict[str, A
         hits = []
         for res in results:
             hits.append({
-                "document": res["content"],
-                "metadata": res["metadata"],
-                "score": -res["score"],  # SQLite bm25 は低いほど良いため反転させる
+                "chunk_id":   res["chunk_id"],  # dedup で使用するため追加
+                "document":   res["content"],
+                "metadata":   res["metadata"],
+                "score":      -res["score"],  # SQLite bm25 は低いほど良いため反転させる
                 "search_type": "lexical"
             })
         return hits
@@ -198,7 +201,7 @@ def _rerank_single(query: str, context: str) -> float:
     from config import GEMINI_MODEL_RAG
     response = client.models.generate_content(
         model=GEMINI_MODEL_RAG,
-        contents=[_RERANK_PROMPT.format(query=query, context=context[:500])],
+        contents=[_RERANK_PROMPT.format(query=query, context=context[:1500])],
         config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=8),
     )
     try:
@@ -218,7 +221,7 @@ def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = RERAN
             return _rerank_single(query, hit["document"]), hit
         except Exception as e:
             logger.warning(f"rerank_single failed: {e}")
-            return RERANK_THRESHOLD, hit
+            return 0.0, hit  # 失敗時は 0.0 → threshold 未満で除外
 
     scored = []
     # レートリミット配慮で max_workers=5 に制限

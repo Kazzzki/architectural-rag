@@ -206,8 +206,8 @@ def extract_text(filepath: str) -> List[Dict[str, Any]]:
         elif ext == ".docx":
             return _extract_docx(filepath)
         return []
-    except (fitz.FileDataError, ValueError, IOError) as e:
-        logger.error(f"  PyMuPDF open error {filepath}: {e}")
+    except (fitz.FileDataError, ValueError, IOError, UnicodeDecodeError) as e:
+        logger.error(f"  Text extraction error {filepath}: {e}")
         return []
 
 
@@ -231,9 +231,21 @@ def _extract_pdf(filepath: str) -> List[Dict[str, Any]]:
 
 
 def _extract_text_file(filepath: str) -> List[Dict[str, Any]]:
-    """Markdown / テキストファイルを抽出（Frontmatter を除去）"""
-    with open(filepath, "r", encoding="utf-8") as f:
-        text = f.read()
+    """Markdown / テキストファイルを抽出（Frontmatter を除去）。
+    UTF-8 で読み取れない場合は CP932 → UTF-8 replace の順でフォールバックする。
+    """
+    text = None
+    for encoding in ("utf-8", "utf-8-sig", "cp932"):
+        try:
+            with open(filepath, "r", encoding=encoding) as f:
+                text = f.read()
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        logger.warning(f"Could not decode {filepath} with utf-8/cp932, using utf-8 with replace")
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
     if text.startswith("---"):
         parts = text.split("---", 2)
         if len(parts) >= 3:
@@ -570,7 +582,23 @@ def process_and_index_file(
     }
 
     chunks = builder.build(full_text, ocr_results, source_metadata)
-    
+
+    # セクションチャンクを親チャンクとして保存し、リーフチャンクに parent_chunk_id を付与する
+    # これにより retriever._resolve_parent_chunks が正しく機能する
+    section_id_to_parent_chunk_id: Dict[str, str] = {}
+    for c in chunks:
+        if c["chunk_type"] == "section":
+            parent_id = c["id"].replace("/", "_")
+            parent_chunk_id_val = f"{source_pdf_hash}/{parent_id}"
+            save_parent_chunk(source_pdf_hash, parent_id, c["content"])
+            section_id_to_parent_chunk_id[c["id"]] = parent_chunk_id_val
+
+    for c in chunks:
+        if c["chunk_type"] == "leaf":
+            section_id = c["metadata"].get("section_id", "")
+            if section_id in section_id_to_parent_chunk_id:
+                c["metadata"]["parent_chunk_id"] = section_id_to_parent_chunk_id[section_id]
+
     # インデックス登録
     dense = DenseIndexer()
     dense.upsert_chunks(version_id, chunks)
@@ -632,10 +660,12 @@ def build_index(force_rebuild: bool = False) -> Dict[str, int]:
 # ─── 全件再インデックス (data/pdfs/ から) ──────────────────────────────────────
 def reindex_from_pdfs(progress_interval: int = 10) -> Dict[str, Any]:
     """
-    data/pdfs/ 内の全 PDF を対象に取り込みパイプラインを実行。
-    各 PDF は OCR 済み MD が parent_chunks/ にあれば使用し、
-    なければ直接テキスト抽出してインデックスする。
+    data/pdfs/ 内の全 PDF に対応する MD ファイルを knowledge_base から探し、
+    インデックスを再構築する。
+    process_and_index_file は MD ファイルのみ対象のため、
+    source_pdf_hash で対応 MD を特定してからインデックスする。
     """
+    from config import KNOWLEDGE_BASE_DIR as _KB_DIR
     from database import init_db
     init_db()
 
@@ -646,29 +676,49 @@ def reindex_from_pdfs(progress_interval: int = 10) -> Dict[str, Any]:
     stats = {"total": total, "indexed": 0, "skipped": 0, "errors": 0, "chunks": 0}
 
     for i, pdf_info in enumerate(pdfs, start=1):
-        pdf_path  = Path(pdf_info["full_path"])
-        pdf_hash  = pdf_info["source_pdf_hash"]
-        pdf_name  = pdf_info["filename"]
+        pdf_hash = pdf_info["source_pdf_hash"]
+        pdf_name = pdf_info["filename"]
 
         if i % progress_interval == 0 or i == 1:
             logger.info(f"  再インデックス進捗: {i}/{total} — {pdf_name}")
 
         try:
-            file_info = {
-                "rel_path":        f"pdfs/{pdf_name}",
-                "full_path":       str(pdf_path),
-                "filename":        pdf_name,
-                "category":        "reindex",
-                "subcategory":     "",
-                "sub_subcategory": "",
-                "file_type":       "pdf",
-                "file_size_kb":    float(pdf_path.stat().st_size) / 1024.0,
-                "modified_at":     datetime.fromtimestamp(pdf_path.stat().st_mtime, tz=timezone.utc).isoformat(),
-                "source_pdf_hash": pdf_hash,
-                "source_pdf_name": pdf_name,
-            }
+            # source_pdf_hash が一致する MD ファイルを knowledge_base から検索
+            kb_path = Path(_KB_DIR)
+            md_candidates = []
+            for md_path in kb_path.rglob("*.md"):
+                try:
+                    fm = parse_frontmatter(str(md_path))
+                    if fm.get("source_pdf_hash") == pdf_hash:
+                        md_candidates.append(md_path)
+                except Exception:
+                    continue
 
-            process_and_index_file(file_info, stats)
+            if not md_candidates:
+                logger.warning(f"  MD not found for PDF {pdf_name} (hash: {pdf_hash}), skipping.")
+                stats["skipped"] += 1
+                continue
+
+            for md_path in md_candidates:
+                try:
+                    rel_parts = md_path.relative_to(kb_path).parts
+                    md_file_info = {
+                        "rel_path":        str(md_path.relative_to(kb_path)),
+                        "full_path":       str(md_path),
+                        "filename":        md_path.name,
+                        "category":        rel_parts[0] if len(rel_parts) > 1 else "",
+                        "subcategory":     rel_parts[1] if len(rel_parts) > 2 else "",
+                        "sub_subcategory": rel_parts[2] if len(rel_parts) > 3 else "",
+                        "file_type":       "md",
+                        "file_size_kb":    round(md_path.stat().st_size / 1024, 2),
+                        "modified_at":     datetime.fromtimestamp(md_path.stat().st_mtime, tz=timezone.utc).isoformat(),
+                        "source_pdf_hash": pdf_hash,
+                        "source_pdf_name": pdf_name,
+                    }
+                    process_and_index_file(md_file_info, stats)
+                except Exception as e:
+                    logger.error(f"  エラー ({md_path.name}): {e}", exc_info=True)
+                    stats["errors"] += 1
 
         except Exception as e:
             logger.error(f"  エラー ({pdf_name}): {e}", exc_info=True)
