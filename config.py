@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 # 環境変数をロード
@@ -103,7 +104,7 @@ GEMINI_MODEL_EMBEDDING = os.environ.get(
 # Matryoshka次元削減（None=デフォルト3072。推奨値: 768, 1536, 3072）
 # 注意: 変更した場合も再インデックスが必要
 _embedding_dim_env = os.environ.get("EMBEDDING_OUTPUT_DIMENSIONALITY")
-EMBEDDING_OUTPUT_DIMENSIONALITY: int | None = int(_embedding_dim_env) if _embedding_dim_env else None
+EMBEDDING_OUTPUT_DIMENSIONALITY: Optional[int] = int(_embedding_dim_env) if _embedding_dim_env else None
 
 # ===== モデルルーティング定数 =====
 # route_model.py / route_classifier.py で使用

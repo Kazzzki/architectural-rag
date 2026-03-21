@@ -8,6 +8,8 @@ import {
     Building2,
     ClipboardList,
     PlusSquare,
+    CheckSquare,
+    Radio,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -59,6 +61,20 @@ export default function NavRail({ activeItem, onSelect }: NavRailProps) {
 
             {/* Bottom links */}
             <div className="flex flex-col gap-2 items-center">
+                <Link
+                    href="/meetings"
+                    title="会議文字起こし"
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-colors"
+                >
+                    <Radio className="w-5 h-5" />
+                </Link>
+                <Link
+                    href="/tasks"
+                    title="タスク管理"
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-colors"
+                >
+                    <CheckSquare className="w-5 h-5" />
+                </Link>
                 <Link
                     href="/issues/chat"
                     title="課題を入力"

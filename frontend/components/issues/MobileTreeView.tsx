@@ -6,18 +6,18 @@
  *
  * 設計方針:
  * - 外部ライブラリ追加なし（追加依存ゼロ）
- *   理由: issue + edge の型は既存そのままで、再帰的なツリー描画は
- *   Tailwind + React state で十分実現可能。バンドルサイズ増加を避けるため。
- * - ReactFlow の代替としてモバイル（≤768px）でのみ表示される
+ * - ReactFlow の代替として、タッチ操作を奪わない純 CSS/React 実装
  * - 既存の issues / edges / priorityFilter props をそのまま受け取る
+ * - incomingEdge コネクタをタップすると因果関係詳細モーダルを表示
  *
- * ノード色の仕様:
- *   根本原因（自分への入力エッジなし、自分からの出力エッジあり）: 赤系
+ * ノード色:
+ *   根本原因（入力エッジなし・出力エッジあり）: 赤系
  *   中間原因（両方あり）: 橙系
- *   事象（入力エッジのみ、または孤立）: 青系
+ *   事象（入力エッジのみ・孤立）: 青系
  */
 
 import React, { useMemo, useState } from 'react';
+import { X, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Issue, IssueEdge } from '@/lib/issue_types';
 import type { PriorityFilter } from './IssueFilterBar';
 import MobileTreeNode from './MobileTreeNode';
@@ -37,6 +37,13 @@ interface TreeNode {
   hasOutgoing: boolean;
 }
 
+/** エッジ詳細モーダルに渡すコンテキスト */
+interface EdgeContext {
+  edge: IssueEdge;
+  parentIssue: Issue;
+  childIssue: Issue;
+}
+
 /**
  * issues + edges から Collapsible Tree 構造を構築する。
  * エッジ方向: from_id (原因) → to_id (結果)
@@ -48,9 +55,7 @@ function buildTree(
   edges: IssueEdge[]
 ): { roots: TreeNode[]; orphans: Issue[] } {
   const issueMap = new Map<string, Issue>(issues.map((i) => [i.id, i]));
-  // from_id → to_id の隣接リスト
   const childrenOf = new Map<string, string[]>();
-  // 各ノードへの入力エッジ数
   const inDegree = new Map<string, number>();
 
   issues.forEach((i) => {
@@ -64,7 +69,6 @@ function buildTree(
     inDegree.set(e.to_id, (inDegree.get(e.to_id) ?? 0) + 1);
   });
 
-  // 循環を防ぐ再帰ビルダー
   function buildNode(id: string, visited: Set<string>): TreeNode | null {
     if (visited.has(id)) return null;
     const issue = issueMap.get(id);
@@ -84,16 +88,11 @@ function buildTree(
     };
   }
 
-  // エッジが全くないノード = 孤立
   const hasAnyEdge = new Set<string>();
-  edges.forEach((e) => {
-    hasAnyEdge.add(e.from_id);
-    hasAnyEdge.add(e.to_id);
-  });
+  edges.forEach((e) => { hasAnyEdge.add(e.from_id); hasAnyEdge.add(e.to_id); });
 
   const orphans = issues.filter((i) => !hasAnyEdge.has(i.id));
 
-  // ルート = 入力エッジ 0 かつ何らかのエッジを持つ
   const rootIds = issues
     .filter((i) => hasAnyEdge.has(i.id) && (inDegree.get(i.id) ?? 0) === 0)
     .map((i) => i.id);
@@ -111,8 +110,8 @@ export default function MobileTreeView({
   priorityFilter,
   onNodeClick,
 }: MobileTreeViewProps) {
-  // 折りたたまれたノードの ID セット
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [selectedEdge, setSelectedEdge] = useState<EdgeContext | null>(null);
 
   const { roots, orphans } = useMemo(
     () => buildTree(issues, edges),
@@ -128,17 +127,22 @@ export default function MobileTreeView({
     });
   }
 
-  /** priorityFilter に応じて非強調表示かどうかを判定 */
   function isDimmed(issue: Issue): boolean {
     if (priorityFilter === 'critical') return issue.priority !== 'critical';
     if (priorityFilter === 'normal_up') return issue.priority === 'minor';
     return false;
   }
 
-  /** ツリーノードを再帰的にレンダリング */
-  function renderNodes(nodes: TreeNode[], depth: number): React.ReactNode {
+  /** ツリーノードを再帰的にレンダリング。parentIssue でエッジ検索を行う */
+  function renderNodes(nodes: TreeNode[], depth: number, parentIssue?: Issue): React.ReactNode {
     return nodes.map((node) => {
       const collapsed = collapsedIds.has(node.issue.id);
+
+      // 親→このノードへのエッジを検索
+      const incomingEdge = parentIssue
+        ? edges.find((e) => e.from_id === parentIssue.id && e.to_id === node.issue.id)
+        : undefined;
+
       return (
         <React.Fragment key={node.issue.id}>
           <MobileTreeNode
@@ -151,8 +155,16 @@ export default function MobileTreeView({
             hasOutgoing={node.hasOutgoing}
             onClick={() => onNodeClick(node.issue)}
             onToggleCollapse={() => toggleCollapse(node.issue.id)}
+            incomingEdge={incomingEdge}
+            onEdgeClick={
+              incomingEdge && parentIssue
+                ? () => setSelectedEdge({ edge: incomingEdge, parentIssue, childIssue: node.issue })
+                : undefined
+            }
           />
-          {!collapsed && node.children.length > 0 && renderNodes(node.children, depth + 1)}
+          {!collapsed && node.children.length > 0 &&
+            renderNodes(node.children, depth + 1, node.issue)
+          }
         </React.Fragment>
       );
     });
@@ -171,8 +183,8 @@ export default function MobileTreeView({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto pb-28">
-      {/* 凡例（色の説明） */}
+    <div className="h-full overflow-y-auto pb-28">
+      {/* 凡例 */}
       <div className="flex items-center gap-4 px-4 py-2 text-[10px] text-gray-500 border-b border-gray-100 bg-gray-50">
         <span className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-sm bg-red-100 border border-red-200 inline-block" />
@@ -216,6 +228,72 @@ export default function MobileTreeView({
                 onToggleCollapse={() => {}}
               />
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ─── エッジ詳細モーダル ─── */}
+      {selectedEdge && (
+        <div
+          className="fixed inset-0 z-[70] flex flex-col bg-black/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setSelectedEdge(null); }}
+        >
+          <div className="mt-auto bg-white rounded-t-2xl shadow-2xl">
+            {/* ヘッダー */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+              <h3 className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                {selectedEdge.edge.confirmed
+                  ? <><CheckCircle2 size={16} className="text-red-500" /> 確定した因果関係</>
+                  : <><AlertCircle  size={16} className="text-gray-400" /> 仮設因果関係</>
+                }
+              </h3>
+              <button
+                onClick={() => setSelectedEdge(null)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* 本体 */}
+            <div className="px-4 py-4 space-y-3">
+              {/* 原因ノード */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">原因</span>
+                <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm font-medium text-gray-800">
+                  {selectedEdge.parentIssue.title}
+                </div>
+              </div>
+
+              {/* 矢印 */}
+              <div className="flex items-center gap-2 px-2">
+                <div className="flex-1 h-px bg-gray-200" />
+                <div className="flex items-center gap-1.5">
+                  <ArrowRight size={16} className={selectedEdge.edge.confirmed ? 'text-red-400' : 'text-gray-400'} />
+                  <span className={`text-[9px] px-2 py-0.5 rounded-full font-semibold ${
+                    selectedEdge.edge.confirmed
+                      ? 'bg-red-100 text-red-600'
+                      : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {selectedEdge.edge.confirmed ? '確定因果' : '仮設因果'}
+                  </span>
+                </div>
+                <div className="flex-1 h-px bg-gray-200" />
+              </div>
+
+              {/* 結果ノード */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">結果</span>
+                <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm font-medium text-gray-800">
+                  {selectedEdge.childIssue.title}
+                </div>
+              </div>
+
+              {/* 登録日 */}
+              <div className="text-[10px] text-gray-400 text-center pb-safe pb-2">
+                登録日: {new Date(selectedEdge.edge.created_at).toLocaleDateString('ja-JP')}
+              </div>
+            </div>
           </div>
         </div>
       )}

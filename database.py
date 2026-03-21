@@ -610,6 +610,61 @@ def _run_migrations():
             template_id  TEXT
         )""",
         """CREATE INDEX IF NOT EXISTS idx_itq_project ON issue_triage_questions(project_name)""",
+        # タスク管理: task_categories テーブル
+        """CREATE TABLE IF NOT EXISTS task_categories (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       VARCHAR NOT NULL,
+            color      VARCHAR NOT NULL DEFAULT '#6366f1',
+            created_at TEXT NOT NULL
+        )""",
+        # タスク管理: tasks テーブル
+        """CREATE TABLE IF NOT EXISTS tasks (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            title              VARCHAR NOT NULL,
+            description        TEXT,
+            status             VARCHAR NOT NULL DEFAULT 'todo',
+            priority           VARCHAR NOT NULL DEFAULT 'medium',
+            category_id        INTEGER REFERENCES task_categories(id),
+            due_date           TEXT,
+            estimated_minutes  INTEGER,
+            actual_minutes     INTEGER,
+            created_at         TEXT NOT NULL,
+            updated_at         TEXT NOT NULL
+        )""",
+        # タスク管理: task_comments テーブル
+        """CREATE TABLE IF NOT EXISTS task_comments (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id    INTEGER NOT NULL REFERENCES tasks(id),
+            content    TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )""",
+        # タスク管理: task_reminders テーブル
+        """CREATE TABLE IF NOT EXISTS task_reminders (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id    INTEGER NOT NULL REFERENCES tasks(id),
+            remind_at  TEXT NOT NULL,
+            message    TEXT,
+            is_sent    INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )""",
+        # 会議文字起こし: meeting_sessions テーブル
+        """CREATE TABLE IF NOT EXISTS meeting_sessions (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_name VARCHAR,
+            title        VARCHAR NOT NULL,
+            participants TEXT,
+            summary      TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        )""",
+        # 会議文字起こし: meeting_chunks テーブル
+        """CREATE TABLE IF NOT EXISTS meeting_chunks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  INTEGER NOT NULL REFERENCES meeting_sessions(id),
+            chunk_index INTEGER NOT NULL DEFAULT 0,
+            transcript  TEXT NOT NULL,
+            created_at  TEXT NOT NULL
+        )""",
     ]
     with engine.connect() as conn:
         for sql in migrations:

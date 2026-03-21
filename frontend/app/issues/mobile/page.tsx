@@ -34,7 +34,7 @@ function MobileProjectListView({ onSelect }: { onSelect: (name: string) => void 
   }, []);
 
   return (
-    <div className="flex flex-col h-screen bg-white overflow-hidden">
+    <div className="flex flex-col h-[100dvh] bg-white overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white">
         <Link href="/" className="text-gray-400 hover:text-gray-700">
           <ArrowLeft size={18} />
@@ -161,7 +161,7 @@ function MobileTreeViewPage({
   }
 
   return (
-    <div className="flex flex-col h-screen bg-white overflow-hidden">
+    <div className="flex flex-col h-[100dvh] bg-white overflow-hidden">
       {/* ヘッダー */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white z-10">
         <button onClick={onBack} className="text-gray-400 hover:text-gray-700 flex-shrink-0">
@@ -205,7 +205,10 @@ function MobileTreeViewPage({
       </div>
 
       {/* 底部バー */}
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 p-1 bg-white/90 backdrop-blur border border-gray-200 rounded-2xl shadow-2xl">
+      <div
+        className="fixed left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 p-1 bg-white/90 backdrop-blur border border-gray-200 rounded-2xl shadow-2xl"
+        style={{ bottom: 'max(24px, env(safe-area-inset-bottom))' }}
+      >
         <button
           onClick={() => setPanel(panel === 'chat' ? 'none' : 'chat')}
           className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${

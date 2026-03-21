@@ -9,7 +9,8 @@ import IssueChatPanel from '@/components/issues/IssueChatPanel';
 import IssueCausalGraph from '@/components/issues/IssueCausalGraph';
 import IssueDetailDrawer from '@/components/issues/IssueDetailDrawer';
 import IssueMemoSearch from '@/components/issues/IssueMemoSearch';
-import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, Maximize2, X, Map, Smartphone, Search } from 'lucide-react';
+import MobileTreeView from '@/components/issues/MobileTreeView';
+import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, X, Map, Smartphone, Search } from 'lucide-react';
 import Link from 'next/link';
 
 // ────────────────────────────────────────────────
@@ -45,7 +46,7 @@ function ProjectListView({
   }
 
   return (
-    <div className="flex flex-col h-screen bg-white overflow-hidden">
+    <div className="flex flex-col h-[100dvh] bg-white overflow-hidden">
       {/* ヘッダー */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white">
         <Link href="/" className="text-gray-400 hover:text-gray-700">
@@ -185,7 +186,7 @@ function ProjectGraphView({
   }
 
   return (
-    <div className="flex flex-col h-screen bg-white overflow-hidden">
+    <div className="flex flex-col h-[100dvh] bg-white overflow-hidden">
       {/* ヘッダー */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white z-10">
         <button onClick={onBack} className="text-gray-400 hover:text-gray-700 flex-shrink-0">
@@ -244,16 +245,25 @@ function ProjectGraphView({
 
       {/* メモ検索タブ */}
       {activeTab === 'search' && (
-        <div className="flex-1 overflow-y-auto p-4 max-w-2xl mx-auto w-full">
+        <div className="flex-1 overflow-y-auto p-4 pb-28 md:pb-4 max-w-2xl mx-auto w-full">
           <IssueMemoSearch
             projectName={projectName}
-            onSelectIssue={(issueId) => {
+            onSelectIssue={async (issueId) => {
+              setActiveTab('graph');
               const found = issues.find((iss) => iss.id === issueId);
               if (found) {
                 setSelectedIssue(found);
+              } else {
+                try {
+                  const res = await authFetch(`/api/issues/${issueId}`);
+                  if (res.ok) {
+                    const issue: Issue = await res.json();
+                    setSelectedIssue(issue);
+                  }
+                } catch {
+                  // フェッチ失敗時はグラフタブへの切り替えのみ行う
+                }
               }
-              // グラフタブへ切り替えて詳細を表示
-              setActiveTab('graph');
             }}
           />
         </div>
@@ -272,7 +282,7 @@ function ProjectGraphView({
             />
           </div>
 
-          <div className="flex flex-1 overflow-hidden">
+          <div className="flex flex-1 overflow-hidden pb-20 md:pb-0">
             {/* 左パネル: チャット入力（デスクトップのみ） */}
             <div className="hidden md:flex w-72 flex-shrink-0 border-r border-gray-200 flex-col overflow-hidden">
               <IssueChatPanel
@@ -289,21 +299,36 @@ function ProjectGraphView({
                   <span className="text-sm text-gray-400">読み込み中…</span>
                 </div>
               )}
-              <IssueCausalGraph
-                issues={issues}
-                edges={edges}
-                priorityFilter={priorityFilter}
-                onNodeClick={setSelectedIssue}
-                onRefresh={fetchIssues}
-                fitViewTrigger={fitViewTrigger}
-              />
+              {/* モバイル: タッチ対応ツリービュー（ReactFlow非使用） */}
+              <div className="md:hidden absolute inset-0">
+                <MobileTreeView
+                  issues={issues}
+                  edges={edges}
+                  priorityFilter={priorityFilter}
+                  onNodeClick={setSelectedIssue}
+                />
+              </div>
+              {/* PC: ReactFlow グラフ */}
+              <div className="hidden md:block h-full">
+                <IssueCausalGraph
+                  issues={issues}
+                  edges={edges}
+                  priorityFilter={priorityFilter}
+                  onNodeClick={setSelectedIssue}
+                  onRefresh={fetchIssues}
+                  fitViewTrigger={fitViewTrigger}
+                />
+              </div>
             </div>
           </div>
         </>
       )}
 
       {/* モバイル専用底部バー */}
-      <div className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 p-1 bg-white/90 backdrop-blur border border-gray-200 rounded-2xl shadow-2xl">
+      <div
+        className="md:hidden fixed left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 p-1 bg-white/90 backdrop-blur border border-gray-200 rounded-2xl shadow-2xl"
+        style={{ bottom: 'max(24px, env(safe-area-inset-bottom))' }}
+      >
         <button
           onClick={() => setMobilePanel(mobilePanel === 'chat' ? 'none' : 'chat')}
           className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${
@@ -332,13 +357,13 @@ function ProjectGraphView({
           <span className="text-[9px] font-bold">フィルタ</span>
         </button>
         <div className="w-px h-8 bg-gray-200 mx-1" />
-        <button
-          onClick={() => setFitViewTrigger((v) => v + 1)}
+        <Link
+          href={`/issues/mobile?project=${encodeURIComponent(projectName)}`}
           className="flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all text-gray-500 hover:bg-gray-50"
         >
-          <Maximize2 size={20} />
-          <span className="text-[9px] font-bold">全体表示</span>
-        </button>
+          <Smartphone size={20} />
+          <span className="text-[9px] font-bold">ツリー表示</span>
+        </Link>
       </div>
 
       {/* モバイル ボトムシート */}

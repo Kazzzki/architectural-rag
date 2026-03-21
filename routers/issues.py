@@ -43,6 +43,17 @@ class CaptureRequest(BaseModel):
     skip_ai: bool = False
 
 
+class MemoChatMessage(BaseModel):
+    role: str   # "user" | "assistant"
+    content: str
+
+
+class MemoChatRequest(BaseModel):
+    query: str
+    messages: list[MemoChatMessage] = []
+    project_name: Optional[str] = None
+
+
 class TriageGenerateRequest(BaseModel):
     project_name: str
     template_id: str
@@ -468,6 +479,73 @@ def memo_search(
         raise HTTPException(status_code=500, detail=f"検索エラー: {str(e)}")
 
 
+@router.post("/api/issues/memo-chat")
+def memo_chat(req: MemoChatRequest):
+    """課題メモをコンテキストにGeminiで自然言語チャット応答を生成する。"""
+    from gemini_client import get_client
+    from google.genai import types
+    from config import GEMINI_MODEL_RAG
+
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="query が空です")
+
+    # 関連メモを検索（スコア0.3以上のみ採用）
+    try:
+        indexer = IssueMemoIndexer()
+        raw_results = indexer.search(req.query, project_name=req.project_name, top_k=6)
+        sources = [r for r in raw_results if r["score"] >= 0.3]
+    except Exception as e:
+        logger.error(f"[MemoChatSearch] search failed: {e}", exc_info=True)
+        sources = []
+
+    # コンテキスト文字列を構築
+    if sources:
+        context_lines = []
+        for i, s in enumerate(sources, 1):
+            context_lines.append(
+                f"[メモ{i}] タイトル: {s['title']} / カテゴリ: {s['category']} "
+                f"/ 優先度: {s['priority']} / ステータス: {s['status']}\n{s['snippet']}"
+            )
+        context_str = "\n\n".join(context_lines)
+    else:
+        context_str = "（関連するメモが見つかりませんでした）"
+
+    # 会話履歴を整形（直近6ターンまで）
+    history_lines = []
+    for msg in req.messages[-6:]:
+        role_label = "ユーザー" if msg.role == "user" else "アシスタント"
+        history_lines.append(f"{role_label}: {msg.content}")
+    history_str = "\n".join(history_lines) if history_lines else ""
+
+    prompt = f"""あなたは建設PM/CMの課題管理アシスタントです。
+以下の関連課題メモをもとに、ユーザーの質問に日本語で答えてください。
+メモに情報がない場合はその旨を正直に伝えてください。
+
+【関連課題メモ】
+{context_str}
+
+{"【これまでの会話】" + chr(10) + history_str + chr(10) if history_str else ""}【ユーザーの質問】
+{req.query}"""
+
+    try:
+        client = get_client()
+        config = types.GenerateContentConfig(
+            system_instruction="建設PM/CMの課題管理アシスタント。関連メモを参照しながら、簡潔かつ具体的に日本語で答えよ。",
+            temperature=0.3,
+        )
+        response = client.models.generate_content(
+            model=GEMINI_MODEL_RAG,
+            contents=prompt,
+            config=config,
+        )
+        answer = response.text.strip()
+    except Exception as e:
+        logger.error(f"[MemoChatLLM] generate failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"LLM応答エラー: {str(e)}")
+
+    return {"answer": answer, "sources": sources}
+
+
 @router.get("/api/issues/projects")
 def list_projects(db=Depends(get_db)):
     """登録済みプロジェクト名のユニーク一覧"""
@@ -808,6 +886,43 @@ def list_issues(
     projects = [r[0] for r in proj_rows]
 
     return {"issues": issues, "edges": edges, "projects": projects}
+
+
+@router.get("/api/issues/{issue_id}/analysis")
+def get_issue_analysis(issue_id: str, db=Depends(get_db)):
+    """課題のAI分析ステータスと因果候補を返す。
+    キャプチャは同期処理のため、課題が存在すれば常に done を返す。"""
+    row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    if row is None:
+        return {"ai_status": "pending", "issue": None, "causal_candidates": []}
+    issue = _issue_row_to_dict(row)
+    # 確定済みエッジから因果候補を構築（この課題が to_id のもの = 原因側候補）
+    edge_rows = db.execute(
+        text("SELECT * FROM issue_edges WHERE to_id = :id AND confirmed = 1"),
+        {"id": issue_id},
+    ).fetchall()
+    causal_candidates = []
+    for edge in edge_rows:
+        cause_row = db.execute(
+            text("SELECT * FROM issues WHERE id = :id"), {"id": edge[1]}
+        ).fetchone()
+        if cause_row:
+            causal_candidates.append({
+                "issue_id": edge[1],
+                "direction": "cause_of_new",
+                "confidence": 1.0,
+                "reason": "確定済みエッジ",
+            })
+    return {"ai_status": "done", "issue": issue, "causal_candidates": causal_candidates}
+
+
+@router.get("/api/issues/{issue_id}")
+def get_issue(issue_id: str, db=Depends(get_db)):
+    """課題を1件取得"""
+    row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    return _issue_row_to_dict(row)
 
 
 @router.patch("/api/issues/{issue_id}")

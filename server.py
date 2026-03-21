@@ -236,6 +236,10 @@ from routers import issues as issues_module
 app.include_router(issues_module.router)
 from routers import transcribe as transcribe_module
 app.include_router(transcribe_module.router)
+from routers import tasks as tasks_module
+app.include_router(tasks_module.router)
+from routers import meetings as meetings_module
+app.include_router(meetings_module.router)
 
 @app.get("/")
 async def root():
