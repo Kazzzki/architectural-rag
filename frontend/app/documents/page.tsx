@@ -123,7 +123,7 @@ function DocumentPreviewPanel({
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const blob = await res.blob();
         if (!revoked) {
-          const url = URL.createObjectURL(blob);
+          const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
           setPdfBlobUrl(url);
         }
       } catch (err) {
@@ -194,7 +194,7 @@ function DocumentPreviewPanel({
                 </div>
               ) : pdfBlobUrl ? (
                 <iframe
-                  src={pdfBlobUrl}
+                  src={`${pdfBlobUrl}#toolbar=1`}
                   className="w-full h-full border-0"
                   title={detail.filename}
                 />
