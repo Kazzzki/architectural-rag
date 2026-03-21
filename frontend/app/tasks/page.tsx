@@ -216,6 +216,13 @@ function TaskCard({
             {task.estimated_minutes}分
           </span>
         )}
+        {task.reminders?.some(
+          (r) => r.is_sent === 0 && r.remind_at.startsWith(new Date().toISOString().slice(0, 10))
+        ) && (
+          <span className="ml-auto flex items-center gap-0.5 text-xs text-gray-400">
+            <Bell className="w-3 h-3" />
+          </span>
+        )}
       </div>
     </div>
   );
@@ -698,6 +705,9 @@ function TaskDetailPanel({
                   <li key={r.id} className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">
                     <span className="font-medium">{r.remind_at.slice(0, 16).replace('T', ' ')}</span>
                     {r.message && <span className="ml-2 text-gray-400">— {r.message}</span>}
+                    {/^「.+」の期限日です$/.test(r.message ?? '') && (
+                      <span className="ml-2 text-xs text-gray-400 bg-gray-100 px-1 rounded">自動</span>
+                    )}
                     {r.is_sent ? <span className="ml-2 text-green-500">✓送信済み</span> : null}
                   </li>
                 ))}
