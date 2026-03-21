@@ -16,7 +16,7 @@ routers/tasks.py — タスク管理 API
 """
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -143,26 +143,57 @@ def task_chat(req: TaskChatRequest, db=Depends(get_db)) -> Dict[str, Any]:
     from gemini_client import get_client
 
     now = datetime.now(timezone.utc)
+    JST = timezone(timedelta(hours=9))
+    now_jst = now.astimezone(JST)
+    today_jst       = now_jst.strftime("%Y-%m-%d")
+    tomorrow_jst    = (now_jst + timedelta(days=1)).strftime("%Y-%m-%d")
+    day_after_jst   = (now_jst + timedelta(days=2)).strftime("%Y-%m-%d")
+    # 今週の日曜日（weekday: 月=0, 日=6）
+    days_to_sunday  = (6 - now_jst.weekday()) % 7 or 7
+    this_sunday_jst = (now_jst + timedelta(days=days_to_sunday)).strftime("%Y-%m-%d")
+    next_monday_jst = (now_jst + timedelta(days=(7 - now_jst.weekday()))).strftime("%Y-%m-%d")
 
     # カテゴリ一覧を取得してプロンプトに渡す
     cats = db.execute(text("SELECT id, name FROM task_categories")).fetchall()
     cats_list = [{"id": r[0], "name": r[1]} for r in cats]
 
-    prompt = f"""あなたはタスク管理アシスタントです。ユーザーの日本語テキストを解析して、タスク作成またはリマインダー設定のどちらかを判断し、JSONのみを返してください。
+    prompt = f"""あなたはタスク管理アシスタントです。ユーザーの日本語テキストを解析して、適切なアクションを判断し、JSONのみを返してください。
 
 ユーザーのテキスト: "{req.message}"
-現在日時 (ISO): {now.isoformat()}
+現在日時 (UTC ISO): {now.isoformat()}
+現在日付 (JST): {today_jst}
 利用可能なカテゴリ: {json.dumps(cats_list, ensure_ascii=False)}
+
+【相対日付の変換ルール】
+- 「今日」= {today_jst}
+- 「明日」= {tomorrow_jst}
+- 「明後日」= {day_after_jst}
+- 「今週中」「今週末」= {this_sunday_jst}
+- 「来週」= {next_monday_jst}
+- 時刻は JST で解釈し UTC に変換（例: 10:00 JST → 01:00 UTC = 前日T01:00:00+00:00）
+
+【優先度の判断ルール】
+- 「urgent」「緊急」「急ぎ」「至急」「重要」「ASAP」「早急」などがある場合 → priority="high"
+- 明示的な指定がない場合 → priority="medium"
+
+【アクション選択ルール】
+- タスク作成のみ → action="create_task"
+- リマインダー設定のみ（「〇時に教えて」「リマインドして」「通知して」など）→ action="set_reminder"
+- タスク作成＋リマインダー設定の両方の意図がある場合 → action="create_task_with_reminder"
+- 判断が難しい場合はタスク作成を選択してください
 
 以下のJSON形式のいずれかで返してください（他のテキストは一切不要）:
 
-タスク作成の場合:
+タスク作成:
 {{"action": "create_task", "title": "タスクタイトル", "description": "説明（省略可）", "priority": "low|medium|high", "category_id": null, "due_date": "YYYY-MM-DD または null", "estimated_minutes": null}}
 
-リマインダー設定の場合:
-{{"action": "create_reminder", "task_title": "タスクのタイトル", "remind_at": "YYYY-MM-DDTHH:MM:SS+00:00", "message": "リマインダーメッセージ"}}
+リマインダー設定:
+{{"action": "set_reminder", "task_title": "タスクのタイトル", "remind_at": "YYYY-MM-DDTHH:MM:SS+00:00", "message": "リマインダーメッセージ"}}
 
-判断が難しい場合はタスク作成を選択してください。JSONのみ返してください。"""
+タスク作成＋リマインダー設定:
+{{"action": "create_task_with_reminder", "title": "タスクタイトル", "description": "説明（省略可）", "priority": "low|medium|high", "category_id": null, "due_date": "YYYY-MM-DD または null", "estimated_minutes": null, "remind_at": "YYYY-MM-DDTHH:MM:SS+00:00", "message": "リマインダーメッセージ"}}
+
+JSONのみ返してください。"""
 
     try:
         client = get_client()
@@ -213,7 +244,7 @@ def task_chat(req: TaskChatRequest, db=Depends(get_db)) -> Dict[str, Any]:
         title = parsed.get("title", "")
         return {"action": "create_task", "task": _row_to_dict(task_row), "message": f"タスク「{title}」を作成しました"}
 
-    elif action == "create_reminder":
+    elif action in ("set_reminder", "create_reminder"):
         task_title = parsed.get("task_title", req.message[:50])
         # 既存タスクを曖昧検索
         task_row = db.execute(
@@ -249,7 +280,59 @@ def task_chat(req: TaskChatRequest, db=Depends(get_db)) -> Dict[str, Any]:
         )
         db.commit()
         remind_at = parsed.get("remind_at", "")
-        return {"action": "create_reminder", "message": f"リマインダーを設定しました: {remind_at}"}
+        return {"action": "set_reminder", "message": f"リマインダーを設定しました: {remind_at}"}
+
+    elif action == "create_task_with_reminder":
+        # タスク作成
+        result = db.execute(
+            text("""
+                INSERT INTO tasks (title, description, status, priority, category_id, due_date, estimated_minutes, created_at, updated_at)
+                VALUES (:title, :description, 'todo', :priority, :category_id, :due_date, :estimated_minutes, :created_at, :updated_at)
+            """),
+            {
+                "title": parsed.get("title", req.message[:50]),
+                "description": parsed.get("description"),
+                "priority": parsed.get("priority", "medium"),
+                "category_id": parsed.get("category_id"),
+                "due_date": parsed.get("due_date"),
+                "estimated_minutes": parsed.get("estimated_minutes"),
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            },
+        )
+        db.commit()
+        task_id = result.lastrowid
+
+        # リマインダー作成
+        db.execute(
+            text("""
+                INSERT INTO task_reminders (task_id, remind_at, message, is_sent, created_at)
+                VALUES (:task_id, :remind_at, :message, 0, :created_at)
+            """),
+            {
+                "task_id": task_id,
+                "remind_at": parsed.get("remind_at", now_iso),
+                "message": parsed.get("message", "リマインダー"),
+                "created_at": now_iso,
+            },
+        )
+        db.commit()
+
+        task_row = db.execute(
+            text("""
+                SELECT t.*, c.name AS category_name, c.color AS category_color
+                FROM tasks t LEFT JOIN task_categories c ON t.category_id = c.id
+                WHERE t.id = :id
+            """),
+            {"id": task_id},
+        ).fetchone()
+        title = parsed.get("title", "")
+        remind_at = parsed.get("remind_at", "")
+        return {
+            "action": "create_task_with_reminder",
+            "task": _row_to_dict(task_row),
+            "message": f"タスク「{title}」を作成し、リマインダーを設定しました: {remind_at}",
+        }
 
     else:
         raise HTTPException(status_code=400, detail="テキストを解析できませんでした")
@@ -357,10 +440,12 @@ def get_task(task_id: int, db=Depends(get_db)) -> Dict[str, Any]:
 @router.put("/api/tasks/{task_id}")
 def update_task(task_id: int, req: TaskUpdate, db=Depends(get_db)) -> Dict[str, Any]:
     existing = db.execute(
-        text("SELECT id FROM tasks WHERE id = :id"), {"id": task_id}
+        text("SELECT id, title, due_date FROM tasks WHERE id = :id"), {"id": task_id}
     ).fetchone()
     if not existing:
         raise HTTPException(status_code=404, detail="タスクが見つかりません")
+
+    due_date_changed = "due_date" in req.model_fields_set
 
     updates: Dict[str, Any] = {}
     if req.title is not None:
@@ -373,8 +458,8 @@ def update_task(task_id: int, req: TaskUpdate, db=Depends(get_db)) -> Dict[str, 
         updates["priority"] = req.priority
     if req.category_id is not None:
         updates["category_id"] = req.category_id
-    if req.due_date is not None:
-        updates["due_date"] = req.due_date
+    if due_date_changed:
+        updates["due_date"] = req.due_date or None
     if req.estimated_minutes is not None:
         updates["estimated_minutes"] = req.estimated_minutes
     if req.actual_minutes is not None:
@@ -386,6 +471,52 @@ def update_task(task_id: int, req: TaskUpdate, db=Depends(get_db)) -> Dict[str, 
         set_clause = ", ".join(f"{k} = :{k}" for k in updates if k != "id")
         db.execute(text(f"UPDATE tasks SET {set_clause} WHERE id = :id"), updates)
         db.commit()
+
+    # due_date 変更時のリマインダー自動管理
+    if due_date_changed:
+        now_iso = _now_iso()
+        new_due_date = req.due_date or None
+        task_title = updates.get("title") or existing._mapping["title"]
+
+        if new_due_date:
+            # 当日（00:00〜23:59）の未送信リマインダーが存在しない場合のみ自動生成
+            day_start = f"{new_due_date}T00:00:00"
+            day_end = f"{new_due_date}T23:59:59"
+            existing_reminder = db.execute(
+                text("""
+                    SELECT id FROM task_reminders
+                    WHERE task_id = :task_id AND is_sent = 0
+                      AND remind_at >= :day_start AND remind_at <= :day_end
+                """),
+                {"task_id": task_id, "day_start": day_start, "day_end": day_end},
+            ).fetchone()
+            if not existing_reminder:
+                # 09:00 JST = 00:00 UTC
+                remind_at_utc = f"{new_due_date}T00:00:00+00:00"
+                db.execute(
+                    text("""
+                        INSERT INTO task_reminders (task_id, remind_at, message, is_sent, created_at)
+                        VALUES (:task_id, :remind_at, :message, 0, :created_at)
+                    """),
+                    {
+                        "task_id": task_id,
+                        "remind_at": remind_at_utc,
+                        "message": f"「{task_title}」の期限日です",
+                        "created_at": now_iso,
+                    },
+                )
+                db.commit()
+        else:
+            # due_date 削除 → 自動生成リマインダー（未送信）を削除
+            db.execute(
+                text("""
+                    DELETE FROM task_reminders
+                    WHERE task_id = :task_id AND is_sent = 0
+                      AND message LIKE '「%」の期限日です'
+                """),
+                {"task_id": task_id},
+            )
+            db.commit()
 
     row = db.execute(
         text("""
