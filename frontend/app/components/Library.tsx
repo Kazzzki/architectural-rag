@@ -489,16 +489,6 @@ function MarkdownPreview({ filePath }: { filePath: string }) {
 
     if (loading) return <div className="h-full flex items-center justify-center text-slate-400"><RefreshCw className="animate-spin w-5 h-5" /></div>;
 
-    // ReactMarkdownを動的インポートしないとNext.jsでエラーになる場合があるが、
-    // ここでは単純にインポートしてみる。もしエラーならDynamic Importに切り替える。
-    // しかし今回は import ReactMarkdown from 'react-markdown' をファイルの先頭に追加する必要がある。
-    // このreplace_file_contentではファイルの途中しか書き換えていないので、import文が足りない可能性がある。
-
-    // 既存のコードには import ReactMarkdown はない。
-    // したがって、ファイルの先頭も書き換える必要がある。
-    // しかし tool は1回1チャンク。
-    // まずはコンポーネント定義だけ書き換え、次のステップで import を追加する。
-
     return (
         <div className="h-full overflow-y-auto bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm prose dark:prose-invert max-w-none text-sm">
             <ReactMarkdown>{content}</ReactMarkdown>

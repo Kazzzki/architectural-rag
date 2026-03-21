@@ -238,15 +238,21 @@ async def view_file(file_path: str):
             headers["Content-Disposition"] = f"inline; filename*=utf-8''{safe_name}"
         elif suffix == ".md":
             media_type = "text/markdown; charset=utf-8"
+            from urllib.parse import quote
+            safe_name = quote(target_path.name)
+            headers["Content-Disposition"] = f"inline; filename*=utf-8''{safe_name}"
         elif suffix == ".txt":
             media_type = "text/plain; charset=utf-8"
+            from urllib.parse import quote
+            safe_name = quote(target_path.name)
+            headers["Content-Disposition"] = f"inline; filename*=utf-8''{safe_name}"
         else:
             media_type = "application/octet-stream"
-            
+
         if headers:
             return FileResponse(target_path, media_type=media_type, headers=headers)
         else:
-            return FileResponse(target_path, filename=target_path.name)
+            return FileResponse(target_path, media_type=media_type, filename=target_path.name)
     except HTTPException:
         raise
     except Exception as e:
