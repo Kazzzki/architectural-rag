@@ -1685,7 +1685,6 @@ async def create_mindmap_from_markdown(
 ):
     """Markdownファイルからマインドマッププロジェクトを直接作成"""
     import uuid
-    import concurrent.futures
 
     filename = file.filename or "unknown.md"
     ext = Path(filename).suffix.lower()
