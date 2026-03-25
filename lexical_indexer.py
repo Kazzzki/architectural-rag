@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import logging
 import json
@@ -63,26 +64,41 @@ class LexicalIndexer:
             conn.execute("DELETE FROM v_chunks_fts WHERE version_id = ?", (version_id,))
             conn.commit()
 
+    def _sanitize_fts_query(self, query: str) -> str:
+        """FTS5 で問題となる特殊文字を除去する。
+        FTS5 は " ^ * - ( ) などを演算子として解釈するため、
+        そのままクエリに渡すと OperationalError になる。
+        """
+        sanitized = re.sub(r'["\'\-\*\^\(\)\\]', ' ', query)
+        return ' '.join(sanitized.split())
+
     def search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """全文検索を実行。"""
-        with sqlite3.connect(self.db_file) as conn:
-            conn.row_factory = sqlite3.Row
-            # FTS5のBM25スコアでソート
-            cursor = conn.execute("""
-                SELECT chunk_id, version_id, content, metadata_json, bm25(v_chunks_fts) as score
-                FROM v_chunks_fts
-                WHERE v_chunks_fts MATCH ?
-                ORDER BY score
-                LIMIT ?
-            """, (query, limit))
-            
-            results = []
-            for row in cursor:
-                results.append({
-                    "chunk_id": row["chunk_id"],
-                    "version_id": row["version_id"],
-                    "content": row["content"],
-                    "metadata": json.loads(row["metadata_json"]),
-                    "score": row["score"]
-                })
-            return results
+        """全文検索を実行。クエリサニタイズと例外ハンドリング付き。"""
+        sanitized = self._sanitize_fts_query(query)
+        if not sanitized:
+            return []
+        try:
+            with sqlite3.connect(self.db_file) as conn:
+                conn.row_factory = sqlite3.Row
+                # FTS5のBM25スコアでソート
+                cursor = conn.execute("""
+                    SELECT chunk_id, version_id, content, metadata_json, bm25(v_chunks_fts) as score
+                    FROM v_chunks_fts
+                    WHERE v_chunks_fts MATCH ?
+                    ORDER BY score
+                    LIMIT ?
+                """, (sanitized, limit))
+
+                results = []
+                for row in cursor:
+                    results.append({
+                        "chunk_id": row["chunk_id"],
+                        "version_id": row["version_id"],
+                        "content": row["content"],
+                        "metadata": json.loads(row["metadata_json"]),
+                        "score": row["score"]
+                    })
+                return results
+        except Exception as e:
+            logger.warning(f"[LexicalIndexer] FTS search failed for query '{query}': {e}")
+            return []
