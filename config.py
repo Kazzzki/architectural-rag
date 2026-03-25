@@ -71,8 +71,8 @@ CHUNK_SIZE = 1000  # 文字数
 CHUNK_OVERLAP = 200  # オーバーラップ文字数
 
 # 検索設定
-TOP_K_RESULTS = 8  # 検索で返すチャンク数
-RERANK_THRESHOLD: float = float(os.getenv("RERANK_THRESHOLD", "0.5"))
+TOP_K_RESULTS = 10  # 検索で返すチャンク数
+RERANK_THRESHOLD: float = float(os.getenv("RERANK_THRESHOLD", "0.35"))
 RERANK_CANDIDATE_COUNT: int = int(os.getenv("RERANK_CANDIDATE_COUNT", "15"))
 
 # Gemini API設定

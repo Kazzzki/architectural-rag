@@ -125,7 +125,7 @@ def build_a2_block(personal_contexts: list) -> str:
     return (
         "\n\n[参考: Layer A2 — 関連する過去の経験・判断基準（実経手履から取得）]\n"
         "以下は各質問に関連する過去の判断・学びです。回答の参考にしてください。\n"
-        f"{items}\n]"
+        f"{items}\n"
     )
 
 # フロントから受け取る会話履歴の1件あたりの最大文字数（長い回答を切り詰めてトークン節約）
@@ -246,37 +246,49 @@ def _build_rag_user_prompt(
     project_context: Dict[str, str],
     personal_contexts: List[Dict[str, Any]]
 ) -> str:
-    """RAG用ユーザープロンプトを構築する。注入順を統一 (#16)"""
+    """RAG用ユーザープロンプトを構築する。v4: 出典ルール冒頭配置・空セクション除去 (#16)"""
+    parts = []
+
+    # 出典ルール（最重要 → 冒頭に配置）
+    parts.append("""【回答ルール（厳守）】
+1. 回答は必ず知識ベースの情報に基づくこと。知識ベースに該当情報がない場合は「知識ベースには該当する情報がありませんでした」と明示した上で、一般知識で補足すること。
+2. 本文中で参照した箇所に [S番号:p.ページ番号] の形式でインラインタグを挿入すること（例: [S1:p.12]）。
+3. 回答末尾に「📎 関連資料」セクションを記載すること。
+4. 知識ベースの情報と一般知識を混在させない。区別して記載すること。""")
+
+    # Layer B: プロジェクトコンテキスト（空でなければ注入）
     context_sheet_block = build_layer_b_manual_block(context_sheet)
-    source_files_formatted = _format_sources(source_files)
+    if context_sheet_block:
+        parts.append(context_sheet_block)
+
+    core_view = project_context.get('core_view', '')
+    if core_view.strip():
+        parts.append(f"【プロジェクト文脈】\n{core_view}")
+
+    active_view = project_context.get('active_view', '')
+    if active_view.strip():
+        parts.append(f"【現在の論点】\n{active_view}")
+
+    # 知識ベースコンテキスト
+    if context.strip():
+        parts.append(f"【知識ベースから検索された情報】\n{context}")
+    else:
+        parts.append("【知識ベースから検索された情報】\n（該当する情報は見つかりませんでした）")
+
+    # 質問
+    parts.append(f"【質問】\n{question}")
+
+    # 参照ファイル一覧
+    if source_files:
+        source_files_formatted = _format_sources(source_files)
+        parts.append(f"【参照ファイル一覧（各ファイルにはS番号が振られている）】\n{source_files_formatted}")
+
+    # A2: 個人知見
     a2_block = build_a2_block(personal_contexts)
-    
-    if not context.strip():
-        context = "（知識ベースからの検索結果はありませんでした）"
+    if a2_block:
+        parts.append(a2_block)
 
-    return f"""以下の知識ベースの情報を参照して回答してください。
-
-{context_sheet_block}【Layer B: 現在のプロジェクト文脈（自動）】
-{project_context.get('core_view', '')}
-
-【Layer B: 現在の論点】
-{project_context.get('active_view', '')}
-
-【知識ベースから検索された情報】
-{context}
-
-【質問】
-{question}
-
-【参照ファイル一覧（各ファイルにはS番号が振られている）】
-{source_files_formatted}
-
-【出典の記載ルール】
-- 本文中で参照した箇所に [S番号:p.ページ番号] の形式でインラインタグを挿入すること
-- 例: 「防火区画の面積制限は1500㎡以内とされている [S1:p.12]」
-- 回答末尾に「📎 関連資料」セクションも引き続き記載すること
-
-{a2_block}"""
+    return "\n\n".join(parts)
 
 def _build_direct_user_prompt(
     question: str,

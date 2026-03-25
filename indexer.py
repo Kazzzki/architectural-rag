@@ -45,17 +45,17 @@ from utils.retry import sync_retry
 # ─── チャンクサイズ設定（doc_type 別） ──────────────────────────────────────────
 # 小チャンク（ChromaDB に登録する検索用チャンク）
 SMALL_CHUNK_SIZES: Dict[str, int] = {
-    "catalog":  150,
-    "drawing":  100,
-    "spec":     200,
-    "law":      200,
-    "_default": 200,
+    "catalog":  400,
+    "drawing":  300,
+    "spec":     500,
+    "law":      500,
+    "_default": 400,
 }
-CHUNK_OVERLAP: int = 30
+CHUNK_OVERLAP: int = 80
 
 # 親チャンク（LLM へ渡すコンテキスト用）
-PARENT_CHUNK_MIN: int = 500
-PARENT_CHUNK_MAX: int = 800
+PARENT_CHUNK_MIN: int = 800
+PARENT_CHUNK_MAX: int = 1500
 
 # (get_chroma_client was moved to dense_indexer.py)
 
