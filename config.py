@@ -71,13 +71,13 @@ ENABLE_AUTO_CATEGORIZE = os.environ.get("ENABLE_AUTO_CATEGORIZE", "true").lower(
 # 対応ファイル拡張子
 SUPPORTED_EXTENSIONS = ['.pdf', '.md', '.txt', '.docx']
 
-# チャンキング設定
+# チャンキング設定（レガシー互換用。実際の検索用チャンクサイズは indexer.py の SMALL_CHUNK_SIZES を参照）
 CHUNK_SIZE = 1000  # 文字数
 CHUNK_OVERLAP = 200  # オーバーラップ文字数
 
 # 検索設定
-TOP_K_RESULTS = 8  # 検索で返すチャンク数
-RERANK_THRESHOLD: float = float(os.getenv("RERANK_THRESHOLD", "0.5"))
+TOP_K_RESULTS = 10  # 検索で返すチャンク数
+RERANK_THRESHOLD: float = float(os.getenv("RERANK_THRESHOLD", "0.35"))
 RERANK_CANDIDATE_COUNT: int = int(os.getenv("RERANK_CANDIDATE_COUNT", "15"))
 
 # Gemini API設定

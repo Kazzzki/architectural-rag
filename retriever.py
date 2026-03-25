@@ -202,7 +202,7 @@ def _rerank_single(query: str, context: str) -> float:
     from config import GEMINI_MODEL_RAG
     response = client.models.generate_content(
         model=GEMINI_MODEL_RAG,
-        contents=[_RERANK_PROMPT.format(query=query, context=context[:500])],
+        contents=[_RERANK_PROMPT.format(query=query, context=context[:1000])],
         config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=8),
     )
     try:
@@ -212,7 +212,7 @@ def _rerank_single(query: str, context: str) -> float:
 
 
 def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = RERANK_THRESHOLD) -> List[Dict[str, Any]]:
-    """Gemini でリランクし、threshold 以上のもの上位5件を返す。
+    """Gemini でリランクし、threshold 以上のもの上位8件を返す。
     リランク評価は ThreadPoolExecutor で並列化（1序列ループ→約N倍高速化）。
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -236,13 +236,13 @@ def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = RERAN
                 scored.append(hit)
 
     scored.sort(key=lambda x: x["rerank_score"], reverse=True)
-    return scored[:5]
+    return scored[:8]
 
 
 # ─── 親チャンク取得 ─────────────────────────────────────────────────────────────
 def _resolve_parent_chunks(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    各チャンクの parent_chunk_id から親チャンク（500〜800文字）を取得し、
+    各チャンクの parent_chunk_id から親チャンク（800〜1500文字）を取得し、
     LLM 入力用コンテキストに置き換える。
     親チャンクが取得できない場合は元の小チャンクをそのまま使用。
     """
@@ -327,24 +327,38 @@ def search(
     elif len(where_conditions) > 1:
         where = {"$and": where_conditions}
 
-    # ─── Step 2: 並列検索 ────────────────────────────────────────────────────
+    # ─── Step 2: 並列検索（ThreadPoolExecutor で高速化） ─────────────────────
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     all_hits_lists = []
 
-    # 拡張クエリで検索
-    if use_query_expansion:
-        for eq in expanded_queries:
-            hits = _search_single(eq, collection, n=n_results, where=where)
-            all_hits_lists.append(hits)
-    else:
-        all_hits_lists.append(_search_single(query, collection, n=n_results, where=where))
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = []
 
-    # HyDE 検索
-    if use_hyde and hypo_doc:
-        all_hits_lists.append(_search_single(hypo_doc, collection, n=n_results, where=where))
+        # 拡張クエリで検索
+        if use_query_expansion:
+            for eq in expanded_queries:
+                futures.append(executor.submit(_search_single, eq, collection, n_results, where))
+        else:
+            futures.append(executor.submit(_search_single, query, collection, n_results, where))
 
-    # ─── Step 2.5: Full-Text Search (Lexical) ────────────────────────────────
-    if use_lexical:
-        all_hits_lists.append(_search_lexical(query, n=n_results))
+        # HyDE 検索
+        if use_hyde and hypo_doc:
+            futures.append(executor.submit(_search_single, hypo_doc, collection, n_results, where))
+
+        # Full-Text Search (Lexical)
+        if use_lexical:
+            futures.append(executor.submit(_search_lexical, query, n_results))
+
+        failed_count = 0
+        for future in as_completed(futures):
+            try:
+                all_hits_lists.append(future.result())
+            except Exception as e:
+                failed_count += 1
+                logger.warning(f"Parallel search task failed: {e}")
+
+        if failed_count > 0 and not all_hits_lists:
+            logger.error(f"All {failed_count} search tasks failed — returning empty results")
 
     # ─── Step 3: マージ ─────────────────────────────────────────────────────
     merged_hits = _merge_hits(all_hits_lists, top_k=RERANK_CANDIDATE_COUNT)
@@ -381,11 +395,28 @@ def search(
     }
 
 
+# ─── 重複判定ヘルパー ──────────────────────────────────────────────────────────
+def _is_similar(text_a: str, text_b: str, threshold: float = 0.8) -> bool:
+    """先頭N文字の一致率で簡易重複判定（親チャンク800-1500文字に対応）"""
+    if not text_a or not text_b:
+        return False
+    text_a_s = text_a.strip()
+    text_b_s = text_b.strip()
+    if not text_a_s or not text_b_s:
+        return False
+    compare_len = min(len(text_a_s), len(text_b_s), 500)
+    if compare_len == 0:
+        return False
+    a, b = text_a_s[:compare_len], text_b_s[:compare_len]
+    matches = sum(1 for ca, cb in zip(a, b) if ca == cb)
+    return (matches / compare_len) >= threshold
+
+
 # ─── コンテキスト構築 ──────────────────────────────────────────────────────────
 def build_context(search_results: Dict[str, Any]) -> str:
     """
     検索結果からコンテキスト文字列を構築。
-    v3 では context_text（親チャンク）を使用し、出典に source_pdf_name + page_no を明記。
+    v4: ドキュメント単位でグルーピング、ページ順ソート、重複除去。
     """
     hits = search_results.get("hits", [])
 
@@ -405,23 +436,57 @@ def build_context(search_results: Dict[str, Any]) -> str:
             context_parts.append(f"=== 出典: {source}{page_info}（{cat}）===\n{doc}")
         return "\n\n".join(context_parts)
 
-    context_parts = []
+    # 1. ドキュメント単位でグルーピング
+    doc_groups: Dict[str, List[Dict[str, Any]]] = {}
     for hit in hits:
         meta = hit.get("metadata") or {}
-        text = hit.get("context_text") or hit.get("document", "")
+        source_key = meta.get("rel_path") or meta.get("filename", "不明")
+        doc_groups.setdefault(source_key, []).append(hit)
 
-        source_name = meta.get("source_pdf_name") or meta.get("filename", "不明")
-        page_no     = meta.get("page_no") or meta.get("page_number", "")
-        doc_type    = meta.get("doc_type", "")
-        category    = meta.get("category", "")
+    # ページ番号ソート用キー関数（ループ外に定義）
+    def _page_sort_key(h):
+        m = h.get("metadata") or {}
+        p = m.get("page_no") or m.get("page_number") or 0
+        try:
+            return int(p)
+        except (ValueError, TypeError):
+            return 0
 
-        page_info = f" (p.{page_no})" if page_no else ""
-        icon = "📐 " if doc_type == "drawing" else ""
+    # 2. 各グループ内でページ順ソート + 重複除去 + 結合
+    context_parts = []
+    for source_key, group_hits in doc_groups.items():
+        group_hits.sort(key=_page_sort_key)
 
-        context_parts.append(
-            f"=== {icon}出典: {source_name}{page_info}（{category}）===\n{text}"
+        # 重複除去
+        seen_texts: List[str] = []
+        unique_hits: List[Dict[str, Any]] = []
+        for hit in group_hits:
+            text = hit.get("context_text") or hit.get("document", "")
+            if not any(_is_similar(text, s) for s in seen_texts):
+                seen_texts.append(text)
+                unique_hits.append(hit)
 
-        )
+        if not unique_hits:
+            continue
+
+        # ヘッダー
+        meta0 = unique_hits[0].get("metadata") or {}
+        source_name = meta0.get("source_pdf_name") or meta0.get("filename", "不明")
+        doc_type = meta0.get("doc_type", "")
+        category = meta0.get("category", "")
+
+        header = f"━━━ 出典: {source_name}（{category}/{doc_type}）━━━"
+
+        # 各チャンクをページ単位で結合
+        chunk_texts = []
+        for hit in unique_hits:
+            m = hit.get("metadata") or {}
+            page = m.get("page_no") or m.get("page_number", "")
+            text = hit.get("context_text") or hit.get("document", "")
+            page_label = f"[p.{page}]" if page else ""
+            chunk_texts.append(f"{page_label} {text}")
+
+        context_parts.append(f"{header}\n" + "\n---\n".join(chunk_texts))
 
     return "\n\n".join(context_parts)
 

@@ -22,7 +22,7 @@ class ChunkBuilder:
     - Section Chunk: Markdownの見出し(#, ##)で区切られた論理セクション。
     - Leaf Chunk: 検索精度のための最小単位（日本語向け 500 文字程度）。
     """
-    def __init__(self, leaf_size: int = 500, leaf_overlap: int = 100):
+    def __init__(self, leaf_size: int = 600, leaf_overlap: int = 120):
         # 日本語向け推奨: 500〜800文字, overlap 100〜150文字
         self.leaf_size = leaf_size
         self.leaf_overlap = leaf_overlap

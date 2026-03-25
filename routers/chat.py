@@ -325,8 +325,8 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
         if request.use_rag or request.use_web_search:
             # --- RAGあり または ウェブ検索あり ---
             if request.use_rag:
-                # ストリームではデフォルト quick_mode=True（リランク・拡張スキップでTTFB激減）
-                effective_quick = request.quick_mode if request.quick_mode is not None else True
+                # ストリームでもデフォルト quick_mode=False（精度優先: クエリ展開・HyDE・リランク実行）
+                effective_quick = request.quick_mode if request.quick_mode is not None else False
                 use_advanced = not effective_quick
                 search_results = search(
                     request.question,
