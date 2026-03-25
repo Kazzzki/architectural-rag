@@ -74,6 +74,7 @@ interface Task {
   updated_at: string;
   comments?: Comment[];
   reminders?: Reminder[];
+  has_today_reminder?: number; // 0 or 1
 }
 
 interface ChatMessage {
@@ -129,11 +130,11 @@ const api = {
 
 // ===== ユーティリティ =====
 
-const PRIORITY_LABEL: Record<string, string> = { high: '高', medium: '中', low: '低' };
+const PRIORITY_LABEL: Record<string, string> = { high: 'H', medium: 'M', low: 'L' };
 const PRIORITY_COLOR: Record<string, string> = {
-  high: 'bg-red-100 text-red-700 border-red-200',
-  medium: 'bg-amber-100 text-amber-700 border-amber-200',
-  low: 'bg-green-100 text-green-700 border-green-200',
+  high:   'bg-gray-100 text-gray-600 border-gray-200',
+  medium: 'bg-gray-100 text-gray-600 border-gray-200',
+  low:    'bg-gray-100 text-gray-600 border-gray-200',
 };
 const STATUS_LABEL: Record<string, string> = {
   todo: 'ToDo',
@@ -141,9 +142,9 @@ const STATUS_LABEL: Record<string, string> = {
   done: '完了',
 };
 const STATUS_HEADER_COLOR: Record<string, string> = {
-  todo: 'bg-gray-200 text-gray-700',
-  in_progress: 'bg-blue-100 text-blue-700',
-  done: 'bg-green-100 text-green-700',
+  todo:        'bg-gray-100 text-gray-700',
+  in_progress: 'bg-gray-100 text-gray-700',
+  done:        'bg-gray-100 text-gray-700',
 };
 
 function formatDate(iso?: string) {
@@ -177,14 +178,14 @@ function TaskCard({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`bg-white rounded-xl p-3 border border-gray-200 cursor-pointer
-        hover:shadow-md hover:border-blue-200 transition-all select-none
-        ${isDragging && !overlay ? 'opacity-30 shadow-none' : 'shadow-sm'}
-        ${overlay ? 'shadow-xl rotate-1 border-blue-300' : ''}
+      className={`bg-white rounded-md px-4 py-3 border border-gray-100 cursor-pointer
+        hover:border-gray-300 transition-colors select-none
+        ${isDragging && !overlay ? 'opacity-30' : ''}
+        ${overlay ? 'shadow-lg rotate-1 border-gray-300' : ''}
       `}
     >
       <div className="flex items-start gap-2 mb-2">
-        <span className="flex-1 text-sm font-medium text-gray-800 leading-snug line-clamp-2">
+        <span className={`flex-1 text-sm font-medium leading-snug line-clamp-2 ${task.status === 'done' ? 'line-through text-gray-400' : 'text-gray-900'}`}>
           {task.title}
         </span>
         <span
@@ -196,24 +197,27 @@ function TaskCard({
 
       <div className="flex flex-wrap gap-2 items-center text-xs text-gray-400">
         {task.category_name && (
-          <span className="flex items-center gap-1">
-            <span
-              className="w-2 h-2 rounded-full flex-shrink-0"
-              style={{ backgroundColor: task.category_color ?? '#6366f1' }}
-            />
-            {task.category_name}
-          </span>
+          <span>{task.category_name}</span>
         )}
-        {task.due_date && (
-          <span className="flex items-center gap-0.5">
-            <Calendar className="w-3 h-3" />
-            {formatDate(task.due_date)}
-          </span>
-        )}
+        {task.due_date && (() => {
+          const isOverdue = task.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10) && task.status !== 'done';
+          return (
+            <span className={`flex items-center gap-0.5 ${isOverdue ? 'text-gray-900 font-semibold' : ''}`}>
+              <Calendar className="w-3 h-3" />
+              {isOverdue && <span>!</span>}
+              {formatDate(task.due_date)}
+            </span>
+          );
+        })()}
         {task.estimated_minutes != null && (
           <span className="flex items-center gap-0.5">
             <Clock className="w-3 h-3" />
             {task.estimated_minutes}分
+          </span>
+        )}
+        {task.has_today_reminder === 1 && (
+          <span title="本日リマインダーあり">
+            <Bell className="w-3 h-3 text-gray-400" />
           </span>
         )}
       </div>
@@ -238,14 +242,14 @@ function KanbanColumn({
   return (
     <div
       ref={setNodeRef}
-      className={`flex-1 min-w-0 md:min-w-[240px] flex flex-col rounded-2xl transition-colors
-        ${isOver ? 'bg-blue-50 ring-2 ring-blue-200' : 'bg-gray-100'}
+      className={`flex-1 min-w-0 md:min-w-[240px] flex flex-col rounded-md transition-colors
+        ${isOver ? 'bg-gray-100 ring-1 ring-gray-200' : 'bg-gray-50'}
       `}
     >
       {/* ヘッダー */}
-      <div className={`px-4 py-3 rounded-t-2xl flex items-center gap-2 ${STATUS_HEADER_COLOR[status]}`}>
+      <div className={`px-4 py-3 rounded-t-md flex items-center gap-2 ${STATUS_HEADER_COLOR[status]}`}>
         <span className="font-semibold text-sm">{STATUS_LABEL[status]}</span>
-        <span className="ml-auto bg-white/60 text-xs px-2 py-0.5 rounded-full font-medium">
+        <span className="ml-auto bg-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full font-medium">
           {tasks.length}
         </span>
       </div>
@@ -306,9 +310,9 @@ function CreateTaskModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+      <div className="bg-white rounded-md shadow-lg w-full max-w-md">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-800">新しいタスク</h2>
+          <h2 className="text-lg font-semibold text-gray-900">新しいタスク</h2>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500">
             <X className="w-5 h-5" />
           </button>
@@ -322,7 +326,7 @@ function CreateTaskModal({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="タスクのタイトルを入力..."
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent"
               autoFocus
             />
           </div>
@@ -334,7 +338,7 @@ function CreateTaskModal({
               onChange={(e) => setDescription(e.target.value)}
               placeholder="詳細説明（任意）"
               rows={3}
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+              className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent resize-none"
             />
           </div>
 
@@ -344,7 +348,7 @@ function CreateTaskModal({
               <select
                 value={status}
                 onChange={(e) => setStatus(e.target.value as Task['status'])}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 bg-white"
               >
                 <option value="todo">ToDo</option>
                 <option value="in_progress">進行中</option>
@@ -356,7 +360,7 @@ function CreateTaskModal({
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value as Task['priority'])}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 bg-white"
               >
                 <option value="high">高</option>
                 <option value="medium">中</option>
@@ -371,7 +375,7 @@ function CreateTaskModal({
               <select
                 value={categoryId}
                 onChange={(e) => setCategoryId(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 bg-white"
               >
                 <option value="">なし</option>
                 {categories.map((c) => (
@@ -387,7 +391,7 @@ function CreateTaskModal({
                 type="date"
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
               />
             </div>
           </div>
@@ -402,7 +406,7 @@ function CreateTaskModal({
               onChange={(e) => setEstimated(e.target.value)}
               placeholder="例: 60"
               min="1"
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
             />
           </div>
 
@@ -417,7 +421,7 @@ function CreateTaskModal({
             <button
               type="submit"
               disabled={!title.trim() || loading}
-              className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="flex-1 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading ? '作成中...' : '作成'}
             </button>
@@ -500,7 +504,7 @@ function TaskDetailPanel({
         status: editStatus,
         priority: editPriority,
         category_id: editCategory ? parseInt(editCategory) : undefined,
-        due_date: editDueDate || undefined,
+        due_date: editDueDate || null,
         estimated_minutes: editEstimated ? parseInt(editEstimated) : undefined,
         actual_minutes: editActual ? parseInt(editActual) : undefined,
       });
@@ -551,7 +555,7 @@ function TaskDetailPanel({
         <div className="flex gap-2">
           <button
             onClick={handleDelete}
-            className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+            className="p-1.5 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
             title="削除"
           >
             <Trash2 className="w-4 h-4" />
@@ -582,7 +586,7 @@ function TaskDetailPanel({
               type="text"
               value={editTitle}
               onChange={(e) => setEditTitle(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent"
             />
           </div>
 
@@ -593,7 +597,7 @@ function TaskDetailPanel({
               value={editDesc}
               onChange={(e) => setEditDesc(e.target.value)}
               rows={3}
-              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-none"
             />
           </div>
 
@@ -604,7 +608,7 @@ function TaskDetailPanel({
               <select
                 value={editStatus}
                 onChange={(e) => setEditStatus(e.target.value as Task['status'])}
-                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gray-400"
               >
                 <option value="todo">ToDo</option>
                 <option value="in_progress">進行中</option>
@@ -616,7 +620,7 @@ function TaskDetailPanel({
               <select
                 value={editPriority}
                 onChange={(e) => setEditPriority(e.target.value as Task['priority'])}
-                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gray-400"
               >
                 <option value="high">高</option>
                 <option value="medium">中</option>
@@ -632,7 +636,7 @@ function TaskDetailPanel({
               <select
                 value={editCategory}
                 onChange={(e) => setEditCategory(e.target.value)}
-                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gray-400"
               >
                 <option value="">なし</option>
                 {categories.map((c) => (
@@ -648,7 +652,7 @@ function TaskDetailPanel({
                 type="date"
                 value={editDueDate}
                 onChange={(e) => setEditDueDate(e.target.value)}
-                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
               />
             </div>
           </div>
@@ -662,7 +666,7 @@ function TaskDetailPanel({
                 value={editEstimated}
                 onChange={(e) => setEditEstimated(e.target.value)}
                 min="1"
-                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
               />
             </div>
             <div>
@@ -672,7 +676,7 @@ function TaskDetailPanel({
                 value={editActual}
                 onChange={(e) => setEditActual(e.target.value)}
                 min="1"
-                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
               />
             </div>
           </div>
@@ -681,7 +685,7 @@ function TaskDetailPanel({
           <button
             onClick={handleSave}
             disabled={saving}
-            className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="w-full py-2 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700 disabled:opacity-50 transition-colors"
           >
             {saving ? '保存中...' : '変更を保存'}
           </button>
@@ -694,13 +698,21 @@ function TaskDetailPanel({
             </div>
             {(task.reminders ?? []).length > 0 ? (
               <ul className="space-y-1 mb-3">
-                {task.reminders!.map((r) => (
-                  <li key={r.id} className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">
-                    <span className="font-medium">{r.remind_at.slice(0, 16).replace('T', ' ')}</span>
-                    {r.message && <span className="ml-2 text-gray-400">— {r.message}</span>}
-                    {r.is_sent ? <span className="ml-2 text-green-500">✓送信済み</span> : null}
-                  </li>
-                ))}
+                {task.reminders!.map((r) => {
+                  const isAuto = r.message?.endsWith('の期限日です') ?? false;
+                  return (
+                    <li key={r.id} className="text-xs text-gray-600 bg-gray-50 rounded-md px-3 py-2">
+                      {isAuto && (
+                        <span className="mr-1.5 text-gray-400 border border-gray-200 rounded px-1 py-0.5 text-[10px]">
+                          自動
+                        </span>
+                      )}
+                      <span className="font-medium">{r.remind_at.slice(0, 16).replace('T', ' ')}</span>
+                      {r.message && <span className="ml-2 text-gray-400">— {r.message}</span>}
+                      {r.is_sent ? <span className="ml-2 text-gray-400">✓送信済み</span> : null}
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <p className="text-xs text-gray-400 mb-2">リマインダーなし</p>
@@ -710,19 +722,19 @@ function TaskDetailPanel({
                 type="datetime-local"
                 value={newReminderAt}
                 onChange={(e) => setNewReminderAt(e.target.value)}
-                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
               />
               <input
                 type="text"
                 value={newReminderMsg}
                 onChange={(e) => setNewReminderMsg(e.target.value)}
                 placeholder="メッセージ（任意）"
-                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
               />
               <button
                 onClick={handleAddReminder}
                 disabled={!newReminderAt || addingReminder}
-                className="w-full py-1.5 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                className="w-full py-1.5 rounded-md bg-gray-900 text-white text-xs font-medium hover:bg-gray-700 disabled:opacity-50 transition-colors"
               >
                 {addingReminder ? '設定中...' : 'リマインダーを追加'}
               </button>
@@ -753,7 +765,7 @@ function TaskDetailPanel({
                 onChange={(e) => setNewComment(e.target.value)}
                 placeholder="コメントを追加..."
                 rows={2}
-                className="flex-1 px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                className="flex-1 px-2 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-none"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleAddComment();
                 }}
@@ -761,7 +773,7 @@ function TaskDetailPanel({
               <button
                 onClick={handleAddComment}
                 disabled={!newComment.trim() || addingComment}
-                className="px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                className="px-3 py-1.5 rounded-md bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50 transition-colors"
               >
                 <Send className="w-4 h-4" />
               </button>
@@ -948,26 +960,26 @@ export default function TasksPage() {
       <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex-shrink-0">
         <div className="max-w-7xl mx-auto flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
           <div className="flex items-center gap-2">
-            <CheckSquare className="w-5 h-5 text-blue-600" />
+            <CheckSquare className="w-5 h-5 text-gray-900" />
             <h1 className="text-lg font-bold text-gray-900">タスク管理</h1>
           </div>
 
           {/* サマリー */}
-          <div className="flex flex-wrap gap-3 text-sm text-gray-600">
-            <div className="flex items-center gap-1 bg-blue-50 text-blue-700 px-3 py-1 rounded-full">
+          <div className="flex flex-wrap gap-4 text-xs text-gray-500">
+            <span className="flex items-center gap-1">
               <Calendar className="w-3.5 h-3.5" />
-              今日: {todayTasks.length}件
-              {todayEstimated > 0 && <span className="ml-1">({todayEstimated}分)</span>}
-            </div>
-            <div className="flex items-center gap-1 bg-green-50 text-green-700 px-3 py-1 rounded-full">
+              今日 {todayTasks.length}件
+              {todayEstimated > 0 && <span className="ml-0.5">({todayEstimated}分)</span>}
+            </span>
+            <span className="flex items-center gap-1">
               <CheckSquare className="w-3.5 h-3.5" />
-              完了: {doneTasks}/{tasks.length}
-            </div>
+              完了 {doneTasks}/{tasks.length}
+            </span>
             {totalEstimated > 0 && (
-              <div className="flex items-center gap-1 bg-gray-100 text-gray-600 px-3 py-1 rounded-full">
+              <span className="flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5" />
-                合計: {Math.floor(totalEstimated / 60)}h{totalEstimated % 60}m
-              </div>
+                合計 {Math.floor(totalEstimated / 60)}h{totalEstimated % 60}m
+              </span>
             )}
           </div>
 
@@ -976,7 +988,7 @@ export default function TasksPage() {
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gray-400"
             >
               <option value="">全カテゴリ</option>
               {categories.map((c) => (
@@ -988,7 +1000,7 @@ export default function TasksPage() {
             <select
               value={filterPriority}
               onChange={(e) => setFilterPriority(e.target.value)}
-              className="px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gray-400"
             >
               <option value="">全優先度</option>
               <option value="high">高</option>
@@ -997,7 +1009,7 @@ export default function TasksPage() {
             </select>
             <button
               onClick={() => setShowCreateModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700 transition-colors"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">タスク追加</span>
@@ -1016,8 +1028,8 @@ export default function TasksPage() {
             </div>
           ) : error ? (
             <div className="flex flex-col justify-center items-center h-64 gap-3">
-              <p className="text-red-500 text-sm">{error}</p>
-              <button onClick={() => { setError(null); setLoading(true); }} className="text-xs text-blue-500 underline">再試行</button>
+              <p className="text-gray-700 text-sm">{error}</p>
+              <button onClick={() => { setError(null); setLoading(true); }} className="text-xs text-gray-500 underline">再試行</button>
             </div>
           ) : (
             <DndContext
@@ -1071,13 +1083,12 @@ export default function TasksPage() {
               {chatMessages.slice(-4).map((m, i) => (
                 <div
                   key={i}
-                  className={`text-xs px-3 py-1.5 rounded-lg ${
+                  className={`text-xs py-1 pl-3 ${
                     m.role === 'user'
-                      ? 'bg-blue-50 text-blue-800 text-right'
-                      : 'bg-gray-100 text-gray-700 flex items-start gap-1.5'
+                      ? 'border-l-2 border-gray-300 text-gray-900'
+                      : 'border-l-2 border-gray-100 text-gray-500'
                   }`}
                 >
-                  {m.role === 'ai' && <Bot className="w-3 h-3 mt-0.5 flex-shrink-0 text-gray-400" />}
                   {m.content}
                 </div>
               ))}
@@ -1085,7 +1096,7 @@ export default function TasksPage() {
           )}
 
           <div className="flex gap-2 items-center">
-            <Bot className="w-5 h-5 text-blue-500 flex-shrink-0" />
+            <Bot className="w-5 h-5 text-gray-400 flex-shrink-0" />
             <input
               type="text"
               value={chatInput}
@@ -1097,13 +1108,13 @@ export default function TasksPage() {
                 }
               }}
               placeholder="「明日の会議をリマインドして」「設計レビューのタスクを追加して（高優先度）」"
-              className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50"
+              className="flex-1 px-3 py-2 rounded-md border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 bg-white"
               disabled={chatLoading}
             />
             <button
               onClick={handleChatSubmit}
               disabled={!chatInput.trim() || chatLoading}
-              className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+              className="px-4 py-2 bg-gray-900 text-white rounded-md hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             >
               {chatLoading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
