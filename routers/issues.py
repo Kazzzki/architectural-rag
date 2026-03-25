@@ -178,7 +178,7 @@ def _save_issue_markdown(issue_id: str, db) -> None:
 
     issue = _issue_row_to_dict(row)
     edge_rows = db.execute(
-        text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges WHERE from_id = :id OR to_id = :id"),
+        text(f"SELECT * FROM issue_edges WHERE from_id = :id OR to_id = :id"),
         {"id": issue_id},
     ).fetchall()
 
@@ -204,8 +204,8 @@ ISSUE_SELECT_COLS = (
 )
 ISSUE_KEYS = [c.strip() for c in ISSUE_SELECT_COLS.split(",")]
 
-EDGE_SELECT_COLS = "id, from_id, to_id, confirmed, created_at, label, relation_type"
-EDGE_KEYS = [c.strip() for c in EDGE_SELECT_COLS.split(",")]
+EDGE_BASE_KEYS = ["id", "from_id", "to_id", "confirmed", "created_at"]
+EDGE_EXT_KEYS = ["id", "from_id", "to_id", "confirmed", "created_at", "label", "relation_type"]
 
 
 def _issue_row_to_dict(row) -> dict:
@@ -214,8 +214,13 @@ def _issue_row_to_dict(row) -> dict:
 
 
 def _edge_row_to_dict(row) -> dict:
-    """明示的カラム名ベースの変換。SELECT * ではなく EDGE_SELECT_COLS を使うこと。"""
-    return dict(zip(EDGE_KEYS[:len(row)], row))
+    """エッジ行を辞書に変換。カラム数で旧スキーマ(5列)/新スキーマ(7列)を自動判別。"""
+    keys = EDGE_EXT_KEYS if len(row) >= 7 else EDGE_BASE_KEYS
+    d = dict(zip(keys[:len(row)], row))
+    # 旧スキーマの場合、新フィールドにデフォルト値を設定
+    d.setdefault("label", None)
+    d.setdefault("relation_type", "direct_cause")
+    return d
 
 
 def _call_gemini_capture(raw_input: str, existing_issues: list) -> dict:
@@ -889,9 +894,9 @@ def list_issues(
     issue_ids = {iss["id"] for iss in issues}
     if issue_ids:
         edge_rows = db.execute(
-            text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges WHERE from_id IN (SELECT id FROM issues WHERE project_name = :pn) OR to_id IN (SELECT id FROM issues WHERE project_name = :pn)"),
+            text(f"SELECT * FROM issue_edges WHERE from_id IN (SELECT id FROM issues WHERE project_name = :pn) OR to_id IN (SELECT id FROM issues WHERE project_name = :pn)"),
             {"pn": project_name or ""},
-        ).fetchall() if project_name else db.execute(text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges")).fetchall()
+        ).fetchall() if project_name else db.execute(text(f"SELECT * FROM issue_edges")).fetchall()
         edges = [
             _edge_row_to_dict(r)
             for r in edge_rows
@@ -918,7 +923,7 @@ def get_issue_analysis(issue_id: str, db=Depends(get_db)):
     issue = _issue_row_to_dict(row)
     # 確定済みエッジから因果候補を構築（この課題が to_id のもの = 原因側候補）
     edge_rows = db.execute(
-        text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges WHERE to_id = :id AND confirmed = 1"),
+        text(f"SELECT * FROM issue_edges WHERE to_id = :id AND confirmed = 1"),
         {"id": issue_id},
     ).fetchall()
     causal_candidates = []
@@ -1414,7 +1419,7 @@ def health_check(project_name: str, db=Depends(get_db)):
     issues = [_issue_row_to_dict(r) for r in issue_rows]
     issue_ids = {iss["id"] for iss in issues}
 
-    edge_rows = db.execute(text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges")).fetchall()
+    edge_rows = db.execute(text(f"SELECT * FROM issue_edges")).fetchall()
     edges = [_edge_row_to_dict(r) for r in edge_rows if r[1] in issue_ids and r[2] in issue_ids]
 
     # 1. 孤立ノード

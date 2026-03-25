@@ -1530,3 +1530,255 @@ async def ai_action_endpoint(req: AIActionRequest):
     except Exception as e:
         logger.error(f"AI Action Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------- 課題→マインドマップ変換 ----------
+
+@router.post("/api/mindmap/from-issues")
+def create_mindmap_from_issues(project_name: str):
+    """課題因果グラフのデータからマインドマッププロジェクトを作成"""
+    import uuid
+    from sqlalchemy import text as sa_text
+    from database import get_db
+
+    db = next(get_db())
+    try:
+        # 課題取得
+        issue_rows = db.execute(
+            sa_text("SELECT id, project_name, title, raw_input, category, priority, status, description, cause, impact, action_next, is_collapsed, pos_x, pos_y, template_id, created_at, updated_at, assignee, context_memo FROM issues WHERE project_name = :pn ORDER BY created_at ASC"),
+            {"pn": project_name},
+        ).fetchall()
+
+        if not issue_rows:
+            raise HTTPException(status_code=404, detail=f"プロジェクト '{project_name}' に課題がありません")
+
+        issues = []
+        issue_keys = ["id", "project_name", "title", "raw_input", "category", "priority", "status",
+                      "description", "cause", "impact", "action_next", "is_collapsed", "pos_x", "pos_y",
+                      "template_id", "created_at", "updated_at", "assignee", "context_memo"]
+        for row in issue_rows:
+            issues.append(dict(zip(issue_keys[:len(row)], row)))
+
+        # エッジ取得
+        issue_ids = {iss["id"] for iss in issues}
+        edge_rows = db.execute(sa_text("SELECT * FROM issue_edges")).fetchall()
+        edge_base_keys = ["id", "from_id", "to_id", "confirmed", "created_at"]
+        edges = []
+        for r in edge_rows:
+            d = dict(zip(edge_base_keys[:len(r)], r))
+            if d.get("from_id") in issue_ids and d.get("to_id") in issue_ids:
+                edges.append(d)
+
+        # カテゴリ別にフェーズを生成
+        CATEGORY_MAP = {
+            '工程': {'id': 'process', 'name': '工程', 'color': '#3b82f6'},
+            'コスト': {'id': 'cost', 'name': 'コスト', 'color': '#f59e0b'},
+            '品質': {'id': 'quality', 'name': '品質', 'color': '#22c55e'},
+            '安全': {'id': 'safety', 'name': '安全', 'color': '#ef4444'},
+        }
+
+        STATUS_MAP = {'発生中': '検討中', '対応中': '検討中', '解決済み': '決定済み'}
+
+        used_categories = set(iss.get("category", "工程") for iss in issues)
+        phases = [
+            {"id": CATEGORY_MAP.get(c, CATEGORY_MAP['工程'])['id'],
+             "name": CATEGORY_MAP.get(c, CATEGORY_MAP['工程'])['name'],
+             "order": i + 1,
+             "color": CATEGORY_MAP.get(c, CATEGORY_MAP['工程'])['color']}
+            for i, c in enumerate(sorted(used_categories))
+        ]
+
+        categories = [
+            {"id": "critical", "name": "Critical", "color": "#ef4444"},
+            {"id": "normal", "name": "Normal", "color": "#3b82f6"},
+            {"id": "minor", "name": "Minor", "color": "#6b7280"},
+        ]
+
+        # ノード変換
+        nodes = []
+        for i, iss in enumerate(issues):
+            cat = iss.get("category", "工程")
+            phase_id = CATEGORY_MAP.get(cat, CATEGORY_MAP['工程'])['id']
+
+            checklist = []
+            if iss.get("cause"):
+                checklist.append(f"原因: {iss['cause']}")
+            if iss.get("impact"):
+                checklist.append(f"影響: {iss['impact']}")
+            if iss.get("action_next"):
+                checklist.append(f"対策: {iss['action_next']}")
+
+            nodes.append({
+                "id": iss["id"],
+                "label": iss["title"],
+                "description": iss.get("description") or "",
+                "phase": phase_id,
+                "category": iss.get("priority", "normal"),
+                "checklist": checklist,
+                "deliverables": [],
+                "key_stakeholders": [iss["assignee"]] if iss.get("assignee") else [],
+                "position": {"x": iss.get("pos_x", 0) or i * 350, "y": iss.get("pos_y", 0) or 0},
+                "status": STATUS_MAP.get(iss.get("status", "発生中"), "未着手"),
+                "is_custom": True,
+            })
+
+        # エッジ変換
+        mm_edges = []
+        for e in edges:
+            mm_edges.append({
+                "id": e["id"],
+                "source": e["from_id"],
+                "target": e["to_id"],
+                "type": "hard",
+                "reason": "",
+            })
+
+        # テンプレートとして保存
+        template_id = f"from-issues-{project_name}-{str(uuid.uuid4())[:8]}"
+        template_data = {
+            "meta": {
+                "id": template_id,
+                "name": f"課題マップ: {project_name}",
+                "description": f"課題因果グラフ '{project_name}' からの自動変換",
+                "version": "1.0",
+                "icon": "🔄",
+                "tags": ["課題変換", project_name],
+            },
+            "phases": phases,
+            "categories": categories,
+            "nodes": nodes,
+            "edges": mm_edges,
+            "knowledge": [],
+        }
+
+        # テンプレートをYAMLファイルとして保存
+        templates_dir = Path(__file__).parent / "data" / "templates"
+        templates_dir.mkdir(parents=True, exist_ok=True)
+        template_path = templates_dir / f"{template_id}.yaml"
+        with open(template_path, 'w', encoding='utf-8') as f:
+            yaml.dump(template_data, f, allow_unicode=True, default_flow_style=False)
+        logger.info(f"[FromIssues] Saved template: {template_path}")
+
+        # プロジェクト作成
+        project_id = project_store.create_project(
+            name=f"課題マップ: {project_name}",
+            template_id=template_id,
+            description=f"課題因果グラフ '{project_name}' から自動変換（{len(nodes)}ノード, {len(mm_edges)}エッジ）",
+        )
+
+        return {
+            "project_id": project_id,
+            "template_id": template_id,
+            "node_count": len(nodes),
+            "edge_count": len(mm_edges),
+        }
+    finally:
+        db.close()
+
+
+# ---------- Md→マインドマップ変換 ----------
+
+@router.post("/api/mindmap/from-markdown")
+async def create_mindmap_from_markdown(
+    file: UploadFile = File(...),
+    project_name: str = "",
+):
+    """Markdownファイルからマインドマッププロジェクトを直接作成"""
+    import uuid
+    import concurrent.futures
+
+    filename = file.filename or "unknown.md"
+    ext = Path(filename).suffix.lower()
+    if ext not in {'.md', '.txt', '.markdown'}:
+        raise HTTPException(status_code=400, detail="Markdownファイル(.md, .txt)のみ対応しています")
+
+    try:
+        raw = await file.read()
+        content = raw.decode('utf-8', errors='ignore')[:15000]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"ファイル読み込みエラー: {e}")
+
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="ファイルが空です")
+
+    # Geminiで分析（既存の _analyze_with_gemini を活用）
+    try:
+        result = await _analyze_with_gemini([{"name": filename, "content": content}])
+    except Exception as e:
+        logger.error(f"[FromMarkdown] Gemini analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"AI分析エラー: {str(e)}")
+
+    ai_nodes = result.get("nodes", [])
+    ai_edges = result.get("edges", [])
+    title = result.get("title", Path(filename).stem)
+
+    if not ai_nodes:
+        raise HTTPException(status_code=422, detail="Markdownからノードを抽出できませんでした")
+
+    # フェーズとカテゴリを自動生成
+    used_phases = set()
+    used_categories = set()
+    for n in ai_nodes:
+        if n.get("phase"):
+            used_phases.add(n["phase"])
+        if n.get("category"):
+            used_categories.add(n["category"])
+
+    PHASE_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899']
+    CAT_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#6b7280']
+
+    phases = [
+        {"id": f"phase_{i}", "name": name, "order": i + 1, "color": PHASE_COLORS[i % len(PHASE_COLORS)]}
+        for i, name in enumerate(sorted(used_phases) or ["分析結果"])
+    ]
+    phase_name_to_id = {p["name"]: p["id"] for p in phases}
+
+    categories = [
+        {"id": f"cat_{i}", "name": name, "color": CAT_COLORS[i % len(CAT_COLORS)]}
+        for i, name in enumerate(sorted(used_categories) or ["一般"])
+    ]
+
+    # ノードのphaseフィールドをIDに変換
+    for n in ai_nodes:
+        n["phase"] = phase_name_to_id.get(n.get("phase", ""), phases[0]["id"] if phases else "")
+
+    # テンプレートとして保存
+    safe_name = project_name or title
+    template_id = f"from-md-{str(uuid.uuid4())[:8]}"
+    template_data = {
+        "meta": {
+            "id": template_id,
+            "name": safe_name,
+            "description": f"Markdownファイル '{filename}' からの自動変換",
+            "version": "1.0",
+            "icon": "📄",
+            "tags": ["Md変換", filename],
+        },
+        "phases": phases,
+        "categories": categories,
+        "nodes": ai_nodes,
+        "edges": ai_edges,
+        "knowledge": [],
+    }
+
+    templates_dir = Path(__file__).parent / "data" / "templates"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    template_path = templates_dir / f"{template_id}.yaml"
+    with open(template_path, 'w', encoding='utf-8') as f:
+        yaml.dump(template_data, f, allow_unicode=True, default_flow_style=False)
+    logger.info(f"[FromMarkdown] Saved template: {template_path}")
+
+    # プロジェクト作成
+    project_id = project_store.create_project(
+        name=safe_name,
+        template_id=template_id,
+        description=f"Markdownファイル '{filename}' から自動変換（{len(ai_nodes)}ノード, {len(ai_edges)}エッジ）",
+    )
+
+    return {
+        "project_id": project_id,
+        "template_id": template_id,
+        "title": safe_name,
+        "node_count": len(ai_nodes),
+        "edge_count": len(ai_edges),
+    }
