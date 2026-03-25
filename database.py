@@ -665,6 +665,11 @@ def _run_migrations():
             transcript  TEXT NOT NULL,
             created_at  TEXT NOT NULL
         )""",
+        # 音声文字起こし+embedding統合: meeting_sessions にプロジェクト・バージョン情報を追加
+        "ALTER TABLE meeting_sessions ADD COLUMN project_id VARCHAR",
+        "ALTER TABLE meeting_sessions ADD COLUMN version_id VARCHAR",
+        "ALTER TABLE meeting_sessions ADD COLUMN source_pdf_hash VARCHAR",
+        "ALTER TABLE meeting_sessions ADD COLUMN audio_file_path TEXT",
     ]
     with engine.connect() as conn:
         for sql in migrations:

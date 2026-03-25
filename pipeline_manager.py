@@ -14,7 +14,7 @@ class PipelineManager:
         self.router = ContentRouter()
         self.orchestrator = IngestionOrchestrator()
         
-    def process_file(self, file_path: Path, source_pdf_hash: str = "", version_id: str = ""):
+    def process_file(self, file_path: Path, source_pdf_hash: str = "", version_id: str = "", project_id: str = ""):
         """
         ファイルを分類し、オーケストレーターにジョブを投入する。
         """
@@ -27,7 +27,7 @@ class PipelineManager:
             # 2. 拡張子チェック
             ext = file_path.suffix.lower()
             is_image = ext in (".png", ".jpg", ".jpeg")
-            is_audio = ext in (".mp3", ".wav")
+            is_audio = ext in (".mp3", ".wav", ".m4a")
             is_video = ext in (".mp4", ".mov")
             if ext == ".pdf":
                 source_kind = "pdf"
@@ -56,7 +56,8 @@ class PipelineManager:
                 file_path=str(file_path),
                 source_pdf_hash=source_pdf_hash,
                 source_kind=source_kind,
-                doc_type=doc_type
+                doc_type=doc_type,
+                project_id=project_id,
             )
             
         except Exception as e:
@@ -64,10 +65,10 @@ class PipelineManager:
             from metadata_repository import MetadataRepository
             MetadataRepository().fail_processing(str(file_path), f"Routing failure: {str(e)}")
 
-def process_file_pipeline(file_path: str, source_pdf_hash: str = "", version_id: str = ""):
+def process_file_pipeline(file_path: str, source_pdf_hash: str = "", version_id: str = "", project_id: str = ""):
     """
     routers/files.py 等から呼ばれるエントリーポイント。
     """
     manager = PipelineManager()
-    manager.process_file(Path(file_path), source_pdf_hash, version_id)
+    manager.process_file(Path(file_path), source_pdf_hash, version_id, project_id)
 

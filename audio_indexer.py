@@ -28,6 +28,7 @@ CHUNK_DURATION_SEC = 60  # 音声チャンクの長さ（秒）
 _AUDIO_MIME_TYPES = {
     ".mp3": "audio/mpeg",
     ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
 }
 
 
@@ -122,6 +123,7 @@ class AudioIndexer:
         source_pdf_hash: str,
         version_id: str,
         original_filename: str = "",
+        project_id: str = "",
     ) -> int:
         """
         音声ファイルをインデックスする。
@@ -166,6 +168,7 @@ class AudioIndexer:
                 "end_time_sec": end_sec,
                 "original_filename": orig_name,
                 "version_id": version_id,
+                "project_id": project_id or "",
             })
 
         if ids:
@@ -188,9 +191,10 @@ def index_audio_file(
     source_pdf_hash: str,
     version_id: str,
     original_filename: str = "",
+    project_id: str = "",
 ) -> int:
     """同期エントリーポイント（スレッドから呼び出す用）。"""
     indexer = AudioIndexer()
     return asyncio.run(
-        indexer.index_file(file_path, source_pdf_hash, version_id, original_filename)
+        indexer.index_file(file_path, source_pdf_hash, version_id, original_filename, project_id)
     )
