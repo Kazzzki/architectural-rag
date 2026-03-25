@@ -121,8 +121,9 @@ function DocumentPreviewPanel({
       try {
         const res = await authFetch(`/api/documents/${docId}/file`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
+        const buf = await res.arrayBuffer();
         if (!revoked) {
+          const blob = new Blob([buf], { type: 'application/pdf' });
           const url = URL.createObjectURL(blob);
           setPdfBlobUrl(url);
         }
@@ -193,11 +194,14 @@ function DocumentPreviewPanel({
                   <Loader2 className="w-6 h-6 animate-spin" />
                 </div>
               ) : pdfBlobUrl ? (
-                <iframe
-                  src={pdfBlobUrl}
+                <object
+                  data={`${pdfBlobUrl}#toolbar=1`}
+                  type="application/pdf"
                   className="w-full h-full border-0"
                   title={detail.filename}
-                />
+                >
+                  <p className="text-sm text-gray-400 p-4">このブラウザではPDFを表示できません。</p>
+                </object>
               ) : (
                 <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm">
                   PDFを読み込めませんでした
