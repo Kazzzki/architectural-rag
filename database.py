@@ -670,6 +670,19 @@ def _run_migrations():
         "ALTER TABLE meeting_sessions ADD COLUMN version_id VARCHAR",
         "ALTER TABLE meeting_sessions ADD COLUMN source_pdf_hash VARCHAR",
         "ALTER TABLE meeting_sessions ADD COLUMN audio_file_path TEXT",
+        # 課題因果グラフ拡張: issue_edges にラベル・関係種別を追加
+        "ALTER TABLE issue_edges ADD COLUMN label TEXT",
+        "ALTER TABLE issue_edges ADD COLUMN relation_type TEXT DEFAULT 'direct_cause'",
+        # 課題因果グラフ拡張: issue_notes（タイムラインメモ）テーブル新規作成
+        """CREATE TABLE IF NOT EXISTS issue_notes (
+            id         TEXT PRIMARY KEY,
+            issue_id   TEXT NOT NULL,
+            author     TEXT,
+            content    TEXT NOT NULL,
+            photo_path TEXT,
+            created_at TEXT NOT NULL
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_issue_notes_issue ON issue_notes(issue_id)""",
     ]
     with engine.connect() as conn:
         for sql in migrations:

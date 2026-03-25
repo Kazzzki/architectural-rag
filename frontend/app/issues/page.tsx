@@ -10,7 +10,10 @@ import IssueCausalGraph from '@/components/issues/IssueCausalGraph';
 import IssueDetailDrawer from '@/components/issues/IssueDetailDrawer';
 import IssueMemoSearch from '@/components/issues/IssueMemoSearch';
 import MobileTreeView from '@/components/issues/MobileTreeView';
-import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, X, Map, Smartphone, Search } from 'lucide-react';
+import BatchActionBar from '@/components/issues/BatchActionBar';
+import InferredEdgePreview from '@/components/issues/InferredEdgePreview';
+import HealthCheckPanel from '@/components/issues/HealthCheckPanel';
+import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, X, Map, Smartphone, Search, Activity } from 'lucide-react';
 import Link from 'next/link';
 
 // ────────────────────────────────────────────────
@@ -151,6 +154,10 @@ function ProjectGraphView({
   const [mobilePanel, setMobilePanel] = useState<'none' | 'chat' | 'filter'>('none');
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
   const [activeTab, setActiveTab] = useState<'graph' | 'search'>('graph');
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [showHealthCheck, setShowHealthCheck] = useState(false);
+  const [showAIInfer, setShowAIInfer] = useState(false);
+  const [aiInferIds, setAIInferIds] = useState<string[]>([]);
 
   const fetchIssues = useCallback(async () => {
     setLoading(true);
@@ -240,6 +247,16 @@ function ProjectGraphView({
             <Map size={13} />
             <span className="hidden sm:inline">マインドマップ</span>
           </Link>
+          <button
+            onClick={() => setShowHealthCheck(!showHealthCheck)}
+            className={`flex items-center gap-1 text-xs border rounded px-2 py-1 ${
+              showHealthCheck ? 'bg-blue-600 text-white border-blue-600' : 'text-gray-500 border-gray-300 hover:bg-gray-50'
+            }`}
+            title="グラフ健全性チェック"
+          >
+            <Activity size={13} />
+            <span className="hidden sm:inline">健全性</span>
+          </button>
         </div>
       </div>
 
@@ -314,10 +331,30 @@ function ProjectGraphView({
                   issues={issues}
                   edges={edges}
                   priorityFilter={priorityFilter}
+                  selectedNodeIds={selectedNodeIds}
                   onNodeClick={setSelectedIssue}
                   onRefresh={fetchIssues}
+                  onSelectionChange={setSelectedNodeIds}
+                  onIssueUpdated={handleIssueUpdated}
                   fitViewTrigger={fitViewTrigger}
                 />
+                {/* バッチ操作バー */}
+                <BatchActionBar
+                  selectedIds={selectedNodeIds}
+                  issues={issues}
+                  onClearSelection={() => setSelectedNodeIds([])}
+                  onRefresh={fetchIssues}
+                  onAIInfer={(ids) => { setAIInferIds(ids); setShowAIInfer(true); }}
+                />
+                {/* AI因果推定パネル */}
+                {showAIInfer && (
+                  <InferredEdgePreview
+                    issueIds={aiInferIds}
+                    issues={issues}
+                    onEdgeAccepted={fetchIssues}
+                    onClose={() => setShowAIInfer(false)}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -408,11 +445,20 @@ function ProjectGraphView({
         </div>
       )}
 
-      <IssueDetailDrawer
-        issue={selectedIssue}
-        onClose={() => setSelectedIssue(null)}
-        onUpdated={handleIssueUpdated}
-      />
+      {/* パネル優先度スタック: Drawer と HealthCheck は排他 */}
+      {showHealthCheck ? (
+        <HealthCheckPanel
+          projectName={projectName}
+          onClose={() => setShowHealthCheck(false)}
+          onSelectIssue={(iss) => { setShowHealthCheck(false); setSelectedIssue(iss); }}
+        />
+      ) : (
+        <IssueDetailDrawer
+          issue={selectedIssue}
+          onClose={() => setSelectedIssue(null)}
+          onUpdated={handleIssueUpdated}
+        />
+      )}
     </div>
   );
 }
