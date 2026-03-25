@@ -212,7 +212,7 @@ def _rerank_single(query: str, context: str) -> float:
 
 
 def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = RERANK_THRESHOLD) -> List[Dict[str, Any]]:
-    """Gemini でリランクし、threshold 以上のもの上位5件を返す。
+    """Gemini でリランクし、threshold 以上のもの上位8件を返す。
     リランク評価は ThreadPoolExecutor で並列化（1序列ループ→約N倍高速化）。
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -242,7 +242,7 @@ def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = RERAN
 # ─── 親チャンク取得 ─────────────────────────────────────────────────────────────
 def _resolve_parent_chunks(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    各チャンクの parent_chunk_id から親チャンク（500〜800文字）を取得し、
+    各チャンクの parent_chunk_id から親チャンク（800〜1500文字）を取得し、
     LLM 入力用コンテキストに置き換える。
     親チャンクが取得できない場合は元の小チャンクをそのまま使用。
     """
@@ -349,11 +349,16 @@ def search(
         if use_lexical:
             futures.append(executor.submit(_search_lexical, query, n_results))
 
+        failed_count = 0
         for future in as_completed(futures):
             try:
                 all_hits_lists.append(future.result())
             except Exception as e:
+                failed_count += 1
                 logger.warning(f"Parallel search task failed: {e}")
+
+        if failed_count > 0 and not all_hits_lists:
+            logger.error(f"All {failed_count} search tasks failed — returning empty results")
 
     # ─── Step 3: マージ ─────────────────────────────────────────────────────
     merged_hits = _merge_hits(all_hits_lists, top_k=RERANK_CANDIDATE_COUNT)
@@ -392,13 +397,17 @@ def search(
 
 # ─── 重複判定ヘルパー ──────────────────────────────────────────────────────────
 def _is_similar(text_a: str, text_b: str, threshold: float = 0.8) -> bool:
-    """先頭N文字の一致率で簡易重複判定"""
+    """先頭N文字の一致率で簡易重複判定（親チャンク800-1500文字に対応）"""
     if not text_a or not text_b:
         return False
-    compare_len = min(len(text_a), len(text_b), 200)
+    text_a_s = text_a.strip()
+    text_b_s = text_b.strip()
+    if not text_a_s or not text_b_s:
+        return False
+    compare_len = min(len(text_a_s), len(text_b_s), 500)
     if compare_len == 0:
         return False
-    a, b = text_a[:compare_len], text_b[:compare_len]
+    a, b = text_a_s[:compare_len], text_b_s[:compare_len]
     matches = sum(1 for ca, cb in zip(a, b) if ca == cb)
     return (matches / compare_len) >= threshold
 
@@ -434,17 +443,18 @@ def build_context(search_results: Dict[str, Any]) -> str:
         source_key = meta.get("rel_path") or meta.get("filename", "不明")
         doc_groups.setdefault(source_key, []).append(hit)
 
+    # ページ番号ソート用キー関数（ループ外に定義）
+    def _page_sort_key(h):
+        m = h.get("metadata") or {}
+        p = m.get("page_no") or m.get("page_number") or 0
+        try:
+            return int(p)
+        except (ValueError, TypeError):
+            return 0
+
     # 2. 各グループ内でページ順ソート + 重複除去 + 結合
     context_parts = []
     for source_key, group_hits in doc_groups.items():
-        # ページ番号でソート
-        def _page_sort_key(h):
-            m = h.get("metadata") or {}
-            p = m.get("page_no") or m.get("page_number") or 0
-            try:
-                return int(p)
-            except (ValueError, TypeError):
-                return 0
         group_hits.sort(key=_page_sort_key)
 
         # 重複除去
