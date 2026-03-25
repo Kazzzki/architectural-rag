@@ -13,7 +13,7 @@ import MobileTreeView from '@/components/issues/MobileTreeView';
 import BatchActionBar from '@/components/issues/BatchActionBar';
 import InferredEdgePreview from '@/components/issues/InferredEdgePreview';
 import HealthCheckPanel from '@/components/issues/HealthCheckPanel';
-import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, X, Map, Smartphone, Search, Activity } from 'lucide-react';
+import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, X, Map, Smartphone, Search, Activity, Maximize2 } from 'lucide-react';
 import Link from 'next/link';
 
 // ────────────────────────────────────────────────
@@ -66,11 +66,11 @@ function ProjectListView({
             マインドマップ
           </Link>
           <Link
-            href="/issues/chat"
-            className="flex items-center gap-1 text-xs text-blue-600 border border-blue-300 rounded px-2 py-1 hover:bg-blue-50"
+            href="/issues/mobile"
+            className="flex items-center gap-1 text-xs text-gray-500 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50"
           >
-            <MessageCircle size={14} />
-            チャット入力
+            <Smartphone size={14} />
+            スマホ表示
           </Link>
         </div>
       </div>
@@ -233,11 +233,11 @@ function ProjectGraphView({
         <div className="flex items-center gap-2 flex-shrink-0">
           <Link
             href={`/issues/mobile?project=${encodeURIComponent(projectName)}`}
-            className="flex items-center gap-1 text-xs text-gray-500 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50 md:flex hidden"
+            className="flex items-center gap-1 text-xs text-gray-500 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50"
             title="スマホ用ツリー表示"
           >
             <Smartphone size={13} />
-            スマホ表示
+            <span className="hidden sm:inline">スマホ表示</span>
           </Link>
           <Link
             href="/mindmap"
@@ -398,8 +398,16 @@ function ProjectGraphView({
           href={`/issues/mobile?project=${encodeURIComponent(projectName)}`}
           className="flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all text-gray-500 hover:bg-gray-50"
         >
+          <Maximize2 size={20} />
+          <span className="text-[9px] font-bold">全体表示</span>
+        </button>
+        <div className="w-px h-8 bg-gray-200 mx-1" />
+        <Link
+          href={`/issues/mobile?project=${encodeURIComponent(projectName)}`}
+          className="flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all text-gray-500 hover:bg-gray-50"
+        >
           <Smartphone size={20} />
-          <span className="text-[9px] font-bold">ツリー表示</span>
+          <span className="text-[9px] font-bold">リスト表示</span>
         </Link>
       </div>
 
