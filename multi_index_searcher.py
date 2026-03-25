@@ -36,14 +36,20 @@ class SearchResult:
     document: Optional[str] = None  # テキストコレクションのみ
 
 
-def _chroma_query(collection, query_embedding: list[float], top_k: int) -> list[SearchResult]:
+def _chroma_query(
+    collection, query_embedding: list[float], top_k: int,
+    where: Optional[dict] = None,
+) -> list[SearchResult]:
     """ChromaDB コレクションを同期クエリし、SearchResult リストを返す。"""
     try:
-        res = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["metadatas", "distances", "documents"],
-        )
+        kwargs: dict[str, Any] = {
+            "query_embeddings": [query_embedding],
+            "n_results": top_k,
+            "include": ["metadatas", "distances", "documents"],
+        }
+        if where:
+            kwargs["where"] = where
+        res = collection.query(**kwargs)
     except Exception as e:
         logger.warning(f"[MultiIndexSearcher] Query failed for {collection.name}: {e}")
         return []
@@ -104,6 +110,7 @@ class MultiIndexSearcher:
         query: str,
         top_k: int = 20,
         collections: Optional[list[str]] = None,
+        project_id: Optional[str] = None,
     ) -> dict[str, list[SearchResult]]:
         """
         クエリを埋め込み、指定コレクション（省略時は全コレクション）を並行検索する。
@@ -141,15 +148,18 @@ class MultiIndexSearcher:
                 logger.warning(f"[MultiIndexSearcher] Legacy embedding failed: {e}; skipping text collection")
                 has_text_collection = False
 
+        # プロジェクトスコープフィルタ
+        where_filter = {"project_id": project_id} if project_id else None
+
         # 並行クエリを組み立てる
         tasks: dict[str, any] = {}
         if has_text_collection and legacy_embedding is not None:
             tasks[COLLECTION_NAME] = asyncio.to_thread(
-                _chroma_query, active[COLLECTION_NAME], legacy_embedding, top_k
+                _chroma_query, active[COLLECTION_NAME], legacy_embedding, top_k, where_filter
             )
         for name, col in new_collections.items():
             if v2_embedding is not None:
-                tasks[name] = asyncio.to_thread(_chroma_query, col, v2_embedding, top_k)
+                tasks[name] = asyncio.to_thread(_chroma_query, col, v2_embedding, top_k, where_filter)
 
         results: dict[str, list[SearchResult]] = {}
         for name, coro in tasks.items():

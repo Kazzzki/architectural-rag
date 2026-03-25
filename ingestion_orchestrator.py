@@ -23,7 +23,7 @@ class IngestionOrchestrator:
         self.repo = MetadataRepository()
         self.enricher = MetadataEnricher()
 
-    def enqueue_job(self, version_id: str, file_path: str, source_pdf_hash: str, source_kind: str, doc_type: str = "catalog"):
+    def enqueue_job(self, version_id: str, file_path: str, source_pdf_hash: str, source_kind: str, doc_type: str = "catalog", project_id: str = ""):
         """
         ファイルアップロード直後に呼び出されるエントリーポイント
         """
@@ -48,7 +48,7 @@ class IngestionOrchestrator:
         if source_kind == "audio":
             threading.Thread(
                 target=self._run_audio_stage,
-                args=(version_id, file_path, source_pdf_hash),
+                args=(version_id, file_path, source_pdf_hash, project_id),
                 daemon=True,
             ).start()
         elif source_kind == "video":
@@ -90,15 +90,69 @@ class IngestionOrchestrator:
             logger.error(f"[Orchestrator] Visual stage failed for {file_path}: {e}", exc_info=True)
             self.repo.fail_processing(file_path, f"[Visual Stage Error] {str(e)}")
 
-    def _run_audio_stage(self, version_id: str, file_path: str, source_pdf_hash: str):
-        """音声ファイルを音声ベクトルとしてインデックスする。"""
+    def _run_audio_stage(self, version_id: str, file_path: str, source_pdf_hash: str, project_id: str = ""):
+        """音声ファイルの文字起こし + 音声embedding を並行実行する二重出力パイプライン。"""
         try:
+            import asyncio
+            from audio_transcriber import AudioTranscriber
+
             original_filename = Path(file_path).name
-            count = index_audio_file(file_path, source_pdf_hash, version_id, original_filename)
-            logger.info(f"[Orchestrator] Audio indexing completed: {count} vectors for {version_id}")
+            logger.info(f"[Orchestrator] Starting dual audio pipeline for {original_filename} (version={version_id})")
+
+            async def _dual_pipeline():
+                transcriber = AudioTranscriber()
+                from audio_indexer import AudioIndexer
+                audio_idx = AudioIndexer()
+
+                # 文字起こし + 音声embedding を並行実行
+                transcription_task = transcriber.transcribe_file(
+                    file_path=file_path,
+                    source_pdf_hash=source_pdf_hash,
+                    version_id=version_id,
+                    project_id=project_id,
+                    original_filename=original_filename,
+                )
+                embedding_task = audio_idx.index_file(
+                    file_path=file_path,
+                    source_pdf_hash=source_pdf_hash,
+                    version_id=version_id,
+                    original_filename=original_filename,
+                    project_id=project_id,
+                )
+                return await asyncio.gather(transcription_task, embedding_task)
+
+            transcription_result, vector_count = asyncio.run(_dual_pipeline())
+
+            logger.info(
+                f"[Orchestrator] Audio embedding completed: {vector_count} vectors for {version_id}"
+            )
+
+            # 文字起こし結果をテキストパイプラインに投入
+            if transcription_result and transcription_result.md_path:
+                logger.info(
+                    f"[Orchestrator] Feeding transcript to text pipeline: "
+                    f"{transcription_result.md_path} ({transcription_result.segment_count} segments)"
+                )
+                from indexer import process_and_index_file
+                file_info = {
+                    "filename": Path(transcription_result.md_path).name,
+                    "full_path": transcription_result.md_path,
+                    "rel_path": file_path,
+                    "category": "transcripts",
+                    "file_type": "md",
+                    "source_pdf_hash": source_pdf_hash,
+                    "source_pdf_rel": file_path,
+                    "project_id": project_id,
+                }
+                stats = {"indexed": 0, "chunks": 0, "skipped": 0, "errors": 0}
+                process_and_index_file(file_info, stats)
+                logger.info(f"[Orchestrator] Text indexing stats: {stats}")
+
             self.repo.update_ingest_stage_by_version_id(version_id, "completed")
             self.repo.update_ingest_stage(file_path, "completed")
             self.repo.mark_as_searchable(file_path)
+            logger.info(f"[Orchestrator] Dual audio pipeline completed for {version_id}")
+
         except Exception as e:
             logger.error(f"[Orchestrator] Audio stage failed for {file_path}: {e}", exc_info=True)
             self.repo.fail_processing(file_path, f"[Audio Stage Error] {str(e)}")

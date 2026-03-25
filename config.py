@@ -17,6 +17,11 @@ KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
 PDF_STORAGE_DIR    = BASE_DIR / "data" / "pdfs"
 PDF_CACHE_DIR      = BASE_DIR / "data" / "cache" / "pdfs"
 MD_DIR             = BASE_DIR / "data" / "md"
+TRANSCRIPTS_DIR    = MD_DIR / "transcripts"
+
+# 音声文字起こし設定
+AUDIO_TRANSCRIPTION_SEGMENT_SEC = int(os.environ.get("AUDIO_TRANSCRIPTION_SEGMENT_SEC", "600"))  # 10分
+AUDIO_MAX_DURATION_SEC = int(os.environ.get("AUDIO_MAX_DURATION_SEC", "7200"))  # 2時間
 
 
 # Storage Strategy (drive: Google Drive canonical, local: Local filesystem canonical)

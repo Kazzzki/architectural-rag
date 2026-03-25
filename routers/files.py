@@ -14,9 +14,9 @@ import tempfile
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Files & Upload"])
 
-AUDIO_EXTENSIONS = {".mp3", ".wav"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
 VIDEO_EXTENSIONS = {".mp4", ".mov"}
-AUDIO_MAX_DURATION_SEC = 80
+AUDIO_MAX_DURATION_SEC = 7200  # 2時間（会議録音対応）
 VIDEO_MAX_DURATION_SEC = 120
 
 
@@ -53,11 +53,19 @@ class BulkDeleteRequest(BaseModel):
 @router.post("/api/upload/multiple")
 async def upload_multiple_files(
     background_tasks: BackgroundTasks,
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    project_id: Optional[str] = None,
 ):
     """Web画面から複数ファイルを一括アップロードし、file_storeに登録する"""
+    # project_id が未指定の場合、アクティブプロジェクトから解決
+    if not project_id:
+        try:
+            from backend.scope_resolver import get_setting
+            project_id = get_setting("active_project_id") or ""
+        except Exception:
+            project_id = ""
     ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".md", ".txt",
-                          ".mp3", ".wav", ".mp4", ".mov"}
+                          ".mp3", ".wav", ".m4a", ".mp4", ".mov"}
     MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
     
     from config import BASE_DIR, KNOWLEDGE_BASE_DIR, UNCATEGORIZED_FOLDER
@@ -110,7 +118,8 @@ async def upload_multiple_files(
                 if duration is not None and duration > AUDIO_MAX_DURATION_SEC:
                     errors.append({"filename": filename, "error": f"Audio too long: {duration:.1f}s (max {AUDIO_MAX_DURATION_SEC}s)"})
                     continue
-                content_type = f"audio/{'mpeg' if ext == '.mp3' else 'wav'}"
+                _audio_mime = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4"}
+                content_type = _audio_mime.get(ext, "audio/mpeg")
                 source_kind = "audio"
             elif ext in VIDEO_EXTENSIONS:
                 duration = _get_media_duration(content, ext)
@@ -150,10 +159,10 @@ async def upload_multiple_files(
 
             logger.info(f"File uploaded: {file_path}, Size: {len(content)} bytes, ID: {file_id}")
 
-            if ext in (".pdf", ".png", ".jpg", ".jpeg", ".mp3", ".wav", ".mp4", ".mov"):
+            if ext in (".pdf", ".png", ".jpg", ".jpeg", ".mp3", ".wav", ".m4a", ".mp4", ".mov"):
                 from pipeline_manager import process_file_pipeline
-                background_tasks.add_task(process_file_pipeline, str(file_path), source_pdf_hash, version_id)
-                logger.info(f"パイプライン処理をバックグラウンドタスクに登録: {file_path} (hash: {source_pdf_hash}, version: {version_id})")
+                background_tasks.add_task(process_file_pipeline, str(file_path), source_pdf_hash, version_id, project_id)
+                logger.info(f"パイプライン処理をバックグラウンドタスクに登録: {file_path} (hash: {source_pdf_hash}, version: {version_id}, project: {project_id})")
             elif ext in [".md", ".txt"]:
                 from config import KNOWLEDGE_BASE_DIR as _KB, UNCATEGORIZED_FOLDER as _UF
                 final_md_dir = Path(_KB) / _UF

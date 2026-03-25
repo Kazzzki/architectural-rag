@@ -598,7 +598,8 @@ def process_and_index_file(
         "rel_path":        rel_path,
         "version_id":      version_id,
         "doc_type":        doc_type, # ChunkBuilder内部でdoc_typeを使う場合のために残す
-        "filename":        file_info["filename"] # 念のため
+        "filename":        file_info["filename"], # 念のため
+        "project_id":      file_info.get("project_id", ""),
     }
 
     chunks = builder.build(full_text, ocr_results, source_metadata)
