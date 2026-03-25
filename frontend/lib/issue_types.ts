@@ -20,12 +20,46 @@ export interface Issue {
   context_memo: string | null;
 }
 
+export type EdgeRelationType = 'direct_cause' | 'indirect_cause' | 'correlation' | 'countermeasure';
+
 export interface IssueEdge {
   id: string;
   from_id: string;
   to_id: string;
   confirmed: 0 | 1;
+  label: string | null;
+  relation_type: EdgeRelationType | null;
   created_at: string;
+}
+
+export interface IssueNote {
+  id: string;
+  issue_id: string;
+  author: string | null;
+  content: string;
+  photo_path: string | null;
+  created_at: string;
+}
+
+export interface AIInvestigationResult {
+  type: 'rca' | 'impact' | 'countermeasure';
+  result: string;
+  related_issue_ids: string[];
+}
+
+export interface HealthCheckResult {
+  orphans: Issue[];
+  loops: string[][];
+  unresolved_criticals: Issue[];
+  ai_suggestions: { from_id: string; to_id: string; reason: string; confidence: number }[];
+}
+
+export interface InferredEdge {
+  from_id: string;
+  to_id: string;
+  confidence: number;
+  reason: string;
+  suggested_label: string;
 }
 
 export interface CausalCandidate {

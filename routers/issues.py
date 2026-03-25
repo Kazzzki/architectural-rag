@@ -15,7 +15,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -75,8 +75,8 @@ class EdgeConfirmRequest(BaseModel):
 
 
 class IssueUpdateRequest(BaseModel):
-    status: Optional[str] = None
-    priority: Optional[str] = None
+    status: Optional[Literal['発生中', '対応中', '解決済み']] = None
+    priority: Optional[Literal['critical', 'normal', 'minor']] = None
     action_next: Optional[str] = None
     is_collapsed: Optional[int] = None
     pos_x: Optional[float] = None
@@ -170,7 +170,7 @@ def _render_issue_markdown(issue: dict, edges: list, db) -> str:
 def _save_issue_markdown(issue_id: str, db) -> None:
     """Issue + Edges を読んでMarkdownファイルを書き出し、ChromaDBインデックスも更新する。"""
     row = db.execute(
-        text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}
+        text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}
     ).fetchone()
     if not row:
         logger.warning(f"[IssueMemo] issue_id={issue_id} not found, skipping markdown save")
@@ -178,7 +178,7 @@ def _save_issue_markdown(issue_id: str, db) -> None:
 
     issue = _issue_row_to_dict(row)
     edge_rows = db.execute(
-        text("SELECT * FROM issue_edges WHERE from_id = :id OR to_id = :id"),
+        text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges WHERE from_id = :id OR to_id = :id"),
         {"id": issue_id},
     ).fetchall()
 
@@ -197,20 +197,25 @@ def _save_issue_markdown(issue_id: str, db) -> None:
         logger.error(f"[IssueMemo] ChromaDB index failed for {issue_id}: {e}")
 
 
+ISSUE_SELECT_COLS = (
+    "id, project_name, title, raw_input, category, priority, status, "
+    "description, cause, impact, action_next, is_collapsed, pos_x, pos_y, "
+    "template_id, created_at, updated_at, assignee, context_memo"
+)
+ISSUE_KEYS = [c.strip() for c in ISSUE_SELECT_COLS.split(",")]
+
+EDGE_SELECT_COLS = "id, from_id, to_id, confirmed, created_at, label, relation_type"
+EDGE_KEYS = [c.strip() for c in EDGE_SELECT_COLS.split(",")]
+
+
 def _issue_row_to_dict(row) -> dict:
-    keys = [
-        "id", "project_name", "title", "raw_input", "category", "priority",
-        "status", "description", "cause", "impact", "action_next",
-        "is_collapsed", "pos_x", "pos_y", "template_id", "created_at", "updated_at",
-        "assignee", "context_memo",
-    ]
-    # rowの長さに合わせてキーを切り取る（古いDBとの互換性）
-    return dict(zip(keys[:len(row)], row))
+    """明示的カラム名ベースの変換。SELECT * ではなく ISSUE_SELECT_COLS を使うこと。"""
+    return dict(zip(ISSUE_KEYS[:len(row)], row))
 
 
 def _edge_row_to_dict(row) -> dict:
-    keys = ["id", "from_id", "to_id", "confirmed", "created_at"]
-    return dict(zip(keys, row))
+    """明示的カラム名ベースの変換。SELECT * ではなく EDGE_SELECT_COLS を使うこと。"""
+    return dict(zip(EDGE_KEYS[:len(row)], row))
 
 
 def _call_gemini_capture(raw_input: str, existing_issues: list) -> dict:
@@ -329,7 +334,7 @@ def capture_issue_core(raw_input: str, project_name: str, db) -> dict:
     db.commit()
 
     row = db.execute(
-        text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}
+        text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}
     ).fetchone()
     issue = _issue_row_to_dict(row)
 
@@ -580,7 +585,7 @@ def capture_issue(req: CaptureRequest, db=Depends(get_db)):
                 "updated_at": now,
             })
             db.commit()
-            row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+            row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
             return {"issue": _issue_row_to_dict(row), "causal_candidates": [], "duplicate_candidates": []}
         return capture_issue_core(req.raw_input, req.project_name, db)
     except Exception as e:
@@ -772,7 +777,7 @@ def triage_apply(req: TriageApplyRequest, db=Depends(get_db)):
             edges_created.append({"from_id": related_id, "to_id": issue_id})
 
         db.commit()
-        row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+        row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
         return {"issue": _issue_row_to_dict(row), "edges_created": edges_created}
 
     except Exception as e:
@@ -785,6 +790,18 @@ def confirm_edge(req: EdgeConfirmRequest, db=Depends(get_db)):
     """因果関係を確認し confirmed=true の場合のみエッジを保存"""
     if not req.confirmed:
         return {"ok": True, "saved": False}
+
+    # self-loop 防止
+    if req.from_id == req.to_id:
+        raise HTTPException(status_code=400, detail="自己参照エッジは作成できません")
+
+    # 重複エッジ防止
+    existing = db.execute(
+        text("SELECT id FROM issue_edges WHERE from_id = :from_id AND to_id = :to_id"),
+        {"from_id": req.from_id, "to_id": req.to_id},
+    ).fetchone()
+    if existing:
+        return {"ok": True, "saved": False, "edge_id": existing[0], "duplicate": True}
 
     edge_id = str(uuid.uuid4())
     db.execute(
@@ -864,14 +881,17 @@ def list_issues(
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     issue_rows = db.execute(
-        text(f"SELECT * FROM issues {where_sql} ORDER BY created_at ASC"), params
+        text(f"SELECT {ISSUE_SELECT_COLS} FROM issues {where_sql} ORDER BY created_at ASC"), params
     ).fetchall()
     issues = [_issue_row_to_dict(r) for r in issue_rows]
 
-    # フィルター対象 issue の id セット内のエッジのみ返す
+    # フィルター対象 issue の id セット内のエッジのみ返す（プロジェクト絞り込み済み）
     issue_ids = {iss["id"] for iss in issues}
     if issue_ids:
-        edge_rows = db.execute(text("SELECT * FROM issue_edges")).fetchall()
+        edge_rows = db.execute(
+            text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges WHERE from_id IN (SELECT id FROM issues WHERE project_name = :pn) OR to_id IN (SELECT id FROM issues WHERE project_name = :pn)"),
+            {"pn": project_name or ""},
+        ).fetchall() if project_name else db.execute(text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges")).fetchall()
         edges = [
             _edge_row_to_dict(r)
             for r in edge_rows
@@ -892,19 +912,19 @@ def list_issues(
 def get_issue_analysis(issue_id: str, db=Depends(get_db)):
     """課題のAI分析ステータスと因果候補を返す。
     キャプチャは同期処理のため、課題が存在すれば常に done を返す。"""
-    row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
     if row is None:
         return {"ai_status": "pending", "issue": None, "causal_candidates": []}
     issue = _issue_row_to_dict(row)
     # 確定済みエッジから因果候補を構築（この課題が to_id のもの = 原因側候補）
     edge_rows = db.execute(
-        text("SELECT * FROM issue_edges WHERE to_id = :id AND confirmed = 1"),
+        text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges WHERE to_id = :id AND confirmed = 1"),
         {"id": issue_id},
     ).fetchall()
     causal_candidates = []
     for edge in edge_rows:
         cause_row = db.execute(
-            text("SELECT * FROM issues WHERE id = :id"), {"id": edge[1]}
+            text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": edge[1]}
         ).fetchone()
         if cause_row:
             causal_candidates.append({
@@ -919,7 +939,7 @@ def get_issue_analysis(issue_id: str, db=Depends(get_db)):
 @router.get("/api/issues/{issue_id}")
 def get_issue(issue_id: str, db=Depends(get_db)):
     """課題を1件取得"""
-    row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Issue not found")
     return _issue_row_to_dict(row)
@@ -948,7 +968,7 @@ def update_issue(issue_id: str, req: IssueUpdateRequest, db=Depends(get_db)):
     db.commit()
 
     row = db.execute(
-        text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}
+        text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="課題が見つかりません")
@@ -991,6 +1011,8 @@ def delete_issue(issue_id: str, db=Depends(get_db)):
         text("DELETE FROM issue_edges WHERE from_id = :id OR to_id = :id"),
         {"id": issue_id},
     )
+    # タイムラインメモもカスケード削除
+    db.execute(text("DELETE FROM issue_notes WHERE issue_id = :id"), {"id": issue_id})
     db.execute(text("DELETE FROM issues WHERE id = :id"), {"id": issue_id})
     db.commit()
 
@@ -1013,3 +1035,461 @@ def delete_issue(issue_id: str, db=Depends(get_db)):
             logger.error(f"[IssueMemo] Failed to update markdown for {rid} after delete: {e}")
 
     return {"ok": True}
+
+
+# ---------- 新規エンドポイント (Phase 1) ----------
+
+# --- バッチ更新 ---
+
+class BatchUpdateRequest(BaseModel):
+    issue_ids: list[str]
+    updates: dict  # {status?, priority?, assignee?}
+
+
+@router.patch("/api/issues/batch")
+def batch_update(req: BatchUpdateRequest, db=Depends(get_db)):
+    """複数課題を一括更新（トランザクション: 全成功 or 全失敗）"""
+    if len(req.issue_ids) > 100:
+        raise HTTPException(status_code=400, detail="一括更新は100件以内にしてください")
+    if not req.issue_ids or not req.updates:
+        raise HTTPException(status_code=400, detail="issue_ids と updates は必須です")
+
+    allowed = {"status", "priority", "assignee"}
+    valid_status = {'発生中', '対応中', '解決済み'}
+    valid_priority = {'critical', 'normal', 'minor'}
+    updates = {k: v for k, v in req.updates.items() if k in allowed and v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="有効な更新フィールドがありません")
+    if "status" in updates and updates["status"] not in valid_status:
+        raise HTTPException(status_code=400, detail=f"不正なstatus: {updates['status']}")
+    if "priority" in updates and updates["priority"] not in valid_priority:
+        raise HTTPException(status_code=400, detail=f"不正なpriority: {updates['priority']}")
+
+    # 全IDが同一プロジェクトに属するか確認
+    placeholders = ",".join(f":id{i}" for i in range(len(req.issue_ids)))
+    rows = db.execute(
+        text(f"SELECT DISTINCT project_name FROM issues WHERE id IN ({placeholders})"),
+        {f"id{i}": uid for i, uid in enumerate(req.issue_ids)},
+    ).fetchall()
+    if len(rows) > 1:
+        raise HTTPException(status_code=400, detail="異なるプロジェクトの課題を一括更新できません")
+
+    set_clauses = ", ".join([f"{k} = :{k}" for k in updates])
+    now = _now_iso()
+    try:
+        for uid in req.issue_ids:
+            params = {**updates, "_id": uid, "_updated_at": now}
+            db.execute(
+                text(f"UPDATE issues SET {set_clauses}, updated_at = :_updated_at WHERE id = :_id"),
+                params,
+            )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"一括更新に失敗: {str(e)}")
+
+    updated = []
+    for uid in req.issue_ids:
+        row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": uid}).fetchone()
+        if row:
+            updated.append(_issue_row_to_dict(row))
+    return {"updated": updated}
+
+
+# --- エッジ更新 ---
+
+class EdgeUpdateRequest(BaseModel):
+    label: Optional[str] = None
+    relation_type: Optional[Literal['direct_cause', 'indirect_cause', 'correlation', 'countermeasure']] = None
+
+
+@router.patch("/api/issues/edges/{edge_id}")
+def update_edge(edge_id: str, req: EdgeUpdateRequest, db=Depends(get_db)):
+    """エッジのラベル・関係種別を更新"""
+    updates = {}
+    if req.label is not None:
+        updates["label"] = req.label
+    if req.relation_type is not None:
+        updates["relation_type"] = req.relation_type
+    if not updates:
+        raise HTTPException(status_code=400, detail="更新フィールドがありません")
+
+    set_clauses = ", ".join([f"{k} = :{k}" for k in updates])
+    updates["_id"] = edge_id
+    result = db.execute(text(f"UPDATE issue_edges SET {set_clauses} WHERE id = :_id"), updates)
+    db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Edge not found")
+    return {"ok": True}
+
+
+# --- タイムラインメモ CRUD ---
+
+class NoteCreateRequest(BaseModel):
+    content: str
+    author: Optional[str] = None
+
+
+class NoteUpdateRequest(BaseModel):
+    content: str
+
+
+NOTE_SELECT_COLS = "id, issue_id, author, content, photo_path, created_at"
+NOTE_KEYS = [c.strip() for c in NOTE_SELECT_COLS.split(",")]
+
+
+def _note_row_to_dict(row) -> dict:
+    return dict(zip(NOTE_KEYS[:len(row)], row))
+
+
+@router.get("/api/issues/{issue_id}/notes")
+def list_notes(issue_id: str, db=Depends(get_db)):
+    """課題のタイムラインメモ一覧"""
+    rows = db.execute(
+        text(f"SELECT {NOTE_SELECT_COLS} FROM issue_notes WHERE issue_id = :id ORDER BY created_at ASC"),
+        {"id": issue_id},
+    ).fetchall()
+    return {"notes": [_note_row_to_dict(r) for r in rows]}
+
+
+@router.post("/api/issues/{issue_id}/notes")
+def create_note(issue_id: str, req: NoteCreateRequest, db=Depends(get_db)):
+    """タイムラインメモを作成"""
+    if not req.content.strip():
+        raise HTTPException(status_code=400, detail="content は必須です")
+    note_id = str(uuid.uuid4())
+    now = _now_iso()
+    db.execute(
+        text("INSERT INTO issue_notes (id, issue_id, author, content, created_at) VALUES (:id, :issue_id, :author, :content, :created_at)"),
+        {"id": note_id, "issue_id": issue_id, "author": req.author, "content": req.content.strip(), "created_at": now},
+    )
+    db.commit()
+    row = db.execute(text(f"SELECT {NOTE_SELECT_COLS} FROM issue_notes WHERE id = :id"), {"id": note_id}).fetchone()
+    return _note_row_to_dict(row)
+
+
+@router.patch("/api/issues/notes/{note_id}")
+def update_note(note_id: str, req: NoteUpdateRequest, db=Depends(get_db)):
+    """タイムラインメモを編集"""
+    if not req.content.strip():
+        raise HTTPException(status_code=400, detail="content は必須です")
+    result = db.execute(
+        text("UPDATE issue_notes SET content = :content WHERE id = :id"),
+        {"id": note_id, "content": req.content.strip()},
+    )
+    db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Note not found")
+    row = db.execute(text(f"SELECT {NOTE_SELECT_COLS} FROM issue_notes WHERE id = :id"), {"id": note_id}).fetchone()
+    return _note_row_to_dict(row)
+
+
+@router.delete("/api/issues/notes/{note_id}")
+def delete_note(note_id: str, db=Depends(get_db)):
+    """タイムラインメモを削除"""
+    result = db.execute(text("DELETE FROM issue_notes WHERE id = :id"), {"id": note_id})
+    db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return {"ok": True}
+
+
+# --- 関連メモ検索 ---
+
+@router.get("/api/issues/{issue_id}/related-memos")
+def related_memos(issue_id: str, top_k: int = 5, db=Depends(get_db)):
+    """ChromaDB類似検索で関連メモを返す"""
+    row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    issue = _issue_row_to_dict(row)
+    query = f"{issue['title']} {issue.get('description') or ''} {issue.get('context_memo') or ''}"
+    try:
+        indexer = IssueMemoIndexer()
+        results = indexer.search(query, project_name=issue["project_name"], top_k=top_k)
+        results = [r for r in results if r.get("issue_id") != issue_id]
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"[RelatedMemos] search failed: {e}", exc_info=True)
+        return {"results": []}
+
+
+# --- AI深掘り調査 ---
+
+class AIInvestigateRequest(BaseModel):
+    type: Literal['rca', 'impact', 'countermeasure']
+
+
+def _traverse_causal_chain(issue_id: str, db, max_depth: int = 3, max_nodes: int = 100) -> list[dict]:
+    """BFSで因果チェーンを走査し、関連課題を返す（fan-out制限付き）"""
+    visited = set()
+    queue = [(issue_id, 0)]
+    result = []
+    while queue and len(result) < max_nodes:
+        current_id, depth = queue.pop(0)
+        if current_id in visited or depth > max_depth:
+            continue
+        visited.add(current_id)
+        row = db.execute(
+            text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": current_id}
+        ).fetchone()
+        if row:
+            result.append(_issue_row_to_dict(row))
+        if depth < max_depth:
+            edges = db.execute(
+                text("SELECT from_id, to_id FROM issue_edges WHERE from_id = :id OR to_id = :id"),
+                {"id": current_id},
+            ).fetchall()
+            for e in edges:
+                neighbor = e[1] if e[0] == current_id else e[0]
+                if neighbor not in visited:
+                    queue.append((neighbor, depth + 1))
+    return result
+
+
+@router.post("/api/issues/{issue_id}/ai-investigate")
+def ai_investigate(issue_id: str, req: AIInvestigateRequest, db=Depends(get_db)):
+    """ノード単位のAI深掘り調査（RCA/影響分析/対策提案）"""
+    import concurrent.futures
+    from gemini_client import get_client
+    from google.genai import types
+
+    row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    target = _issue_row_to_dict(row)
+
+    chain = _traverse_causal_chain(issue_id, db)
+    chain_str = "\n".join(
+        f"- {iss['title']}（{iss['category']}/{iss['priority']}/{iss['status']}）: {(iss.get('description') or '')[:80]}"
+        for iss in chain
+    )
+
+    prompts = {
+        "rca": f"以下の課題の根本原因を「なぜなぜ分析」で特定してください。\n\n対象課題: {target['title']}\n説明: {target.get('description') or '未入力'}\n推定原因: {target.get('cause') or '未入力'}\n\n因果チェーン上の関連課題:\n{chain_str}\n\n5つの「なぜ」を使い、根本原因を特定し、具体的な対策を提案してください。日本語で200字以内。",
+        "impact": f"以下の課題が解決されない場合の波及影響を分析してください。\n\n対象課題: {target['title']}\n説明: {target.get('description') or '未入力'}\n影響: {target.get('impact') or '未入力'}\n\n因果チェーン上の関連課題:\n{chain_str}\n\n下流への波及影響を具体的に列挙してください。日本語で200字以内。",
+        "countermeasure": f"以下の課題に対する具体的な対策を提案してください。\n\n対象課題: {target['title']}\n説明: {target.get('description') or '未入力'}\n原因: {target.get('cause') or '未入力'}\n\n因果チェーン上の関連課題:\n{chain_str}\n\n即効性のある対策と根本対策をそれぞれ提案してください。日本語で200字以内。",
+    }
+
+    try:
+        client = get_client()
+        config = types.GenerateContentConfig(
+            system_instruction="建設PM/CMの課題分析アシスタント。簡潔かつ具体的に日本語で回答せよ。",
+            temperature=0.3,
+        )
+
+        def call_gemini():
+            return client.models.generate_content(
+                model="gemini-3.1-flash-lite", contents=prompts[req.type], config=config,
+            )
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(call_gemini)
+            response = future.result(timeout=30)
+
+        return {
+            "type": req.type,
+            "result": response.text.strip(),
+            "related_issue_ids": [iss["id"] for iss in chain if iss["id"] != issue_id],
+        }
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(status_code=504, detail="AI分析がタイムアウトしました（30秒）。後でお試しください。")
+    except Exception as e:
+        logger.error(f"[AIInvestigate] failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"AI分析エラー: {str(e)}")
+
+
+# --- AI因果推定 ---
+
+class AIInferCausationRequest(BaseModel):
+    issue_ids: list[str]
+
+
+@router.post("/api/issues/ai-infer-causation")
+def ai_infer_causation(req: AIInferCausationRequest, db=Depends(get_db)):
+    """選択したノード間の隠れた因果関係をAIで推定"""
+    import concurrent.futures
+    from gemini_client import get_client
+    from google.genai import types
+
+    if len(req.issue_ids) < 2 or len(req.issue_ids) > 8:
+        raise HTTPException(status_code=400, detail="2〜8件の課題IDを指定してください")
+
+    issues = []
+    for uid in req.issue_ids:
+        row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": uid}).fetchone()
+        if row:
+            issues.append(_issue_row_to_dict(row))
+
+    if len(issues) < 2:
+        raise HTTPException(status_code=400, detail="有効な課題が2件未満です")
+
+    existing_edges = []
+    for i, a in enumerate(issues):
+        for b in issues[i+1:]:
+            edge = db.execute(
+                text("SELECT id FROM issue_edges WHERE (from_id = :a AND to_id = :b) OR (from_id = :b AND to_id = :a)"),
+                {"a": a["id"], "b": b["id"]},
+            ).fetchone()
+            if edge:
+                existing_edges.append(f"{a['title']} ↔ {b['title']}")
+
+    issues_str = "\n".join(
+        f"- ID:{iss['id'][:8]} タイトル:{iss['title']} カテゴリ:{iss['category']} 説明:{(iss.get('description') or '')[:60]}"
+        for iss in issues
+    )
+    existing_str = "\n".join(existing_edges) if existing_edges else "（なし）"
+
+    prompt = f"""以下の建設課題間に隠れた因果関係はありますか？
+
+課題一覧:
+{issues_str}
+
+既存の因果関係:
+{existing_str}
+
+以下のJSON配列のみ返答してください（最大5件）。因果関係がなければ空配列[]。
+[{{"from_id":"ID先頭8文字","to_id":"ID先頭8文字","confidence":0.8,"reason":"20字以内","suggested_label":"理由ラベル"}}]
+"""
+
+    try:
+        client = get_client()
+        config = types.GenerateContentConfig(
+            system_instruction="建設PM/CMの因果分析アシスタント。指定のJSON形式のみで返答せよ。",
+            temperature=0.2,
+        )
+
+        def call_gemini():
+            return client.models.generate_content(
+                model="gemini-3.1-flash-lite", contents=prompt, config=config,
+            )
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(call_gemini)
+            response = future.result(timeout=30)
+
+        import re as _re
+        raw = response.text.strip()
+        raw = _re.sub(r'^```(?:json)?\s*', '', raw)
+        raw = _re.sub(r'\s*```$', '', raw).strip()
+        start = raw.find('[')
+        end = raw.rfind(']')
+        if start != -1 and end != -1:
+            raw = raw[start:end + 1]
+
+        inferred = json.loads(raw) if raw.startswith('[') else []
+        id_map = {iss["id"][:8]: iss["id"] for iss in issues}
+        resolved = []
+        for edge in inferred[:5]:
+            from_full = id_map.get(edge.get("from_id", ""))
+            to_full = id_map.get(edge.get("to_id", ""))
+            if from_full and to_full and from_full != to_full:
+                resolved.append({
+                    "from_id": from_full, "to_id": to_full,
+                    "confidence": edge.get("confidence", 0.5),
+                    "reason": edge.get("reason", ""),
+                    "suggested_label": edge.get("suggested_label", ""),
+                })
+        return {"inferred_edges": resolved}
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(status_code=504, detail="AI分析がタイムアウトしました")
+    except Exception as e:
+        logger.error(f"[AIInferCausation] failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"AI推定エラー: {str(e)}")
+
+
+# --- グラフ健全性チェック ---
+
+@router.post("/api/issues/{project_name}/health-check")
+def health_check(project_name: str, db=Depends(get_db)):
+    """グラフの健全性チェック: 孤立ノード、ループ、未解決critical"""
+    import concurrent.futures
+    from gemini_client import get_client
+    from google.genai import types
+
+    issue_rows = db.execute(
+        text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE project_name = :pn ORDER BY created_at ASC"),
+        {"pn": project_name},
+    ).fetchall()
+    issues = [_issue_row_to_dict(r) for r in issue_rows]
+    issue_ids = {iss["id"] for iss in issues}
+
+    edge_rows = db.execute(text(f"SELECT {EDGE_SELECT_COLS} FROM issue_edges")).fetchall()
+    edges = [_edge_row_to_dict(r) for r in edge_rows if r[1] in issue_ids and r[2] in issue_ids]
+
+    # 1. 孤立ノード
+    connected_ids = set()
+    for e in edges:
+        connected_ids.add(e["from_id"])
+        connected_ids.add(e["to_id"])
+    orphans = [iss for iss in issues if iss["id"] not in connected_ids]
+
+    # 2. ループ検出（DFS）
+    adjacency: dict[str, list[str]] = {iss["id"]: [] for iss in issues}
+    for e in edges:
+        adjacency.setdefault(e["from_id"], []).append(e["to_id"])
+
+    loops: list[list[str]] = []
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {nid: WHITE for nid in adjacency}
+    path: list[str] = []
+    id_to_title = {iss["id"]: iss["title"] for iss in issues}
+
+    def _dfs(node):
+        color[node] = GRAY
+        path.append(node)
+        for neighbor in adjacency.get(node, []):
+            if color.get(neighbor) == GRAY:
+                cycle_start = path.index(neighbor)
+                loops.append([id_to_title.get(n, n) for n in path[cycle_start:]])
+            elif color.get(neighbor) == WHITE:
+                _dfs(neighbor)
+        path.pop()
+        color[node] = BLACK
+
+    for node in adjacency:
+        if color[node] == WHITE:
+            _dfs(node)
+
+    # 3. 未解決critical
+    unresolved = [iss for iss in issues if iss["priority"] == "critical" and iss["status"] != "解決済み"]
+
+    # 4. AIサジェスト（上位50ノードのみ）
+    ai_suggestions = []
+    if len(issues) >= 3:
+        top_issues = issues[:50]
+        issues_str = "\n".join(f"- {iss['title']}（{iss['category']}/{iss['status']}）" for iss in top_issues)
+        edges_str = "\n".join(
+            f"- {id_to_title.get(e['from_id'], '?')} → {id_to_title.get(e['to_id'], '?')}" for e in edges[:30]
+        ) or "（なし）"
+        prompt = f"以下の建設プロジェクトの課題グラフで見落とされている因果関係を最大5件、JSON配列で返してください。\n\n課題:\n{issues_str}\n\n既存因果:\n{edges_str}\n\n[{{\"from_title\":\"A\",\"to_title\":\"B\",\"reason\":\"理由\"}}] なければ[]"
+        try:
+            client = get_client()
+            config = types.GenerateContentConfig(
+                system_instruction="建設PM/CMの因果分析アシスタント。JSON形式のみで返答。", temperature=0.2,
+            )
+            def call_gemini():
+                return client.models.generate_content(model="gemini-3.1-flash-lite", contents=prompt, config=config)
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(call_gemini)
+                response = future.result(timeout=30)
+            import re as _re
+            raw = response.text.strip()
+            raw = _re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = _re.sub(r'\s*```$', '', raw).strip()
+            s, e2 = raw.find('['), raw.rfind(']')
+            if s != -1 and e2 != -1:
+                raw = raw[s:e2+1]
+            ai_suggestions = (json.loads(raw) if raw.startswith('[') else [])[:5]
+        except Exception as e:
+            logger.error(f"[HealthCheck] AI suggestions failed: {e}")
+
+    return {
+        "orphans": orphans, "loops": loops, "unresolved_criticals": unresolved,
+        "ai_suggestions": ai_suggestions,
+        "summary": {
+            "total_issues": len(issues), "total_edges": len(edges),
+            "orphan_count": len(orphans), "loop_count": len(loops),
+            "critical_unresolved_count": len(unresolved),
+        },
+    }

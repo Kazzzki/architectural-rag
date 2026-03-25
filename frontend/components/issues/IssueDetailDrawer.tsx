@@ -4,6 +4,8 @@ import React, { useEffect, useState } from 'react';
 import { authFetch } from '@/lib/api';
 import { Issue } from '@/lib/issue_types';
 import { X } from 'lucide-react';
+import NoteTimeline from './NoteTimeline';
+import AIInvestigatePanel from './AIInvestigatePanel';
 
 interface IssueDetailDrawerProps {
   issue: Issue | null;
@@ -187,6 +189,12 @@ export default function IssueDetailDrawer({ issue, onClose, onUpdated }: IssueDe
               <div className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 leading-relaxed">{issue.impact}</div>
             </div>
           )}
+
+          {/* タイムラインメモ */}
+          <NoteTimeline issueId={issue.id} />
+
+          {/* AI調査 */}
+          <AIInvestigatePanel issue={issue} />
         </div>
 
         {/* フッター: 折りたたみトグル */}
