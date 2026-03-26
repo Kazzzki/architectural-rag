@@ -48,9 +48,7 @@ export default function BatchActionBar({
     if (!window.confirm(`${selectedIds.length}件の課題を削除しますか？この操作は取り消せません。`)) return;
     setLoading(true);
     try {
-      for (const id of selectedIds) {
-        await authFetch(`/api/issues/${id}`, { method: 'DELETE' });
-      }
+      await Promise.all(selectedIds.map((id) => authFetch(`/api/issues/${id}`, { method: 'DELETE' })));
       onRefresh();
       onClearSelection();
     } finally {

@@ -17,6 +17,7 @@ export default function NoteTimeline({ issueId }: NoteTimelineProps) {
   const [editContent, setEditContent] = useState('');
 
   useEffect(() => {
+    setNotes([]); // 前のissueのデータをクリアしてからフェッチ
     fetchNotes();
   }, [issueId]);
 

@@ -207,4 +207,18 @@ function IssueNode({ data }: NodeProps<IssueNodeData>) {
   );
 }
 
-export default memo(IssueNode);
+export default memo(IssueNode, (prev, next) => {
+  const p = prev.data;
+  const n = next.data;
+  return (
+    p.issue.id === n.issue.id &&
+    p.issue.updated_at === n.issue.updated_at &&
+    p.issue.title === n.issue.title &&
+    p.issue.status === n.issue.status &&
+    p.issue.priority === n.issue.priority &&
+    p.issue.context_memo === n.issue.context_memo &&
+    p.isSelected === n.isSelected &&
+    p.hiddenChildCount === n.hiddenChildCount &&
+    p.hasChildren === n.hasChildren
+  );
+});
