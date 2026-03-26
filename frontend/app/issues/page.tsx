@@ -153,7 +153,7 @@ function ProjectGraphView({
   const [loading, setLoading] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'none' | 'chat' | 'filter'>('none');
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
-  const [activeTab, setActiveTab] = useState<'graph' | 'search'>('graph');
+  const [activeTab, setActiveTab] = useState<'graph' | 'search' | 'mindmap'>('graph');
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [showHealthCheck, setShowHealthCheck] = useState(false);
   const [showAIInfer, setShowAIInfer] = useState(false);
@@ -227,6 +227,17 @@ function ProjectGraphView({
             <Search size={13} />
             <span className="hidden sm:inline">メモ検索</span>
           </button>
+          <button
+            onClick={() => setActiveTab('mindmap')}
+            className={`hidden md:flex items-center gap-1 px-3 py-1.5 text-xs transition-colors ${
+              activeTab === 'mindmap'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Map size={13} />
+            <span className="hidden sm:inline">マインドマップ</span>
+          </button>
         </div>
 
         {/* ナビゲーション */}
@@ -287,7 +298,7 @@ function ProjectGraphView({
       )}
 
       {/* グラフタブ */}
-      {activeTab === 'graph' && (
+      {(activeTab === 'graph' || activeTab === 'mindmap') && (
         <>
           {/* フィルターバー（デスクトップのみ） */}
           <div className="hidden md:block">
@@ -337,6 +348,7 @@ function ProjectGraphView({
                   onSelectionChange={setSelectedNodeIds}
                   onIssueUpdated={handleIssueUpdated}
                   fitViewTrigger={fitViewTrigger}
+                  layoutMode={activeTab === 'mindmap' ? 'mindmap' : 'graph'}
                 />
                 {/* バッチ操作バー */}
                 <BatchActionBar

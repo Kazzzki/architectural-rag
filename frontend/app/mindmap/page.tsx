@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { authFetch } from '../../lib/api';
 import { ReactFlowProvider } from 'reactflow';
 import MindmapCanvas from '../components/mindmap/MindmapCanvas';
 import GoalSearchBar from '../components/mindmap/GoalSearchBar';
-import { Building2, ArrowLeft, Plus, Trash2, Clock, Target, ChevronDown, Eye, FolderOpen, Layers, ClipboardList } from 'lucide-react';
+import { Building2, ArrowLeft, Plus, Trash2, Clock, Target, ChevronDown, Eye, FolderOpen, Layers, ClipboardList, Upload, RefreshCw, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { CATEGORY_COLORS } from '@/lib/mindmapConstants';
 
@@ -57,6 +57,82 @@ export default function MindmapDashboard() {
     const [previewTemplate, setPreviewTemplate] = useState<TemplateDetail | null>(null);
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+    // 課題→マインドマップ変換
+    const [showFromIssuesDialog, setShowFromIssuesDialog] = useState(false);
+    const [issueProjects, setIssueProjects] = useState<{ name: string; count: number }[]>([]);
+    const [convertingIssues, setConvertingIssues] = useState(false);
+
+    // Md→マインドマップ
+    const mdFileInputRef = React.useRef<HTMLInputElement>(null);
+    const [mdUploading, setMdUploading] = useState(false);
+
+    // 課題プロジェクト一覧を取得
+    const loadIssueProjects = useCallback(async () => {
+        try {
+            const res = await authFetch('/api/issues');
+            if (res.ok) {
+                const data = await res.json();
+                const counts: Record<string, number> = {};
+                (data.issues || []).forEach((iss: { project_name: string }) => {
+                    counts[iss.project_name] = (counts[iss.project_name] ?? 0) + 1;
+                });
+                setIssueProjects(
+                    (data.projects || []).map((name: string) => ({ name, count: counts[name] ?? 0 }))
+                );
+            }
+        } catch {}
+    }, []);
+
+    // 課題→マインドマップ変換実行
+    async function handleConvertFromIssues(projectName: string) {
+        setConvertingIssues(true);
+        try {
+            const res = await authFetch(`${API_BASE}/api/mindmap/from-issues?project_name=${encodeURIComponent(projectName)}`, {
+                method: 'POST',
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setShowFromIssuesDialog(false);
+                router.push(`/mindmap/projects/${data.project_id}`);
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert(err.detail || '変換に失敗しました');
+            }
+        } catch (e) {
+            alert('変換エラーが発生しました');
+        } finally {
+            setConvertingIssues(false);
+        }
+    }
+
+    // Mdアップロード→マインドマップ変換
+    async function handleMdUpload(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setMdUploading(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('project_name', file.name.replace(/\.(md|txt|markdown)$/i, ''));
+            const res = await authFetch(`${API_BASE}/api/mindmap/from-markdown`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (res.ok) {
+                const data = await res.json();
+                router.push(`/mindmap/projects/${data.project_id}`);
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert(err.detail || 'Md変換に失敗しました');
+            }
+        } catch {
+            alert('アップロードエラーが発生しました');
+        } finally {
+            setMdUploading(false);
+            e.target.value = '';
+        }
+    }
+
     // Fetch data
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -78,6 +154,11 @@ export default function MindmapDashboard() {
     useEffect(() => {
         loadData();
     }, [loadData]);
+
+    // 課題ダイアログが開いたら課題プロジェクト一覧を取得
+    useEffect(() => {
+        if (showFromIssuesDialog) loadIssueProjects();
+    }, [showFromIssuesDialog, loadIssueProjects]);
 
     // Create project
     const handleCreateProject = async (name: string, templateId: string, buildingType: string) => {
@@ -146,6 +227,30 @@ export default function MindmapDashboard() {
                     </div>
 
                     <div className="flex items-center gap-3">
+                        {/* 課題→マインドマップ変換 */}
+                        <button
+                            onClick={() => setShowFromIssuesDialog(true)}
+                            className="flex items-center gap-2 px-4 py-2 bg-white border border-emerald-200 text-emerald-600 rounded-lg text-sm font-medium hover:bg-emerald-50 transition-all shadow-sm"
+                        >
+                            <RefreshCw className="w-4 h-4" />
+                            課題→マップ
+                        </button>
+                        {/* Mdアップロード→マインドマップ */}
+                        <button
+                            onClick={() => mdFileInputRef.current?.click()}
+                            disabled={mdUploading}
+                            className="flex items-center gap-2 px-4 py-2 bg-white border border-amber-200 text-amber-600 rounded-lg text-sm font-medium hover:bg-amber-50 transition-all shadow-sm disabled:opacity-50"
+                        >
+                            {mdUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                            {mdUploading ? 'AI分析中...' : 'Mdから作成'}
+                        </button>
+                        <input
+                            ref={mdFileInputRef}
+                            type="file"
+                            accept=".md,.txt,.markdown"
+                            className="hidden"
+                            onChange={handleMdUpload}
+                        />
                         <Link
                             href="/issues"
                             className="flex items-center gap-2 px-4 py-2 bg-white border border-blue-200 text-blue-600 rounded-lg text-sm font-medium hover:bg-blue-50 transition-all shadow-sm"
@@ -387,6 +492,48 @@ export default function MindmapDashboard() {
                     />
                 )
             }
+
+            {/* 課題→マインドマップ選択ダイアログ */}
+            {showFromIssuesDialog && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowFromIssuesDialog(false)}>
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="text-lg font-semibold text-gray-800 mb-1">課題プロジェクトを選択</h3>
+                        <p className="text-xs text-gray-500 mb-4">課題因果グラフのデータをマインドマップとして表示します</p>
+                        {issueProjects.length === 0 ? (
+                            <div className="text-center py-6">
+                                <p className="text-sm text-gray-400 mb-2">課題プロジェクトが見つかりません</p>
+                                <Link href="/issues" className="text-sm text-blue-600 hover:underline">
+                                    課題因果グラフで課題を追加
+                                </Link>
+                            </div>
+                        ) : (
+                            <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                                {issueProjects.map(({ name, count }) => (
+                                    <button
+                                        key={name}
+                                        onClick={() => handleConvertFromIssues(name)}
+                                        disabled={convertingIssues}
+                                        className="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl hover:border-emerald-400 hover:bg-emerald-50 transition-colors text-left disabled:opacity-50"
+                                    >
+                                        <ClipboardList className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-sm font-medium text-gray-800 truncate">{name}</div>
+                                            <div className="text-xs text-gray-400">{count}件の課題</div>
+                                        </div>
+                                        {convertingIssues && <Loader2 className="w-4 h-4 text-emerald-500 animate-spin" />}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        <button
+                            onClick={() => setShowFromIssuesDialog(false)}
+                            className="w-full mt-4 text-sm text-gray-500 border border-gray-200 rounded-lg py-2 hover:bg-gray-50"
+                        >
+                            キャンセル
+                        </button>
+                    </div>
+                </div>
+            )}
         </div >
     );
 }
