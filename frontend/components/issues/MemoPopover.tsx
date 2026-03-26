@@ -44,7 +44,7 @@ export default function MemoPopover({ issue, onClose, onUpdated }: MemoPopoverPr
 
   return (
     <div className="nodrag nopan absolute z-50 bg-white border border-yellow-300 rounded-lg shadow-lg p-3 min-w-[240px] max-w-[320px]"
-      style={{ top: -10, right: -260 }}
+      style={{ top: 0, left: '100%', marginLeft: 8 }}
     >
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-gray-500">メモ</span>

@@ -89,18 +89,37 @@ function buildMindmapLayout(nodes: Node[], edges: Edge[], issues: Issue[]): Node
     groups[cat].push(n);
   }
 
+  // 全ノードを含むdagreレイアウト（カテゴリ間エッジも含む）
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: 'LR', nodesep: 50, ranksep: 150 });
+  nodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
+  edges.forEach((e) => g.setEdge(e.source, e.target));
+  dagre.layout(g);
+
+  // dagreの結果を取得し、カテゴリ別にy方向オフセットを追加
   const result: Node[] = [];
   let yOffset = 0;
-  const CATEGORY_GAP = 40;
-  const ROW_HEIGHT = NODE_H + 30;
+  const CATEGORY_GAP = 60;
 
+  // カテゴリごとにdagreの結果を調整
   for (const cat of categories) {
     const catNodes = groups[cat];
-    if (!catNodes || catNodes.length === 0) continue; // 空カテゴリガード
+    if (!catNodes || catNodes.length === 0) continue;
 
     const color = CATEGORY_COLORS[cat] || '#6b7280';
 
-    // カテゴリラベルノード（zIndex: -1で背景配置）
+    // カテゴリ内のdagreによるy座標の範囲を計算
+    let minY = Infinity, maxY = -Infinity;
+    for (const n of catNodes) {
+      const pos = g.node(n.id);
+      if (pos.y - NODE_H / 2 < minY) minY = pos.y - NODE_H / 2;
+      if (pos.y + NODE_H / 2 > maxY) maxY = pos.y + NODE_H / 2;
+    }
+
+    const categoryHeight = maxY - minY;
+
+    // カテゴリラベルノード
     result.push({
       id: `cat-label-${cat}`,
       type: 'categoryLabel',
@@ -111,31 +130,19 @@ function buildMindmapLayout(nodes: Node[], edges: Edge[], issues: Issue[]): Node
       style: { zIndex: -1 },
     } as Node);
 
-    // カテゴリ内をdagreで横配置
-    const g = new dagre.graphlib.Graph();
-    g.setDefaultEdgeLabel(() => ({}));
-    g.setGraph({ rankdir: 'LR', nodesep: 40, ranksep: 150 });
-    catNodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
-    // カテゴリ内エッジのみ
-    const catIds = new Set(catNodes.map((n) => n.id));
-    edges.forEach((e) => {
-      if (catIds.has(e.source) && catIds.has(e.target)) g.setEdge(e.source, e.target);
-    });
-    dagre.layout(g);
-
-    const maxY = { value: 0 };
+    // ノードを配置（dagreのx座標を保持、y座標をオフセット）
     for (const n of catNodes) {
       const pos = g.node(n.id);
-      const x = pos.x - NODE_W / 2;
-      const y = yOffset + (pos.y - NODE_H / 2);
-      result.push({ ...n, position: { x, y } });
-      if (pos.y + NODE_H / 2 > maxY.value) maxY.value = pos.y + NODE_H / 2;
+      result.push({
+        ...n,
+        position: { x: pos.x - NODE_W / 2, y: yOffset + (pos.y - minY) },
+      });
     }
 
-    yOffset += maxY.value + CATEGORY_GAP;
+    yOffset += categoryHeight + CATEGORY_GAP;
   }
 
-  // 未分類ノード（カテゴリが4つ以外）
+  // 未分類ノード
   const placedIds = new Set(result.map((n) => n.id));
   const unplaced = nodes.filter((n) => !placedIds.has(n.id));
   if (unplaced.length > 0) {
@@ -150,7 +157,12 @@ function buildMindmapLayout(nodes: Node[], edges: Edge[], issues: Issue[]): Node
     } as Node);
 
     unplaced.forEach((n, i) => {
-      result.push({ ...n, position: { x: i * (NODE_W + 40), y: yOffset + 40 } });
+      const pos = g.node(n.id);
+      if (pos) {
+        result.push({ ...n, position: { x: pos.x - NODE_W / 2, y: yOffset + 40 } });
+      } else {
+        result.push({ ...n, position: { x: i * (NODE_W + 40), y: yOffset + 40 } });
+      }
     });
   }
 
@@ -306,8 +318,8 @@ function IssueCausalGraphInner({
           onTitleUpdated: onIssueUpdated,
           onMemoUpdated: onIssueUpdated,
           onContextMenu: (issue: Issue) => {
-            // 「...」ボタンクリック時 — ノード位置にメニュー表示
-            setContextMenu({ x: iss.pos_x + NODE_W, y: iss.pos_y, issue });
+            // 「...」ボタンクリック時 — 画面中央にメニュー表示（ワールド座標ではなくビューポート座標）
+            setContextMenu({ x: window.innerWidth / 2, y: window.innerHeight / 3, issue });
           },
         },
       };
@@ -387,6 +399,17 @@ function IssueCausalGraphInner({
     onSelectionChange(nodeIds);
   }, [onSelectionChange]);
 
+  // B1: Delete/Backspaceキーでノード削除
+  const handleNodesDelete = useCallback(async (deletedNodes: Node[]) => {
+    for (const node of deletedNodes) {
+      if (node.id.startsWith('cat-label-')) continue; // カテゴリラベルは削除しない
+      try {
+        await authFetch(`/api/issues/${node.id}`, { method: 'DELETE' });
+      } catch {}
+    }
+    onRefresh();
+  }, [onRefresh]);
+
   const handlePaneClick = useCallback(() => {
     setContextMenu(null);
   }, []);
@@ -403,7 +426,9 @@ function IssueCausalGraphInner({
         onConnect={handleConnect}
         onNodeContextMenu={handleContextMenu}
         onSelectionChange={handleSelectionChange}
+        onNodesDelete={handleNodesDelete}
         onPaneClick={handlePaneClick}
+        deleteKeyCode={['Backspace', 'Delete']}
         selectionOnDrag
         fitView
         fitViewOptions={{ padding: 0.2 }}
