@@ -24,11 +24,32 @@ import DeletableEdge from './DeletableEdge';
 import NodeContextMenu from './NodeContextMenu';
 import type { PriorityFilter } from './IssueFilterBar';
 
-const NODE_TYPES = { issueNode: IssueNodeComponent };
+// カテゴリラベル用カスタムノード
+function CategoryLabelNode({ data }: { data: { label: string; color: string } }) {
+  return (
+    <div style={{
+      fontSize: 13, fontWeight: 700, color: data.color,
+      background: `${data.color}10`, borderLeft: `3px solid ${data.color}`,
+      padding: '4px 10px', borderRadius: 4, userSelect: 'none', whiteSpace: 'nowrap',
+    }}>
+      {data.label}
+    </div>
+  );
+}
+
+const NODE_TYPES = { issueNode: IssueNodeComponent, categoryLabel: CategoryLabelNode };
 const EDGE_TYPES = { deletable: DeletableEdge };
 
 const NODE_W = 220;
 const NODE_H = 80;
+
+// カテゴリ別色定義
+const CATEGORY_COLORS: Record<string, string> = {
+  '工程': '#3b82f6',
+  'コスト': '#f59e0b',
+  '品質': '#22c55e',
+  '安全': '#ef4444',
+};
 
 // エッジ種類別スタイル
 const EDGE_STYLES: Record<string, { stroke: string; strokeWidth: number; strokeDasharray?: string }> = {
@@ -51,6 +72,91 @@ function buildDagreLayout(nodes: Node[], edges: Edge[]): Node[] {
   });
 }
 
+/**
+ * マインドマップ風レイアウト: カテゴリ別に縦に並べ、各カテゴリ内は横展開。
+ * カテゴリラベルノードも追加して返す。
+ */
+function buildMindmapLayout(nodes: Node[], edges: Edge[], issues: Issue[]): Node[] {
+  // カテゴリ別にノードをグループ分け
+  const categories = ['工程', 'コスト', '品質', '安全'];
+  const groups: Record<string, Node[]> = {};
+  const issueMap = new Map(issues.map((i) => [i.id, i]));
+
+  for (const n of nodes) {
+    const iss = issueMap.get(n.id);
+    const cat = iss?.category || '工程';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(n);
+  }
+
+  const result: Node[] = [];
+  let yOffset = 0;
+  const CATEGORY_GAP = 40;
+  const ROW_HEIGHT = NODE_H + 30;
+
+  for (const cat of categories) {
+    const catNodes = groups[cat];
+    if (!catNodes || catNodes.length === 0) continue; // 空カテゴリガード
+
+    const color = CATEGORY_COLORS[cat] || '#6b7280';
+
+    // カテゴリラベルノード（zIndex: -1で背景配置）
+    result.push({
+      id: `cat-label-${cat}`,
+      type: 'categoryLabel',
+      position: { x: -120, y: yOffset + 10 },
+      data: { label: cat, color },
+      draggable: false,
+      selectable: false,
+      style: { zIndex: -1 },
+    } as Node);
+
+    // カテゴリ内をdagreで横配置
+    const g = new dagre.graphlib.Graph();
+    g.setDefaultEdgeLabel(() => ({}));
+    g.setGraph({ rankdir: 'LR', nodesep: 40, ranksep: 150 });
+    catNodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
+    // カテゴリ内エッジのみ
+    const catIds = new Set(catNodes.map((n) => n.id));
+    edges.forEach((e) => {
+      if (catIds.has(e.source) && catIds.has(e.target)) g.setEdge(e.source, e.target);
+    });
+    dagre.layout(g);
+
+    const maxY = { value: 0 };
+    for (const n of catNodes) {
+      const pos = g.node(n.id);
+      const x = pos.x - NODE_W / 2;
+      const y = yOffset + (pos.y - NODE_H / 2);
+      result.push({ ...n, position: { x, y } });
+      if (pos.y + NODE_H / 2 > maxY.value) maxY.value = pos.y + NODE_H / 2;
+    }
+
+    yOffset += maxY.value + CATEGORY_GAP;
+  }
+
+  // 未分類ノード（カテゴリが4つ以外）
+  const placedIds = new Set(result.map((n) => n.id));
+  const unplaced = nodes.filter((n) => !placedIds.has(n.id));
+  if (unplaced.length > 0) {
+    result.push({
+      id: 'cat-label-other',
+      type: 'categoryLabel',
+      position: { x: -120, y: yOffset + 10 },
+      data: { label: 'その他', color: '#6b7280' },
+      draggable: false,
+      selectable: false,
+      style: { zIndex: -1 },
+    } as Node);
+
+    unplaced.forEach((n, i) => {
+      result.push({ ...n, position: { x: i * (NODE_W + 40), y: yOffset + 40 } });
+    });
+  }
+
+  return result;
+}
+
 interface IssueCausalGraphProps {
   issues: Issue[];
   edges: IssueEdge[];
@@ -61,11 +167,13 @@ interface IssueCausalGraphProps {
   onSelectionChange: (nodeIds: string[]) => void;
   onIssueUpdated: (updated: Issue) => void;
   fitViewTrigger?: number;
+  layoutMode?: 'graph' | 'mindmap';
 }
 
 function IssueCausalGraphInner({
   issues, edges, priorityFilter, selectedNodeIds,
   onNodeClick, onRefresh, onSelectionChange, onIssueUpdated, fitViewTrigger,
+  layoutMode = 'graph',
 }: IssueCausalGraphProps) {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges] = useEdgesState([]);
@@ -77,6 +185,15 @@ function IssueCausalGraphInner({
 
   // issue Map for O(1) lookup (MiniMap最適化)
   const issueMap = useMemo(() => new Map(issues.map((i) => [i.id, i])), [issues]);
+
+  // layoutMode 切り替え時に fitView を実行
+  const prevLayoutMode = useRef(layoutMode);
+  useEffect(() => {
+    if (prevLayoutMode.current !== layoutMode) {
+      prevLayoutMode.current = layoutMode;
+      initialFitDone.current = false; // 再レイアウト後にfitViewをトリガー
+    }
+  }, [layoutMode]);
 
   useEffect(() => {
     if (fitViewTrigger !== undefined && fitViewTrigger > 0) fitView({ padding: 0.2 });
@@ -221,7 +338,13 @@ function IssueCausalGraphInner({
         };
       });
 
-    const finalNodes = needsLayout ? buildDagreLayout(nodes, visibleEdges) : nodes;
+    // レイアウト切り替え: マインドマップモードは常に自動レイアウト
+    let finalNodes: Node[];
+    if (layoutMode === 'mindmap') {
+      finalNodes = buildMindmapLayout(nodes, visibleEdges, visibleIssues);
+    } else {
+      finalNodes = needsLayout ? buildDagreLayout(nodes, visibleEdges) : nodes;
+    }
     setRfNodes(finalNodes);
     setRfEdges(visibleEdges);
 
@@ -229,7 +352,7 @@ function IssueCausalGraphInner({
       initialFitDone.current = true;
       setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
     }
-  }, [issues, edges, priorityFilter, visibleIssues, hiddenChildCounts, issueIdsWithChildren, selectedSet, onNodeClick, handleCollapseToggle, handleDeleteEdge, onIssueUpdated, fitView]);
+  }, [issues, edges, priorityFilter, visibleIssues, hiddenChildCounts, issueIdsWithChildren, selectedSet, onNodeClick, handleCollapseToggle, handleDeleteEdge, onIssueUpdated, fitView, layoutMode]);
 
   const handleNodeDragStop = useCallback(async (_: React.MouseEvent, node: Node) => {
     try {

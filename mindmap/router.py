@@ -1659,11 +1659,13 @@ def create_mindmap_from_issues(project_name: str):
             yaml.dump(template_data, f, allow_unicode=True, default_flow_style=False)
         logger.info(f"[FromIssues] Saved template: {template_path}")
 
-        # プロジェクト作成
+        # プロジェクト作成（テンプレートをロードし直して正しいシグネチャで呼び出し）
+        # template_loader のキャッシュをクリアして保存直後のYAMLを確実に読む
+        template_loader._template_cache.pop(template_id, None) if hasattr(template_loader, '_template_cache') else None
+        template_obj = _load_template(template_id)
         project_id = project_store.create_project(
-            name=f"課題マップ: {project_name}",
-            template_id=template_id,
-            description=f"課題因果グラフ '{project_name}' から自動変換（{len(nodes)}ノード, {len(mm_edges)}エッジ）",
+            f"課題マップ: {project_name}",
+            template_obj,
         )
 
         return {
@@ -1767,12 +1769,10 @@ async def create_mindmap_from_markdown(
         yaml.dump(template_data, f, allow_unicode=True, default_flow_style=False)
     logger.info(f"[FromMarkdown] Saved template: {template_path}")
 
-    # プロジェクト作成
-    project_id = project_store.create_project(
-        name=safe_name,
-        template_id=template_id,
-        description=f"Markdownファイル '{filename}' から自動変換（{len(ai_nodes)}ノード, {len(ai_edges)}エッジ）",
-    )
+    # プロジェクト作成（テンプレートをロードし直して正しいシグネチャで呼び出し）
+    template_loader._template_cache.pop(template_id, None) if hasattr(template_loader, '_template_cache') else None
+    template_obj = _load_template(template_id)
+    project_id = project_store.create_project(safe_name, template_obj)
 
     return {
         "project_id": project_id,
