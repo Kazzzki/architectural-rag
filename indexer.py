@@ -593,7 +593,6 @@ def process_and_index_file(
         "source_pdf_name": source_pdf_name,
         "drive_file_id":   drive_file_id,
         "category":        category,
-        "page_no":         page_no,
         "tags_str":        tags_str,
         "rel_path":        rel_path,
         "version_id":      version_id,

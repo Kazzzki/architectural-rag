@@ -3,7 +3,7 @@ import re
 import hashlib
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +12,9 @@ _SENTENCE_END_RE = re.compile(r'(?<=[。！？\n])')
 
 # ヘッダー行パターン（lookahead で分割するのでヘッダー行が各チャンクの先頭に残る）
 _HEADER_SPLIT_RE = re.compile(r'(?m)(?=^(?:#{1,3}\s+|\[\[PAGE_\d+\]\]))', )
+
+# [[PAGE_N]] マーカーからページ番号を抽出する正規表現
+_PAGE_MARKER_RE = re.compile(r'\[\[PAGE_(\d+)\]\]')
 
 
 class ChunkBuilder:
@@ -65,26 +68,37 @@ class ChunkBuilder:
 
         # 2. Section Chunks
         # lookahead split でヘッダー行を各セクションの先頭に保持する
-        sections = self._split_by_headers(md_text)
+        raw_sections = self._split_by_headers(md_text)
+
+        # [[PAGE_N]] だけのセクションをマージし、ページ番号を後続セクションに引き継ぐ
+        sections = self._merge_page_marker_sections(raw_sections)
+
         section_chunks = []
-        for i, sec_text in enumerate(sections):
+        for i, (sec_text, sec_page) in enumerate(sections):
             stripped = sec_text.strip()
             if len(stripped) < 50:
                 continue
 
             # セクションタイトルを1行目から抽出
             section_title = self._extract_title(stripped.splitlines()[0])
+
+            # セクション内に追加の [[PAGE_N]] マーカーがあればそこからもページ番号を抽出
+            section_page = self._extract_page_number(stripped) or sec_page
+
+            # セクションコンテンツから [[PAGE_N]] マーカーを除去（メタデータに移行済み）
+            clean_content = _PAGE_MARKER_RE.sub('', stripped).strip()
+
             # 決定論的ID
             chunk_id = f"section_{version_id}_{i}"
             chunk = {
                 "id": chunk_id,
                 "version_id": version_id,
                 "chunk_type": "section",
-                "content": stripped,
+                "content": clean_content,
                 "metadata": {
                     "section_index": i,
                     "section_title": section_title,
-                    "page_number": None,   # セクション単位では不定（leafに引き継ぐ）
+                    "page_number": section_page,
                     "source_file": source_file,
                     **source_metadata
                 }
@@ -93,24 +107,40 @@ class ChunkBuilder:
             all_chunks.append(chunk)
 
             # 3. Leaf Chunks (Sectionをさらに細分化)
+            # セクション内の [[PAGE_N]] マーカー位置をスキャンし、各リーフにページ番号を割り当て
+            page_markers = self._scan_page_markers(stripped)
             leaves = self._split_into_leaves(stripped, self.leaf_size, self.leaf_overlap)
+            char_offset = 0
             for j, leaf_text in enumerate(leaves):
                 leaf_stripped = leaf_text.strip()
                 # 50文字未満の極短チャンクはスキップ
                 if len(leaf_stripped) < 50:
                     continue
+
+                # リーフの開始位置に基づいてページ番号を決定
+                leaf_start = stripped.find(leaf_stripped, char_offset)
+                if leaf_start < 0:
+                    leaf_start = char_offset
+                leaf_page = self._resolve_page_at(leaf_start, page_markers, section_page)
+                char_offset = leaf_start + 1
+
+                # リーフコンテンツから [[PAGE_N]] マーカーを除去
+                clean_leaf = _PAGE_MARKER_RE.sub('', leaf_stripped).strip()
+                if len(clean_leaf) < 50:
+                    continue
+
                 # 決定論的ID
                 leaf_id = f"leaf_{version_id}_{i}_{j}"
                 leaf_chunk = {
                     "id": leaf_id,
                     "version_id": version_id,
                     "chunk_type": "leaf",
-                    "content": leaf_stripped,
+                    "content": clean_leaf,
                     "metadata": {
                         "section_id": chunk_id,
                         "section_title": section_title,
                         "leaf_index": j,
-                        "page_number": None,
+                        "page_number": leaf_page,
                         "source_file": source_file,
                         **source_metadata
                     }
@@ -119,6 +149,52 @@ class ChunkBuilder:
 
         logger.info(f"[ChunkBuilder] Generated {len(all_chunks)} chunks (Pages: {len(page_chunks)}, Sections: {len(section_chunks)})")
         return all_chunks
+
+    @staticmethod
+    def _merge_page_marker_sections(raw_sections: List[str]) -> List[Tuple[str, Optional[int]]]:
+        """
+        [[PAGE_N]] だけのセクションを消費し、ページ番号を後続セクションに引き継ぐ。
+        戻り値: [(セクションテキスト, ページ番号), ...]
+        """
+        merged: List[Tuple[str, Optional[int]]] = []
+        pending_page: Optional[int] = None
+
+        for sec in raw_sections:
+            stripped = sec.strip()
+            if not stripped:
+                continue
+            # [[PAGE_N]] だけのセクションかチェック
+            m = _PAGE_MARKER_RE.fullmatch(stripped)
+            if m:
+                pending_page = int(m.group(1))
+                continue
+            # 通常のセクション: pending_page があればそれを引き継ぐ
+            merged.append((sec, pending_page))
+            # pending_page はリセットしない（次のPAGEマーカーまで維持）
+
+        return merged
+
+    @staticmethod
+    def _extract_page_number(text: str) -> Optional[int]:
+        """テキスト内の最初の [[PAGE_N]] マーカーからページ番号を抽出する。"""
+        m = _PAGE_MARKER_RE.search(text)
+        return int(m.group(1)) if m else None
+
+    @staticmethod
+    def _scan_page_markers(text: str) -> List[Tuple[int, int]]:
+        """テキスト内の全 [[PAGE_N]] マーカーの (文字位置, ページ番号) リストを返す。"""
+        return [(m.start(), int(m.group(1))) for m in _PAGE_MARKER_RE.finditer(text)]
+
+    @staticmethod
+    def _resolve_page_at(char_pos: int, page_markers: List[Tuple[int, int]], fallback: Optional[int]) -> Optional[int]:
+        """文字位置に基づき、直近の [[PAGE_N]] マーカーのページ番号を返す。"""
+        resolved = fallback
+        for marker_pos, page_num in page_markers:
+            if marker_pos <= char_pos:
+                resolved = page_num
+            else:
+                break
+        return resolved
 
     def _split_by_headers(self, text: str) -> List[str]:
         """
