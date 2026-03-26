@@ -1,3 +1,6 @@
+// TODO: 将来的に IssueCausalGraph に統合予定。
+// 現時点では page.tsx の selectedNodeIds state で十分に機能している。
+// モード管理が複雑化した場合（エッジ作成モード、インライン編集モードの状態遷移が増えた場合）に統合する。
 'use client';
 
 import { useReducer, useCallback } from 'react';

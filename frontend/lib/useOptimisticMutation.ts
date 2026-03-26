@@ -1,3 +1,6 @@
+// TODO: 将来的に全ミューテーション（PATCH/DELETE/POST）に統合予定。
+// 現時点では各コンポーネントが authFetch + onRefresh() パターンで十分に機能している。
+// 楽観的更新が必要になった場合（大量ノード操作でのレスポンス改善等）に統合する。
 'use client';
 
 import { useCallback, useRef } from 'react';

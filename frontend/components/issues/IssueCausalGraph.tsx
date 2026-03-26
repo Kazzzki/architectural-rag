@@ -346,7 +346,12 @@ function IssueCausalGraphInner({
           },
           label: e.label || undefined,
           labelStyle: e.label ? { fontSize: 10, fill: '#666' } : undefined,
-          data: { onDeleteEdge: handleDeleteEdge },
+          data: {
+            onDeleteEdge: handleDeleteEdge,
+            onEdgeUpdated: onRefresh,
+            label: e.label,
+            relationType: e.relation_type,
+          },
         };
       });
 

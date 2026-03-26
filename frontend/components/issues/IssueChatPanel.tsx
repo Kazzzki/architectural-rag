@@ -274,12 +274,15 @@ export default function IssueChatPanel({ projectName, issues, onIssueAdded }: Is
         form.append('image', photoFile);
         form.append('project_name', projectName);
         const res = await authFetch('/api/issues/capture-photo', { method: 'POST', body: form });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(errBody.detail || `写真解析エラー (${res.status})`);
+        }
         const data: CaptureResponse & { extracted_text?: string } = await res.json();
         onIssueAdded(data);
         setEntries((prev) => [...prev, { id: uid(), kind: 'result', resp: data }]);
       } catch (e: any) {
-        setEntries((prev) => [...prev, { id: uid(), kind: 'error', text: e.message ?? '写真解析エラー' }]);
+        setEntries((prev) => [...prev, { id: uid(), kind: 'error', text: e.message ?? '写真解析エラー。ネットワーク接続を確認してください。' }]);
       } finally {
         setLoading(false);
       }
@@ -300,12 +303,21 @@ export default function IssueChatPanel({ projectName, issues, onIssueAdded }: Is
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ raw_input: trimmed, project_name: projectName }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ detail: res.statusText }));
+        const detail = errBody.detail || res.statusText;
+        const msg = res.status >= 500
+          ? `サーバーエラー: ${detail}。しばらく待ってから再試行してください。`
+          : res.status === 422
+          ? `入力を解析できませんでした: ${detail}`
+          : `エラー (${res.status}): ${detail}`;
+        throw new Error(msg);
+      }
       const data: CaptureResponse = await res.json();
       onIssueAdded(data);
       setEntries((prev) => [...prev, { id: uid(), kind: 'result', resp: data }]);
     } catch (e: any) {
-      setEntries((prev) => [...prev, { id: uid(), kind: 'error', text: e.message ?? '送信エラー' }]);
+      setEntries((prev) => [...prev, { id: uid(), kind: 'error', text: e.message ?? '送信エラー。ネットワーク接続を確認してください。' }]);
     } finally {
       setLoading(false);
     }
