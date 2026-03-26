@@ -15,6 +15,19 @@
 
 ---
 
+## 前提: gstack セットアップ
+
+ship スキルを使うため、gstack が未インストールの場合は先にセットアップする:
+
+```bash
+# gstack が未インストールの場合のみ実行
+if [ ! -d ~/.claude/skills/gstack ]; then
+  git clone https://github.com/garrytan/gstack.git ~/.claude/skills/gstack && cd ~/.claude/skills/gstack && ./setup
+fi
+```
+
+---
+
 ## フロー手順
 
 ### STEP 1: コンテキスト収集
