@@ -88,6 +88,11 @@ class IssueUpdateRequest(BaseModel):
     context_memo: Optional[str] = None
 
 
+class BatchCaptureRequest(BaseModel):
+    raw_input: str  # 会議メモ全文
+    project_name: str
+
+
 class MemberCreateRequest(BaseModel):
     project_name: str
     name: str
@@ -1498,3 +1503,173 @@ def health_check(project_name: str, db=Depends(get_db)):
             "critical_unresolved_count": len(unresolved),
         },
     }
+
+
+# --- ダッシュボードサマリー ---
+
+@router.get("/api/issues/{project_name}/dashboard-summary")
+def dashboard_summary(project_name: str, db=Depends(get_db)):
+    """プロジェクトの課題統計サマリーを返す"""
+    issue_rows = db.execute(
+        text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE project_name = :pn ORDER BY created_at DESC"),
+        {"pn": project_name},
+    ).fetchall()
+    issues = [_issue_row_to_dict(r) for r in issue_rows]
+
+    # ステータス別集計
+    status_counts = {"発生中": 0, "対応中": 0, "解決済み": 0}
+    for iss in issues:
+        status_counts[iss.get("status", "発生中")] = status_counts.get(iss.get("status", "発生中"), 0) + 1
+
+    # 優先度別集計
+    priority_counts = {"critical": 0, "normal": 0, "minor": 0}
+    for iss in issues:
+        priority_counts[iss.get("priority", "normal")] = priority_counts.get(iss.get("priority", "normal"), 0) + 1
+
+    # カテゴリ別集計
+    category_counts: dict[str, int] = {}
+    for iss in issues:
+        cat = iss.get("category", "工程")
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+
+    # 担当者別集計
+    assignee_counts: dict[str, int] = {}
+    for iss in issues:
+        assignee = iss.get("assignee") or "未割当"
+        assignee_counts[assignee] = assignee_counts.get(assignee, 0) + 1
+
+    # 未対応アクション（action_nextが空 or ステータスが発生中）
+    needs_action = [
+        iss for iss in issues
+        if iss["status"] == "発生中" or not iss.get("action_next")
+    ]
+
+    # 直近7日以内に作成された課題
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    recent = [
+        iss for iss in issues
+        if iss.get("created_at", "") >= cutoff.isoformat()
+    ]
+
+    return {
+        "total": len(issues),
+        "status_counts": status_counts,
+        "priority_counts": priority_counts,
+        "category_counts": category_counts,
+        "assignee_counts": assignee_counts,
+        "needs_action": needs_action[:20],
+        "recent_issues": recent[:10],
+    }
+
+
+# --- 一括キャプチャ（会議メモから複数課題抽出） ---
+
+def _call_gemini_batch_extract(raw_input: str) -> list[dict]:
+    """会議メモから複数課題を抽出"""
+    from gemini_client import get_client
+    from google.genai import types
+
+    client = get_client()
+
+    prompt = f"""以下の建設PM/CM打ち合わせメモから、課題を抽出してJSON配列で返してください。
+各課題は個別の問題・懸念事項を表します。
+
+打ち合わせメモ:
+{raw_input}
+
+以下の形式のJSON配列のみ返答:
+[{{"title":"20字以内のタイトル","category":"工程","priority":"normal","description":"30字以内の説明","cause":"原因（あれば）","impact":"影響（あれば）","action_next":"対応策（あれば）","status":"発生中"}}]
+
+- category: 工程/コスト/品質/安全
+- priority: critical/normal/minor
+- status: 発生中/対応中/解決済み
+- 課題が見つからない場合は空配列[]
+- 最大20件まで"""
+
+    config = types.GenerateContentConfig(
+        system_instruction="建設PM/CMの会議メモから課題を抽出するアシスタント。JSON形式のみで返答。日本語で回答。",
+        temperature=0.2,
+    )
+    try:
+        config.thinking_config = types.ThinkingConfig(
+            thinking_budget_tokens=None, thinking_level="minimal"
+        )
+    except Exception:
+        pass
+
+    response = client.models.generate_content(
+        model="gemini-3.1-flash-lite",
+        contents=prompt,
+        config=config,
+    )
+
+    raw = response.text.strip()
+    import re as _re
+    raw = _re.sub(r'^```(?:json)?\s*', '', raw)
+    raw = _re.sub(r'\s*```$', '', raw).strip()
+
+    start = raw.find('[')
+    end = raw.rfind(']')
+    if start != -1 and end != -1:
+        raw = raw[start:end + 1]
+
+    try:
+        items = json.loads(raw)
+        return items if isinstance(items, list) else []
+    except json.JSONDecodeError as e:
+        logger.error(f"Gemini batch parse error: {e}\nraw: {raw[:300]}")
+        return []
+
+
+@router.post("/api/issues/capture-batch")
+def capture_batch(req: BatchCaptureRequest, db=Depends(get_db)):
+    """会議メモから複数課題を一括抽出・保存"""
+    extracted = _call_gemini_batch_extract(req.raw_input)
+    if not extracted:
+        return {"issues": [], "count": 0}
+
+    created_issues = []
+    now = _now_iso()
+
+    for item in extracted[:20]:
+        issue_id = str(uuid.uuid4())
+        db.execute(
+            text("""
+                INSERT INTO issues (
+                    id, project_name, title, raw_input, category, priority, status,
+                    description, cause, impact, action_next,
+                    is_collapsed, pos_x, pos_y, template_id, created_at, updated_at
+                ) VALUES (
+                    :id, :project_name, :title, :raw_input, :category, :priority, :status,
+                    :description, :cause, :impact, :action_next,
+                    0, 0.0, 0.0, NULL, :created_at, :updated_at
+                )
+            """),
+            {
+                "id": issue_id,
+                "project_name": req.project_name,
+                "title": (item.get("title") or "無題")[:20],
+                "raw_input": req.raw_input[:200],
+                "category": item.get("category") or "工程",
+                "priority": item.get("priority") or "normal",
+                "status": item.get("status") or "発生中",
+                "description": item.get("description") or "",
+                "cause": item.get("cause") or "",
+                "impact": item.get("impact") or "",
+                "action_next": item.get("action_next") or "",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        db.commit()
+
+        row = db.execute(
+            text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}
+        ).fetchone()
+        if row:
+            issue = _issue_row_to_dict(row)
+            created_issues.append(issue)
+            _save_issue_markdown(issue_id, db)
+
+    return {"issues": created_issues, "count": len(created_issues)}

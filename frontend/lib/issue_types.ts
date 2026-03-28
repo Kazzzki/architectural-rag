@@ -101,3 +101,18 @@ export interface ProjectMember {
   role: string | null;
   created_at: string;
 }
+
+export interface DashboardSummary {
+  total: number;
+  status_counts: Record<string, number>;
+  priority_counts: Record<string, number>;
+  category_counts: Record<string, number>;
+  assignee_counts: Record<string, number>;
+  needs_action: Issue[];
+  recent_issues: Issue[];
+}
+
+export interface BatchCaptureResponse {
+  issues: Issue[];
+  count: number;
+}

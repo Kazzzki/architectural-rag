@@ -13,7 +13,10 @@ import MobileTreeView from '@/components/issues/MobileTreeView';
 import BatchActionBar from '@/components/issues/BatchActionBar';
 import InferredEdgePreview from '@/components/issues/InferredEdgePreview';
 import HealthCheckPanel from '@/components/issues/HealthCheckPanel';
-import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, X, Map, Smartphone, Search, Activity, Maximize2 } from 'lucide-react';
+import DashboardPanel from '@/components/issues/DashboardPanel';
+import BatchCapturePanel from '@/components/issues/BatchCapturePanel';
+import QuickReviewPanel from '@/components/issues/QuickReviewPanel';
+import { ClipboardList, ArrowLeft, MessageCircle, Plus, ChevronRight, FolderOpen, Filter, X, Map, Smartphone, Search, Activity, Maximize2, LayoutDashboard } from 'lucide-react';
 import Link from 'next/link';
 
 // ────────────────────────────────────────────────
@@ -153,11 +156,13 @@ function ProjectGraphView({
   const [loading, setLoading] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'none' | 'chat' | 'filter'>('none');
   const [fitViewTrigger, setFitViewTrigger] = useState(0);
-  const [activeTab, setActiveTab] = useState<'graph' | 'search' | 'mindmap'>('graph');
+  const [activeTab, setActiveTab] = useState<'graph' | 'search' | 'mindmap' | 'review'>('graph');
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [showHealthCheck, setShowHealthCheck] = useState(false);
   const [showAIInfer, setShowAIInfer] = useState(false);
   const [aiInferIds, setAIInferIds] = useState<string[]>([]);
+  const [showBatchCapture, setShowBatchCapture] = useState(false);
+  const [showQuickReview, setShowQuickReview] = useState(false);
 
   const fetchIssues = useCallback(async () => {
     setLoading(true);
@@ -238,6 +243,17 @@ function ProjectGraphView({
             <Map size={13} />
             <span className="hidden sm:inline">マインドマップ</span>
           </button>
+          <button
+            onClick={() => setActiveTab('review')}
+            className={`flex items-center gap-1 px-3 py-1.5 text-xs transition-colors ${
+              activeTab === 'review'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <LayoutDashboard size={13} />
+            <span className="hidden sm:inline">レビュー</span>
+          </button>
         </div>
 
         {/* ナビゲーション */}
@@ -295,6 +311,19 @@ function ProjectGraphView({
             }}
           />
         </div>
+      )}
+
+      {/* レビュータブ */}
+      {activeTab === 'review' && (
+        <DashboardPanel
+          projectName={projectName}
+          onSelectIssue={(iss) => {
+            setActiveTab('graph');
+            setSelectedIssue(iss);
+          }}
+          onStartReview={() => setShowQuickReview(true)}
+          onStartBatchCapture={() => setShowBatchCapture(true)}
+        />
       )}
 
       {/* グラフタブ */}
@@ -412,7 +441,7 @@ function ProjectGraphView({
         >
           <Maximize2 size={20} />
           <span className="text-[9px] font-bold">全体表示</span>
-        </button>
+        </Link>
         <div className="w-px h-8 bg-gray-200 mx-1" />
         <Link
           href={`/issues/mobile?project=${encodeURIComponent(projectName)}`}
@@ -463,6 +492,27 @@ function ProjectGraphView({
             </div>
           </div>
         </div>
+      )}
+
+      {/* 一括キャプチャモーダル */}
+      {showBatchCapture && (
+        <BatchCapturePanel
+          projectName={projectName}
+          onComplete={(newIssues) => {
+            setShowBatchCapture(false);
+            fetchIssues();
+          }}
+          onClose={() => setShowBatchCapture(false)}
+        />
+      )}
+
+      {/* クイックレビューモーダル */}
+      {showQuickReview && (
+        <QuickReviewPanel
+          projectName={projectName}
+          onClose={() => setShowQuickReview(false)}
+          onRefresh={fetchIssues}
+        />
       )}
 
       {/* パネル優先度スタック: Drawer と HealthCheck は排他 */}
