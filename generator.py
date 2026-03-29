@@ -456,10 +456,12 @@ def _stream_core(
         client = get_client()
         stream_iter = _call_gemini_stream(client, resolved_model, contents, config)
         yield from _process_stream_chunks(stream_iter, use_web_search)
+    except RuntimeError:
+        raise  # 既にユーザー向けメッセージ付きの場合はそのまま
     except Exception as e:
         mode = "RAG" if use_rag else "direct"
         logger.error(f"Gemini {mode} stream failed: {e}", exc_info=True)
-        raise
+        raise RuntimeError("AI回答生成に一時的な問題が発生しています。しばらく待ってから再試行してください。")
 
 
 # ─── 後方互換パブリック API（既存のシグネチャを維持） ──────────────────────────────

@@ -38,11 +38,7 @@ from google.genai import types
 _search_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=5, thread_name_prefix="rag_search"
 )
-_rerank_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=5, thread_name_prefix="rag_rerank"
-)
 atexit.register(lambda: _search_executor.shutdown(wait=False))
-atexit.register(lambda: _rerank_executor.shutdown(wait=False))
 
 # ─── LexicalIndexer シングルトン ──────────────────────────────────────────────
 _lexical_lock = Lock()
@@ -255,13 +251,16 @@ def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = RERAN
             return RERANK_THRESHOLD, hit
 
     scored = []
-    futures = {_rerank_executor.submit(score_hit, hit): hit for hit in hits}
-    for future in as_completed(futures):
-        score, hit = future.result()
-        if score >= threshold:
-            hit = dict(hit)
-            hit["rerank_score"] = score
-            scored.append(hit)
+    # リランクは per-request executor を使用（共有プールだと並行リクエスト間で
+    # スレッドが奪い合いになりレイテンシが劣化するため）
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(score_hit, hit): hit for hit in hits}
+        for future in as_completed(futures):
+            score, hit = future.result()
+            if score >= threshold:
+                hit = dict(hit)
+                hit["rerank_score"] = score
+                scored.append(hit)
 
     scored.sort(key=lambda x: x["rerank_score"], reverse=True)
     return scored[:8]
