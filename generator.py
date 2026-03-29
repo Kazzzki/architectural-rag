@@ -373,7 +373,7 @@ def _prepare_generation(
 
 def _extract_response(response, use_web_search: bool) -> Any:
     """Geminiレスポンスからテキストとweb_sourcesを抽出する。"""
-    answer_text = response.text
+    answer_text = response.text or ""
     if not use_web_search:
         return answer_text
     grounding_metadata = None

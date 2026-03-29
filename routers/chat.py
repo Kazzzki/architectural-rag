@@ -51,9 +51,7 @@ class ChatRequest(BaseModel):
     history: Optional[List[dict]] = None
     # quick_mode=True : 軽量・高速（クエリ展開・HyDE・リランクをスキップ）
     # quick_mode=False: 高精度（全パイプライン実行）
-    # quick_mode=None : エンドポイントごとのデフォルトを使用
-    #   - /api/chat        → False（高精度）
-    #   - /api/chat/stream → True （TTFB優先）
+    # quick_mode=None : デフォルト False（高精度）を使用
     quick_mode: Optional[bool] = None
     # v4: モデル選択・コンテキストシート注入
     model: str = "gemini-3-flash-preview"
@@ -116,15 +114,15 @@ def _run_rag_pipeline(request: ChatRequest) -> PipelineResult:
             use_hyde=use_advanced,
             use_rerank=use_advanced,
         )
-        logger.info(f"Query: {request.question}, Results: {len(search_results.get('documents', []))}")
+        logger.info(f"Query: {request.question[:80]!r}, Results: {len(search_results.get('documents', []))}")
         context = build_context(search_results)
         source_files = get_source_files(search_results)
         metrics = search_results.get("metrics", {})
     else:
         if request.use_web_search:
-            logger.info(f"Web search only query: {request.question}")
+            logger.info(f"Web search only query: {request.question[:80]!r}")
         else:
-            logger.info(f"Direct query (no RAG, no Web Search): {request.question}")
+            logger.info(f"Direct query (no RAG, no Web Search): {request.question[:80]!r}")
         context = ""
         source_files = []
 
