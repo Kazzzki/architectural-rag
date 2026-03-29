@@ -117,7 +117,8 @@ GEMINI_MODEL_FLASH         = "gemini-3-flash-preview"          # 高速・軽量
 GEMINI_MODEL_FLASH_THINKING = "gemini-2.5-flash-preview"       # 中精度・分析
 GEMINI_MODEL_PRO            = "gemini-3.1-pro-preview"         # 高精度・判断支援
 
-# 互換性定数（古いコード用）
+# 互換性定数（古いコード用 — 新規コードでは上記の正式名を使用すること）
+# TODO: classifier.py, mindmap/router.py, drawing_processor.py 等を正式名に移行後に削除
 GEMINI_MODEL = GEMINI_MODEL_RAG
 VISION_ANALYSIS_MODEL = GEMINI_MODEL_OCR
 PREVIEW_MODEL = GEMINI_MODEL_RAG

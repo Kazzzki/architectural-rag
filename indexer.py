@@ -602,13 +602,20 @@ def process_and_index_file(
     }
 
     chunks = builder.build(full_text, ocr_results, source_metadata)
-    
+
     # インデックス登録
     dense = DenseIndexer()
     dense.upsert_chunks(version_id, chunks)
-    
+
     lexical = LexicalIndexer()
     lexical.upsert_chunks(version_id, chunks)
+
+    # 親チャンクキャッシュを無効化（再インデックスで内容が変わった可能性）
+    try:
+        from retriever import _cached_load_parent_chunk
+        _cached_load_parent_chunk.cache_clear()
+    except (ImportError, AttributeError):
+        pass
 
     # 完了更新
     _upsert_doc_index(rel_path, {**file_info, **source_metadata}, len(chunks)) # Legacy DB Sync

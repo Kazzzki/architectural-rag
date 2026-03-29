@@ -321,6 +321,149 @@ def _call_gemini_generate(client, model, contents, config):
         config=config
     )
 
+@sync_retry(max_retries=3, base_wait=2.0)
+def _call_gemini_stream(client, model, contents, config):
+    return client.models.generate_content_stream(
+        model=model,
+        contents=contents,
+        config=config
+    )
+
+
+# ─── 統合コア: 準備・レスポンス抽出・ストリーム処理 ──────────────────────────────
+
+def _prepare_generation(
+    question: str,
+    use_rag: bool,
+    context: str = "",
+    source_files: Optional[List[Dict[str, Any]]] = None,
+    history: Optional[List[Dict]] = None,
+    model: str = GEMINI_MODEL_RAG,
+    context_sheet: Optional[str] = None,
+    project_id: Optional[str] = None,
+    scope_mode: str = "auto",
+    user_id: str = "unknown_user",
+    use_web_search: bool = False,
+) -> tuple:
+    """RAG/Direct共通の生成準備。(contents, resolved_model, config) を返す。"""
+    project_context = _get_project_context(user_id, question, project_id, scope_mode)
+    personal_contexts = _get_personal_contexts(question)
+
+    if use_rag:
+        user_prompt = _build_rag_user_prompt(
+            question, context, source_files or [], context_sheet, project_context, personal_contexts
+        )
+        system_prompt = build_system_prompt()
+    else:
+        user_prompt = _build_direct_user_prompt(
+            question, context_sheet, project_context, personal_contexts
+        )
+        system_prompt = build_system_prompt_direct()
+
+    contents = _build_contents(user_prompt, history)
+    resolved_model = _resolve_model_name(model)
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        temperature=TEMPERATURE,
+        max_output_tokens=MAX_TOKENS,
+        tools=_get_tools(use_web_search),
+    )
+    return contents, resolved_model, config
+
+
+def _extract_response(response, use_web_search: bool) -> Any:
+    """Geminiレスポンスからテキストとweb_sourcesを抽出する。"""
+    answer_text = response.text
+    if not use_web_search:
+        return answer_text
+    grounding_metadata = None
+    if response.candidates and response.candidates[0].grounding_metadata:
+        grounding_metadata = response.candidates[0].grounding_metadata
+    elif getattr(response, 'grounding_metadata', None):
+        grounding_metadata = response.grounding_metadata
+    web_sources = extract_web_sources_from_grounding_metadata(grounding_metadata)
+    return {"answer": answer_text, "web_sources": web_sources}
+
+
+def _process_stream_chunks(stream_iter, use_web_search: bool = False) -> Iterator[Dict[str, Any]]:
+    """Geminiのストリームチャンクを処理し、共通フォーマットのDictをイテレートする"""
+    try:
+        for chunk in stream_iter:
+            if chunk.text:
+                yield {"type": "answer", "data": chunk.text}
+            if use_web_search:
+                gm = None
+                if chunk.candidates and chunk.candidates[0].grounding_metadata:
+                    gm = chunk.candidates[0].grounding_metadata
+                if gm:
+                    web_sources = extract_web_sources_from_grounding_metadata(gm)
+                    if web_sources:
+                        yield {"type": "web_sources", "data": web_sources}
+    except Exception as e:
+        logger.error(f"Stream chunk processing failed: {e}", exc_info=True)
+        raise
+
+
+# ─── 非ストリーミング統合コア ────────────────────────────────────────────────────
+
+def _generate_core(
+    question: str,
+    use_rag: bool,
+    context: str = "",
+    source_files: Optional[List[Dict[str, Any]]] = None,
+    history: Optional[List[Dict]] = None,
+    model: str = GEMINI_MODEL_RAG,
+    context_sheet: Optional[str] = None,
+    project_id: Optional[str] = None,
+    scope_mode: str = "auto",
+    user_id: str = "unknown_user",
+    use_web_search: bool = False,
+) -> Any:
+    """RAG/Direct共通の非ストリーミング生成コア"""
+    try:
+        contents, resolved_model, config = _prepare_generation(
+            question, use_rag, context, source_files, history,
+            model, context_sheet, project_id, scope_mode, user_id, use_web_search,
+        )
+        client = get_client()
+        response = _call_gemini_generate(client, resolved_model, contents, config)
+        return _extract_response(response, use_web_search)
+    except Exception as e:
+        mode = "RAG" if use_rag else "direct"
+        logger.error(f"Gemini {mode} generation failed: {e}", exc_info=True)
+        raise RuntimeError("AI回答生成に一時的な問題が発生しています。しばらく待ってから再試行してください。")
+
+
+def _stream_core(
+    question: str,
+    use_rag: bool,
+    context: str = "",
+    source_files: Optional[List[Dict[str, Any]]] = None,
+    history: Optional[List[Dict]] = None,
+    model: str = GEMINI_MODEL_RAG,
+    context_sheet: Optional[str] = None,
+    project_id: Optional[str] = None,
+    scope_mode: str = "auto",
+    user_id: str = "unknown_user",
+    use_web_search: bool = False,
+) -> Iterator[Dict[str, Any]]:
+    """RAG/Direct共通のストリーミング生成コア"""
+    try:
+        contents, resolved_model, config = _prepare_generation(
+            question, use_rag, context, source_files, history,
+            model, context_sheet, project_id, scope_mode, user_id, use_web_search,
+        )
+        client = get_client()
+        stream_iter = _call_gemini_stream(client, resolved_model, contents, config)
+        yield from _process_stream_chunks(stream_iter, use_web_search)
+    except Exception as e:
+        mode = "RAG" if use_rag else "direct"
+        logger.error(f"Gemini {mode} stream failed: {e}", exc_info=True)
+        raise
+
+
+# ─── 後方互換パブリック API（既存のシグネチャを維持） ──────────────────────────────
+
 def generate_answer(
     question: str,
     context: str,
@@ -330,53 +473,16 @@ def generate_answer(
     context_sheet: Optional[str] = None,
     project_id: Optional[str] = None,
     scope_mode: str = "auto",
-    user_id: str = "unknown_user",  # mock_user ハードコードを排除 (#13)
+    user_id: str = "unknown_user",
     use_web_search: bool = False,
 ) -> Any:
     """Gemini APIで回答を生成（会話履歴対応）"""
-
-    try:
-        # Layer B 取得 (#4, #13)
-        project_context = _get_project_context(user_id, question, project_id, scope_mode)
-        # Layer A2 取得
-        personal_contexts = _get_personal_contexts(question)
-        
-        # プロンプト構築 (#15, #16)
-        user_prompt = _build_rag_user_prompt(
-            question, context, source_files, context_sheet, project_context, personal_contexts
-        )
-        
-        local_system_prompt = build_system_prompt()
-        contents = _build_contents(user_prompt, history)
-        
-        # モデル解決 (#8, #11)
-        resolved_model = _resolve_model_name(model)
-        client = get_client()
-        
-        config = types.GenerateContentConfig(
-            system_instruction=local_system_prompt,
-            temperature=TEMPERATURE,
-            max_output_tokens=MAX_TOKENS,
-            tools=_get_tools(use_web_search),
-        )
-        response = _call_gemini_generate(client, resolved_model, contents, config)
-        
-        answer_text = response.text
-        if use_web_search:
-            grounding_metadata = None
-            if response.candidates and response.candidates[0].grounding_metadata:
-                grounding_metadata = response.candidates[0].grounding_metadata
-            elif getattr(response, 'grounding_metadata', None):
-                grounding_metadata = response.grounding_metadata
-                
-            web_sources = extract_web_sources_from_grounding_metadata(grounding_metadata)
-            return {"answer": answer_text, "web_sources": web_sources}
-            
-        return answer_text
-
-    except Exception as e:
-        logger.error(f"Gemini generation failed: {e}", exc_info=True)
-        raise RuntimeError("AI回答生成に一時的な問題が発生しています。しばらく待ってから再試行してください。")
+    return _generate_core(
+        question, use_rag=True, context=context, source_files=source_files,
+        history=history, model=model, context_sheet=context_sheet,
+        project_id=project_id, scope_mode=scope_mode, user_id=user_id,
+        use_web_search=use_web_search,
+    )
 
 def generate_answer_direct(
     question: str,
@@ -389,82 +495,12 @@ def generate_answer_direct(
     use_web_search: bool = False,
 ) -> Any:
     """RAGなし：知識ベースを参照せずLLMが直接回答する"""
-    try:
-        # Layer B 取得 (#17)
-        project_context = _get_project_context(user_id, question, project_id, scope_mode)
-        # Layer A2 取得
-        personal_contexts = _get_personal_contexts(question)
-        
-        # プロンプト構築
-        user_prompt = _build_direct_user_prompt(
-            question, context_sheet, project_context, personal_contexts
-        )
-        
-        local_system_prompt = build_system_prompt_direct()
-        contents = _build_contents(user_prompt, history)
-        
-        resolved_model = _resolve_model_name(model)
-        client = get_client()
-        
-        config = types.GenerateContentConfig(
-            system_instruction=local_system_prompt,
-            temperature=TEMPERATURE,
-            max_output_tokens=MAX_TOKENS,
-            tools=_get_tools(use_web_search),
-        )
-        response = _call_gemini_generate(client, resolved_model, contents, config)
-        
-        answer_text = response.text
-        if use_web_search:
-            grounding_metadata = None
-            if response.candidates and response.candidates[0].grounding_metadata:
-                grounding_metadata = response.candidates[0].grounding_metadata
-            elif getattr(response, 'grounding_metadata', None):
-                grounding_metadata = response.grounding_metadata
-                
-            web_sources = extract_web_sources_from_grounding_metadata(grounding_metadata)
-            return {"answer": answer_text, "web_sources": web_sources}
-            
-        return answer_text
-    except Exception as e:
-        logger.error(f"Gemini direct generation failed: {e}", exc_info=True)
-        raise RuntimeError("AI回答生成に一時的な問題が発生しています。しばらく待ってから再試行してください。")
-
-
-@sync_retry(max_retries=3, base_wait=2.0)
-def _call_gemini_stream(client, model, contents, config):
-    # ストリームの初期化自体をリトライ可能にする
-    return client.models.generate_content_stream(
-        model=model,
-        contents=contents,
-        config=config
+    return _generate_core(
+        question, use_rag=False,
+        history=history, model=model, context_sheet=context_sheet,
+        project_id=project_id, scope_mode=scope_mode, user_id=user_id,
+        use_web_search=use_web_search,
     )
-
-from typing import List, Dict, Any, Optional, Iterator
-
-def _process_stream_chunks(stream_iter, use_web_search: bool = False) -> Iterator[Dict[str, Any]]:
-    """Geminiのストリームチャンクを処理し、共通フォーマットのDictをイテレートする (#1, #3, #14)"""
-    try:
-        for chunk in stream_iter:
-            # テキスト部分の抽出
-            if chunk.text:
-                yield {"type": "answer", "data": chunk.text}
-            
-            # ウェブ検索結果（グラウンディング）の抽出
-            if use_web_search:
-                # チャンクごとの grounding_metadata をチェック
-                gm = None
-                if chunk.candidates and chunk.candidates[0].grounding_metadata:
-                    gm = chunk.candidates[0].grounding_metadata
-                
-                if gm:
-                    # extract_web_sources_from_grounding_metadata はリストを返す
-                    web_sources = extract_web_sources_from_grounding_metadata(gm)
-                    if web_sources:
-                        yield {"type": "web_sources", "data": web_sources}
-    except Exception as e:
-        logger.error(f"Stream chunk processing failed: {e}", exc_info=True)
-        raise
 
 def generate_answer_stream(
     question: str,
@@ -475,45 +511,16 @@ def generate_answer_stream(
     context_sheet: Optional[str] = None,
     project_id: Optional[str] = None,
     scope_mode: str = "auto",
-    user_id: str = "unknown_user",  # mock_user ハードコードを排除 (#13)
+    user_id: str = "unknown_user",
     use_web_search: bool = False,
 ) -> Iterator[Dict[str, Any]]:
     """ストリーミング形式で回答を生成（会話履歴対応）"""
-    try:
-        # Layer B 取得
-        project_context = _get_project_context(user_id, question, project_id, scope_mode)
-        # Layer A2 取得
-        personal_contexts = _get_personal_contexts(question)
-        
-        # プロンプト構築
-        user_prompt = _build_rag_user_prompt(
-            question, context, source_files, context_sheet, project_context, personal_contexts
-        )
-
-        local_system_prompt = build_system_prompt()
-        contents = _build_contents(user_prompt, history)
-        
-        # モデル解決 (#8, #11)
-        resolved_model = _resolve_model_name(model)
-        client = get_client()
-
-        config = types.GenerateContentConfig(
-            system_instruction=local_system_prompt,
-            temperature=TEMPERATURE,
-            max_output_tokens=MAX_TOKENS,
-            tools=_get_tools(use_web_search),
-        )
-
-        # ストリーム取得 (初期化時のリトライは _call_gemini_stream 内で対応 #7)
-        stream_iter = _call_gemini_stream(client, resolved_model, contents, config)
-        
-        # チャンク処理とエラー変換を委譲 (#1, #3, #14)
-        yield from _process_stream_chunks(stream_iter, use_web_search)
-            
-    except Exception as e:
-        logger.error(f"generate_answer_stream init failed: {e}", exc_info=True)
-        # 初期化フェーズでの失敗は上位（router）でキャッチしてHTTPエラーにするため raise
-        raise
+    return _stream_core(
+        question, use_rag=True, context=context, source_files=source_files,
+        history=history, model=model, context_sheet=context_sheet,
+        project_id=project_id, scope_mode=scope_mode, user_id=user_id,
+        use_web_search=use_web_search,
+    )
 
 def generate_answer_stream_direct(
     question: str,
@@ -526,35 +533,9 @@ def generate_answer_stream_direct(
     use_web_search: bool = False,
 ) -> Iterator[Dict[str, Any]]:
     """RAGなし：知識ベースを参照せずLLMが直接ストリーミング回答する"""
-    try:
-        # Layer B 取得 (#17)
-        project_context = _get_project_context(user_id, question, project_id, scope_mode)
-        # Layer A2 取得
-        personal_contexts = _get_personal_contexts(question)
-        
-        # プロンプト構築 (#17)
-        user_prompt = _build_direct_user_prompt(
-            question, context_sheet, project_context, personal_contexts
-        )
-
-        local_system_prompt = build_system_prompt_direct()
-        contents = _build_contents(user_prompt, history)
-        
-        resolved_model = _resolve_model_name(model)
-        client = get_client()
-        
-        config = types.GenerateContentConfig(
-            system_instruction=local_system_prompt,
-            temperature=TEMPERATURE,
-            max_output_tokens=MAX_TOKENS,
-            tools=_get_tools(use_web_search),
-        )
-
-        stream_iter = _call_gemini_stream(client, resolved_model, contents, config)
-        
-        # チャンク処理とエラー変換を委譲 (#1, #3, #14, #15)
-        yield from _process_stream_chunks(stream_iter, use_web_search)
-
-    except Exception as e:
-        logger.error(f"generate_answer_stream_direct init failed: {e}", exc_info=True)
-        raise
+    return _stream_core(
+        question, use_rag=False,
+        history=history, model=model, context_sheet=context_sheet,
+        project_id=project_id, scope_mode=scope_mode, user_id=user_id,
+        use_web_search=use_web_search,
+    )

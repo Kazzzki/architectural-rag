@@ -8,6 +8,10 @@ import os
 import json
 import logging
 import asyncio
+import atexit
+import concurrent.futures
+from functools import lru_cache
+from threading import Lock
 from typing import List, Dict, Any, Optional, Tuple
 from collections import Counter
 
@@ -20,13 +24,41 @@ from config import (
     COLLECTION_NAME,
     RERANK_THRESHOLD,
     RERANK_CANDIDATE_COUNT,
+    GEMINI_MODEL_RAG,
 )
 from indexer import GeminiEmbeddingFunction, get_query_embedding, load_parent_chunk
 from dense_indexer import get_chroma_client
 from lexical_indexer import LexicalIndexer
 from gemini_client import get_client
+from pipeline_metrics import MetricsTimer
 from utils.retry import sync_retry
 from google.genai import types
+
+# ─── モジュールレベル ThreadPoolExecutor（リクエスト間で再利用） ─────────────────
+_search_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=5, thread_name_prefix="rag_search"
+)
+_rerank_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=5, thread_name_prefix="rag_rerank"
+)
+atexit.register(lambda: _search_executor.shutdown(wait=False))
+atexit.register(lambda: _rerank_executor.shutdown(wait=False))
+
+# ─── LexicalIndexer シングルトン ──────────────────────────────────────────────
+_lexical_lock = Lock()
+_lexical_indexer: Optional[LexicalIndexer] = None
+
+def _get_lexical_indexer() -> LexicalIndexer:
+    global _lexical_indexer
+    with _lexical_lock:
+        if _lexical_indexer is None:
+            _lexical_indexer = LexicalIndexer()
+    return _lexical_indexer
+
+# ─── 親チャンク LRU キャッシュ ────────────────────────────────────────────────
+@lru_cache(maxsize=256)
+def _cached_load_parent_chunk(parent_chunk_id: str) -> Optional[str]:
+    return load_parent_chunk(parent_chunk_id)
 
 
 # ─── Collection ────────────────────────────────────────────────────────────────
@@ -66,7 +98,6 @@ hypothetical_doc は HyDE 検索用に「実際の文書の一節」として書
 def _call_gemini_json(prompt: str) -> Dict[str, Any]:
     """Gemini でクエリ意図分析を実行し JSON を返す"""
     client = get_client()
-    from config import GEMINI_MODEL_RAG
     response = client.models.generate_content(
         model=GEMINI_MODEL_RAG,
         contents=[
@@ -152,7 +183,7 @@ def _search_single(
 def _search_lexical(query_text: str, n: int = TOP_K_RESULTS) -> List[Dict[str, Any]]:
     """SQLite FTS5 による全文検索を実行し、ヒット一覧を返す"""
     try:
-        indexer = LexicalIndexer()
+        indexer = _get_lexical_indexer()
         results = indexer.search(query_text, limit=n)
         hits = []
         for res in results:
@@ -199,7 +230,6 @@ _RERANK_PROMPT = """以下のコンテキストはユーザーの質問に対し
 @sync_retry(max_retries=2, base_wait=1.0)
 def _rerank_single(query: str, context: str) -> float:
     client = get_client()
-    from config import GEMINI_MODEL_RAG
     response = client.models.generate_content(
         model=GEMINI_MODEL_RAG,
         contents=[_RERANK_PROMPT.format(query=query, context=context[:1000])],
@@ -213,9 +243,9 @@ def _rerank_single(query: str, context: str) -> float:
 
 def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = RERANK_THRESHOLD) -> List[Dict[str, Any]]:
     """Gemini でリランクし、threshold 以上のもの上位8件を返す。
-    リランク評価は ThreadPoolExecutor で並列化（1序列ループ→約N倍高速化）。
+    リランク評価は モジュールレベル ThreadPoolExecutor で並列化。
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
 
     def score_hit(hit: Dict[str, Any]):
         try:
@@ -225,15 +255,13 @@ def rerank_hits(query: str, hits: List[Dict[str, Any]], threshold: float = RERAN
             return RERANK_THRESHOLD, hit
 
     scored = []
-    # レートリミット配慮で max_workers=5 に制限
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(score_hit, hit): hit for hit in hits}
-        for future in as_completed(futures):
-            score, hit = future.result()
-            if score >= threshold:
-                hit = dict(hit)
-                hit["rerank_score"] = score
-                scored.append(hit)
+    futures = {_rerank_executor.submit(score_hit, hit): hit for hit in hits}
+    for future in as_completed(futures):
+        score, hit = future.result()
+        if score >= threshold:
+            hit = dict(hit)
+            hit["rerank_score"] = score
+            scored.append(hit)
 
     scored.sort(key=lambda x: x["rerank_score"], reverse=True)
     return scored[:8]
@@ -250,7 +278,7 @@ def _resolve_parent_chunks(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for hit in hits:
         meta = hit.get("metadata") or {}
         pid = meta.get("parent_chunk_id", "")
-        parent_text = load_parent_chunk(pid) if pid else None
+        parent_text = _cached_load_parent_chunk(pid) if pid else None
         hit = dict(hit)
         hit["context_text"] = parent_text if parent_text else hit["document"]
         resolved.append(hit)
@@ -286,6 +314,9 @@ def search(
     if collection.count() == 0:
         return {"documents": [], "metadatas": [], "distances": [], "hits": []}
 
+    # ─── メトリクス計測 ─────────────────────────────────────────────────────
+    timer = MetricsTimer()
+
     # ─── Step 1: クエリ意図分類・展開・HyDE ────────────────────────────────────
     doc_type_filter = None
     expanded_queries = [query]
@@ -296,6 +327,7 @@ def search(
             doc_type_filter, expanded_queries, hypo_doc = classify_and_expand(query)
         except Exception as e:
             logger.warning(f"Query expansion failed, using base query: {e}")
+    timer.mark("query_expansion")
 
     # 後方互換フィルタが明示的に指定された場合は展開で得たフィルタより優先
     effective_doc_type_filter = filter_file_type or doc_type_filter
@@ -327,41 +359,42 @@ def search(
     elif len(where_conditions) > 1:
         where = {"$and": where_conditions}
 
-    # ─── Step 2: 並列検索（ThreadPoolExecutor で高速化） ─────────────────────
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    # ─── Step 2: 並列検索（モジュールレベル ThreadPoolExecutor で高速化） ──────
+    from concurrent.futures import as_completed
     all_hits_lists = []
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = []
+    futures = []
 
-        # 拡張クエリで検索
-        if use_query_expansion:
-            for eq in expanded_queries:
-                futures.append(executor.submit(_search_single, eq, collection, n_results, where))
-        else:
-            futures.append(executor.submit(_search_single, query, collection, n_results, where))
+    # 拡張クエリで検索
+    if use_query_expansion:
+        for eq in expanded_queries:
+            futures.append(_search_executor.submit(_search_single, eq, collection, n_results, where))
+    else:
+        futures.append(_search_executor.submit(_search_single, query, collection, n_results, where))
 
-        # HyDE 検索
-        if use_hyde and hypo_doc:
-            futures.append(executor.submit(_search_single, hypo_doc, collection, n_results, where))
+    # HyDE 検索
+    if use_hyde and hypo_doc:
+        futures.append(_search_executor.submit(_search_single, hypo_doc, collection, n_results, where))
 
-        # Full-Text Search (Lexical)
-        if use_lexical:
-            futures.append(executor.submit(_search_lexical, query, n_results))
+    # Full-Text Search (Lexical)
+    if use_lexical:
+        futures.append(_search_executor.submit(_search_lexical, query, n_results))
 
-        failed_count = 0
-        for future in as_completed(futures):
-            try:
-                all_hits_lists.append(future.result())
-            except Exception as e:
-                failed_count += 1
-                logger.warning(f"Parallel search task failed: {e}")
+    failed_count = 0
+    for future in as_completed(futures):
+        try:
+            all_hits_lists.append(future.result())
+        except Exception as e:
+            failed_count += 1
+            logger.warning(f"Parallel search task failed: {e}")
 
-        if failed_count > 0 and not all_hits_lists:
-            logger.error(f"All {failed_count} search tasks failed — returning empty results")
+    if failed_count > 0 and not all_hits_lists:
+        logger.error(f"All {failed_count} search tasks failed — returning empty results")
+    timer.mark("search")
 
     # ─── Step 3: マージ ─────────────────────────────────────────────────────
     merged_hits = _merge_hits(all_hits_lists, top_k=RERANK_CANDIDATE_COUNT)
+    timer.mark("merge")
 
     # ─── Step 4: Gemini リランク ─────────────────────────────────────────────
     if use_rerank and merged_hits:
@@ -376,9 +409,14 @@ def search(
             final_hits = merged_hits[:5]
     else:
         final_hits = merged_hits[:n_results]
+    timer.mark("rerank")
 
     # ─── Step 5: 親チャンク解決 ──────────────────────────────────────────────
     final_hits = _resolve_parent_chunks(final_hits)
+    timer.mark("parent_resolve")
+
+    # ─── メトリクス確定 ──────────────────────────────────────────────────────
+    pipeline_metrics = timer.finalize()
 
     # ─── 後方互換フォーマットに変換 ─────────────────────────────────────────
     documents = [h["document"] for h in final_hits]
@@ -392,173 +430,13 @@ def search(
         "hits": final_hits,  # v3 拡張フィールド（context_text を含む）
         "doc_type_filter_applied": doc_type_filter,
         "expanded_queries": expanded_queries,
+        "metrics": pipeline_metrics.to_dict(),
     }
 
 
-# ─── 重複判定ヘルパー ──────────────────────────────────────────────────────────
-def _is_similar(text_a: str, text_b: str, threshold: float = 0.8) -> bool:
-    """先頭N文字の一致率で簡易重複判定（親チャンク800-1500文字に対応）"""
-    if not text_a or not text_b:
-        return False
-    text_a_s = text_a.strip()
-    text_b_s = text_b.strip()
-    if not text_a_s or not text_b_s:
-        return False
-    compare_len = min(len(text_a_s), len(text_b_s), 500)
-    if compare_len == 0:
-        return False
-    a, b = text_a_s[:compare_len], text_b_s[:compare_len]
-    matches = sum(1 for ca, cb in zip(a, b) if ca == cb)
-    return (matches / compare_len) >= threshold
-
-
-# ─── コンテキスト構築 ──────────────────────────────────────────────────────────
-def build_context(search_results: Dict[str, Any]) -> str:
-    """
-    検索結果からコンテキスト文字列を構築。
-    v4: ドキュメント単位でグルーピング、ページ順ソート、重複除去。
-    """
-    hits = search_results.get("hits", [])
-
-    if not hits:
-        # 後方互換: hits がない場合は従来の documents / metadatas を使う
-        documents = search_results.get("documents", [])
-        metadatas = search_results.get("metadatas", [])
-        if not documents:
-            return ""
-        context_parts = []
-        for doc, meta in zip(documents, metadatas):
-            meta = meta or {}
-            source = meta.get("source_pdf_name") or meta.get("filename", "不明")
-            page   = meta.get("page_no") or meta.get("page_number", "")
-            page_info = f" (p.{page})" if page else ""
-            cat = meta.get("category", "")
-            context_parts.append(f"=== 出典: {source}{page_info}（{cat}）===\n{doc}")
-        return "\n\n".join(context_parts)
-
-    # 1. ドキュメント単位でグルーピング
-    doc_groups: Dict[str, List[Dict[str, Any]]] = {}
-    for hit in hits:
-        meta = hit.get("metadata") or {}
-        source_key = meta.get("rel_path") or meta.get("filename", "不明")
-        doc_groups.setdefault(source_key, []).append(hit)
-
-    # ページ番号ソート用キー関数（ループ外に定義）
-    def _page_sort_key(h):
-        m = h.get("metadata") or {}
-        p = m.get("page_no") or m.get("page_number") or 0
-        try:
-            return int(p)
-        except (ValueError, TypeError):
-            return 0
-
-    # 2. 各グループ内でページ順ソート + 重複除去 + 結合
-    context_parts = []
-    for source_key, group_hits in doc_groups.items():
-        group_hits.sort(key=_page_sort_key)
-
-        # 重複除去
-        seen_texts: List[str] = []
-        unique_hits: List[Dict[str, Any]] = []
-        for hit in group_hits:
-            text = hit.get("context_text") or hit.get("document", "")
-            if not any(_is_similar(text, s) for s in seen_texts):
-                seen_texts.append(text)
-                unique_hits.append(hit)
-
-        if not unique_hits:
-            continue
-
-        # ヘッダー
-        meta0 = unique_hits[0].get("metadata") or {}
-        source_name = meta0.get("source_pdf_name") or meta0.get("filename", "不明")
-        doc_type = meta0.get("doc_type", "")
-        category = meta0.get("category", "")
-
-        header = f"━━━ 出典: {source_name}（{category}/{doc_type}）━━━"
-
-        # 各チャンクをページ単位で結合
-        chunk_texts = []
-        for hit in unique_hits:
-            m = hit.get("metadata") or {}
-            page = m.get("page_no") or m.get("page_number", "")
-            text = hit.get("context_text") or hit.get("document", "")
-            page_label = f"[p.{page}]" if page else ""
-            chunk_texts.append(f"{page_label} {text}")
-
-        context_parts.append(f"{header}\n" + "\n---\n".join(chunk_texts))
-
-    return "\n\n".join(context_parts)
-
-
-# ─── ソースファイル一覧 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-def get_source_files(search_results: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """検索結果からユニークなソースファイル一覧を取得（ページ情報含む）
-
-    戻り値スキーマ:
-    {
-      "source_id":       "S1",          # LLMタグとの対応用（S1始まり連番）
-      "filename":        str,            # チャンクのファイル名
-      "source_pdf_name": str,            # 表示用PDF名
-      "source_pdf":      str,            # PDFビューア用ID（空の場合あり）
-      "source_pdf_hash": str,            # ハッシュベースルーティング用（空の場合あり）
-      "rel_path":        str,            # ナレッジベース相対パス
-      "category":        str,
-      "doc_type":        str,            # "drawing" | "law" | "spec" | "catalog" | ""
-      "pages":           List[int],      # 参照ページ番号（全件・昇順）
-      "hit_count":       int,            # チャンクヒット数（関連度の目安）
-      "relevance_count": int,            # hit_countの後方互换エイリアス
-    }
-    """
-    metadatas = search_results.get("metadatas", [])
-    file_counter: Counter = Counter()
-    file_info_map: Dict[str, Dict] = {}
-    file_pages_map: Dict[str, set] = {}
-
-    for meta in metadatas:
-        meta = meta or {}
-        rel_path = meta.get("rel_path", "")
-        if not rel_path:
-            continue
-        file_counter[rel_path] += 1
-
-        page_num = meta.get("page_no") or meta.get("page_number")
-        if rel_path not in file_pages_map:
-            file_pages_map[rel_path] = set()
-        if page_num is not None:
-            file_pages_map[rel_path].add(int(page_num))
-
-        if rel_path not in file_info_map:
-            category = meta.get("category", "")
-            doc_type  = meta.get("doc_type", "")
-            # source_pdf: メタデータ値 → rel_path が PDF なら rel_path をフォールバック
-            source_pdf_meta = meta.get("source_pdf", "")
-            source_pdf_hash = meta.get("source_pdf_hash", "")
-            if not source_pdf_meta:
-                if rel_path.lower().endswith(".pdf"):
-                    source_pdf_meta = rel_path
-                # .md の場合は空のまま（フロントがカード表示を切り替える）
-            file_info_map[rel_path] = {
-                "filename":        meta.get("filename", "不明"),
-                "source_pdf_name": meta.get("source_pdf_name", meta.get("filename", "不明")),
-                "source_pdf":      source_pdf_meta,
-                "source_pdf_hash": source_pdf_hash,
-                "rel_path":        rel_path,
-                "category":        category,
-                "doc_type":        doc_type,
-                "tags":            meta.get("tags_str", "").split(",") if meta.get("tags_str") else [],
-            }
-
-    source_files = []
-    for i, (rel_path, count) in enumerate(file_counter.most_common()):
-        info = file_info_map[rel_path].copy()
-        info["source_id"]       = f"S{i + 1}"
-        info["hit_count"]       = count
-        info["relevance_count"] = count  # 後方互換エイリアス
-        info["pages"]           = sorted(list(file_pages_map.get(rel_path, set())))
-        source_files.append(info)
-
-    return source_files
+# ─── コンテキスト構築・ソースファイル一覧（context_builder.py に移動済み） ──────
+# 後方互換のため re-export
+from context_builder import build_context, get_source_files  # noqa: F401
 
 
 # ─── DB 統計 ─────────────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -11,6 +12,8 @@ from generator import generate_answer, generate_answer_stream, generate_answer_d
 from database import get_db, ChatSession, ChatMessage
 from sqlalchemy.orm import Session
 from backend.conversation_scope import ConversationScope
+
+MAX_QUESTION_LENGTH = 4000
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
@@ -86,6 +89,52 @@ class SessionUpdateRequest(BaseModel):
     title: str
 
 ISSUE_KEYWORDS = ["課題", "問題", "遅延", "コスト超過", "品質", "安全", "不具合", "トラブル", "クレーム", "障害", "リスク"]
+
+
+@dataclass
+class PipelineResult:
+    context: str
+    source_files: List[dict]
+    resolved_model: str
+    metrics: dict
+
+
+def _run_rag_pipeline(request: ChatRequest) -> PipelineResult:
+    """検索 → コンテキスト構築 → モデル解決の共通パイプライン"""
+    metrics = {}
+
+    if request.use_rag:
+        use_advanced = not (request.quick_mode if request.quick_mode is not None else False)
+        search_results = search(
+            request.question,
+            filter_category=request.category,
+            filter_file_type=request.file_type,
+            filter_date_range=request.date_range,
+            filter_tags=request.tags,
+            tag_match_mode=request.tag_match_mode or "any",
+            use_query_expansion=use_advanced,
+            use_hyde=use_advanced,
+            use_rerank=use_advanced,
+        )
+        logger.info(f"Query: {request.question}, Results: {len(search_results.get('documents', []))}")
+        context = build_context(search_results)
+        source_files = get_source_files(search_results)
+        metrics = search_results.get("metrics", {})
+    else:
+        if request.use_web_search:
+            logger.info(f"Web search only query: {request.question}")
+        else:
+            logger.info(f"Direct query (no RAG, no Web Search): {request.question}")
+        context = ""
+        source_files = []
+
+    resolved_model = _resolve_model(request.model, request.question, bool(context))
+    return PipelineResult(
+        context=context,
+        source_files=source_files,
+        resolved_model=resolved_model,
+        metrics=metrics,
+    )
 
 
 def _try_capture_issue_from_chat(question: str, project_name: str) -> Optional[dict]:
@@ -211,73 +260,47 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
     """質問に対する回答を生成"""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="質問を入力してください")
-    
+    if len(request.question) > MAX_QUESTION_LENGTH:
+        raise HTTPException(status_code=400, detail=f"質問は{MAX_QUESTION_LENGTH}文字以内にしてください")
+
     # session_id の正規化: body を優先、query は fallback とする (#20, #23)
     effective_session_id = request.session_id or session_id
-    
+
     # 安全のための初期化 (#18)
     answer = ""
     source_files = []
     web_sources = None
-    
-    try:
-        if request.use_rag or request.use_web_search:
-            # --- RAGあり または ウェブ検索あり ---
-            if request.use_rag:
-                # v3: デフォルトは高精度モード（quick_mode=None → False 扱い）
-                use_advanced = not (request.quick_mode if request.quick_mode is not None else False)
-                search_results = search(
-                    request.question,
-                    filter_category=request.category,
-                    filter_file_type=request.file_type,
-                    filter_date_range=request.date_range,
-                    filter_tags=request.tags,
-                    tag_match_mode=request.tag_match_mode or "any",
-                    use_query_expansion=use_advanced,
-                    use_hyde=use_advanced,
-                    use_rerank=use_advanced,
-                )
-                logger.info(f"Query: {request.question}, Results: {len(search_results.get('documents', []))}")
-                context = build_context(search_results)
-                source_files = get_source_files(search_results)
-            else:
-                # ウェブ検索のみ（RAGなし）
-                logger.info(f"Web search only query: {request.question}")
-                context = ""
-                source_files = []
 
+    try:
+        # 共通パイプライン実行
+        pipeline = _run_rag_pipeline(request)
+        source_files = pipeline.source_files
+
+        if request.use_rag or request.use_web_search:
             result = generate_answer(
-                request.question, context, source_files,
+                request.question, pipeline.context, pipeline.source_files,
                 history=request.history,
-                model=_resolve_model(request.model, request.question, bool(context)),
+                model=pipeline.resolved_model,
                 context_sheet=request.context_sheet,
                 project_id=request.project_id,
                 scope_mode=request.scope_mode,
                 use_web_search=request.use_web_search,
             )
-            if isinstance(result, dict):
-                answer = result["answer"]
-                web_sources = result.get("web_sources")
-            else:
-                answer = result
-                web_sources = None
         else:
-            # --- RAGなし かつ ウェブ検索なし（LLM直接回答） ---
-            logger.info(f"Direct query (no RAG, no Web Search): {request.question}")
-            source_files = []
             result = generate_answer_direct(
                 request.question,
                 history=request.history,
-                model=_resolve_model(request.model, request.question, False),
+                model=pipeline.resolved_model,
                 context_sheet=request.context_sheet,
                 use_web_search=request.use_web_search,
             )
-            if isinstance(result, dict):
-                answer = result["answer"]
-                web_sources = result.get("web_sources")
-            else:
-                answer = result
-                web_sources = None
+
+        if isinstance(result, dict):
+            answer = result["answer"]
+            web_sources = result.get("web_sources")
+        else:
+            answer = result
+            web_sources = None
 
         logger.info(f"Answer generated ({len(answer)} chars)")
         
@@ -317,41 +340,17 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
     """ストリーミング形式で回答を生成 (Phase 2: SSE対応)"""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="質問を入力してください")
-    
+    if len(request.question) > MAX_QUESTION_LENGTH:
+        raise HTTPException(status_code=400, detail=f"質問は{MAX_QUESTION_LENGTH}文字以内にしてください")
+
     # session_id の正規化: body を優先、query は fallback とする (#23)
     effective_session_id = request.session_id or session_id
-    
-    try:
-        if request.use_rag or request.use_web_search:
-            # --- RAGあり または ウェブ検索あり ---
-            if request.use_rag:
-                # ストリームでもデフォルト quick_mode=False（精度優先: クエリ展開・HyDE・リランク実行）
-                effective_quick = request.quick_mode if request.quick_mode is not None else False
-                use_advanced = not effective_quick
-                search_results = search(
-                    request.question,
-                    filter_category=request.category,
-                    filter_file_type=request.file_type,
-                    filter_date_range=request.date_range,
-                    filter_tags=request.tags,
-                    tag_match_mode=request.tag_match_mode or "any",
-                    use_query_expansion=use_advanced,
-                    use_hyde=use_advanced,
-                    use_rerank=use_advanced,
-                )
-                context = build_context(search_results)
-                source_files = get_source_files(search_results)
-            else:
-                # ウェブ検索のみ（RAGなし）
-                logger.info(f"Web search direct stream query: {request.question}")
-                context = ""
-                source_files = []
-        else:
-            # --- RAGなし かつ ウェブ検索なし（LLM直接回答） ---
-            logger.info(f"Direct stream query (no RAG, no Web Search): {request.question}")
-            context = ""
-            source_files = []
 
+    try:
+        # 共通パイプライン実行
+        pipeline = _run_rag_pipeline(request)
+        context = pipeline.context
+        source_files = pipeline.source_files
         history = request.history
 
         def generate(sid):
@@ -380,7 +379,7 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                     stream_gen = generate_answer_stream(
                         request.question, context, source_files,
                         history=history,
-                        model=_resolve_model(request.model, request.question, bool(context)),
+                        model=pipeline.resolved_model,
                         context_sheet=request.context_sheet,
                         project_id=request.project_id,
                         scope_mode=request.scope_mode,
@@ -390,7 +389,7 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                     stream_gen = generate_answer_stream_direct(
                         request.question,
                         history=history,
-                        model=_resolve_model(request.model, request.question, False),
+                        model=pipeline.resolved_model,
                         context_sheet=request.context_sheet,
                         use_web_search=request.use_web_search,
                     )
@@ -447,6 +446,9 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                     yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
                     error_sent = True
             finally:
+                # メトリクスイベント送出
+                if pipeline.metrics and not error_sent:
+                    yield f"data: {json.dumps({'type': 'metrics', 'data': pipeline.metrics}, ensure_ascii=False)}\n\n"
                 # 終端通知の統一と確実な [DONE] 送出 (#24, #32, #36)
                 if not done_sent and not error_sent:
                     yield "data: [DONE]\n\n"
