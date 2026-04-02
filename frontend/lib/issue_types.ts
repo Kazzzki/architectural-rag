@@ -94,6 +94,23 @@ export interface IssueCaptureData {
   duplicate_candidates: DuplicateCandidate[];
 }
 
+export interface IssueAttachment {
+  id: string;
+  issue_id: string;
+  attachment_type: 'photo' | 'drawing' | 'report';
+  file_path: string;
+  thumbnail_path: string | null;
+  caption: string | null;
+  created_at: string;
+}
+
+export interface CausalSuggestion {
+  title: string;
+  description: string;
+  confidence: number;
+  reason: string;
+}
+
 export interface ProjectMember {
   id: string;
   project_name: string;

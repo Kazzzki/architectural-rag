@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { authFetch } from '@/lib/api';
 import { Issue, CausalCandidate, CaptureResponse } from '@/lib/issue_types';
-import { Send, Camera, X } from 'lucide-react';
+import { Send, Camera, X, Sparkles } from 'lucide-react';
 
 interface IssueChatPanelProps {
   projectName: string;
@@ -30,6 +30,49 @@ const PRIORITY_LABEL: Record<string, string> = {
 };
 
 // ─── 因果候補の確認カード ────────────────────────────────────────────────────
+
+// --- Pattern Suggest ---
+interface PatternResult { id: string; similarity: number; titles: string; categories: string; node_count: number; }
+
+function PatternSuggest({ issueTitle, issueDescription }: { issueTitle: string; issueDescription: string }) {
+  const [patterns, setPatterns] = React.useState<PatternResult[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [dismissed, setDismissed] = React.useState(false);
+  const searched = React.useRef(false);
+
+  React.useEffect(() => {
+    if (searched.current || !issueTitle) return;
+    searched.current = true;
+    setLoading(true);
+    authFetch('/api/issues/patterns/search', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: `${issueTitle} ${issueDescription}`.trim() }),
+    }).then(r => r.json())
+      .then(d => setPatterns((d.patterns || []).filter((p: PatternResult) => p.similarity >= 0.5)))
+      .catch(() => {}).finally(() => setLoading(false));
+  }, [issueTitle, issueDescription]);
+
+  if (dismissed || (!loading && patterns.length === 0)) return null;
+
+  return (
+    <div className="border-t border-amber-100 bg-amber-50/50 px-3 py-2">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-medium text-amber-700 flex items-center gap-1"><Sparkles size={10} /> 類似パターン</span>
+        <button onClick={() => setDismissed(true)} className="text-[10px] text-gray-400"><X size={10} /></button>
+      </div>
+      {loading ? <div className="text-[10px] text-amber-600 animate-pulse">検索中...</div> : (
+        <div className="space-y-1">
+          {patterns.map(p => (
+            <div key={p.id} className="text-[10px] text-amber-800 bg-amber-100/60 rounded px-2 py-1.5">
+              <div className="font-medium">{p.titles}</div>
+              <div className="text-amber-600 mt-0.5">{p.categories} · {p.node_count}ノード · 類似度 {Math.round(p.similarity * 100)}%</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CausalCard({
   candidate,
@@ -210,6 +253,7 @@ function ResultCard({
       <div className="border-t border-gray-100 px-3 py-1.5">
         <span className="text-green-600 font-medium">✓ グラフに登録</span>
       </div>
+      <PatternSuggest issueTitle={issue.title} issueDescription={issue.description || ''} />
     </div>
   );
 }

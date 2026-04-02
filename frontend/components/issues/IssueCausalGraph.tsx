@@ -195,6 +195,31 @@ function IssueCausalGraphInner({
   // コンテキストメニュー
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; issue: Issue } | null>(null);
 
+  // ギャップ検出
+  const [gapEdges, setGapEdges] = useState<Edge[]>([]);
+  const [gapLoading, setGapLoading] = useState(false);
+  const [gapStats, setGapStats] = useState<{ nodes: number; edges: number; components: number } | null>(null);
+  const projectName = issues[0]?.project_name;
+
+  const runGapAnalysis = useCallback(async () => {
+    if (!projectName || gapLoading) return;
+    setGapLoading(true);
+    try {
+      const res = await authFetch(`/api/issues/graph-analysis?project_name=${encodeURIComponent(projectName)}`);
+      const data = await res.json();
+      setGapStats(data.stats || null);
+      const newEdges: Edge[] = (data.gaps || []).flatMap((gap: any, gi: number) => {
+        if (!gap.cluster_a?.[0] || !gap.cluster_b?.[0]) return [];
+        return [{ id: `gap-${gi}`, source: gap.cluster_a[0], target: gap.cluster_b[0], type: 'default',
+          animated: true, style: { stroke: '#F59E0B', strokeDasharray: '6 4', strokeWidth: 2 },
+          label: gap.suggestion?.slice(0, 30) || 'ギャップ候補',
+          labelStyle: { fontSize: 9, fill: '#92400E' }, labelBgStyle: { fill: '#FEF3C7', fillOpacity: 0.9 } }];
+      });
+      setGapEdges(newEdges);
+    } catch { /* silent */ }
+    finally { setGapLoading(false); }
+  }, [projectName, gapLoading]);
+
   // issue Map for O(1) lookup (MiniMap最適化)
   const issueMap = useMemo(() => new Map(issues.map((i) => [i.id, i])), [issues]);
 
@@ -363,13 +388,13 @@ function IssueCausalGraphInner({
       finalNodes = needsLayout ? buildDagreLayout(nodes, visibleEdges) : nodes;
     }
     setRfNodes(finalNodes);
-    setRfEdges(visibleEdges);
+    setRfEdges([...visibleEdges, ...gapEdges]);
 
     if (finalNodes.length > 0 && !initialFitDone.current) {
       initialFitDone.current = true;
       setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
     }
-  }, [issues, edges, priorityFilter, visibleIssues, hiddenChildCounts, issueIdsWithChildren, selectedSet, onNodeClick, handleCollapseToggle, handleDeleteEdge, onIssueUpdated, fitView, layoutMode]);
+  }, [issues, edges, priorityFilter, visibleIssues, hiddenChildCounts, issueIdsWithChildren, selectedSet, onNodeClick, handleCollapseToggle, handleDeleteEdge, onIssueUpdated, fitView, layoutMode, gapEdges]);
 
   const handleNodeDragStop = useCallback(async (_: React.MouseEvent, node: Node) => {
     try {
@@ -443,6 +468,21 @@ function IssueCausalGraphInner({
         panOnScroll={false}
       >
         <Background gap={16} color="#e5e7eb" />
+        {projectName && (
+          <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 10, display: 'flex', gap: 4 }}>
+            {gapEdges.length > 0 && (
+              <button onClick={() => { setGapEdges([]); setGapStats(null); }}
+                style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: '#FEF3C7', border: '1px solid #F59E0B', color: '#92400E', cursor: 'pointer' }}>
+                ギャップ非表示
+              </button>
+            )}
+            <button onClick={runGapAnalysis} disabled={gapLoading}
+              style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: gapLoading ? '#F3F4F6' : '#EFF6FF', border: '1px solid #93C5FD', color: '#1D4ED8', cursor: gapLoading ? 'wait' : 'pointer' }}>
+              {gapLoading ? '分析中...' : '🔍 ギャップ検出'}
+            </button>
+            {gapStats && <span style={{ fontSize: 10, color: '#6B7280', lineHeight: '28px' }}>{gapStats.components}グループ / {gapStats.nodes}ノード</span>}
+          </div>
+        )}
         <div className="hidden md:block"><Controls /></div>
         <div className="hidden md:block">
           <MiniMap nodeColor={(n) => {

@@ -25,6 +25,7 @@ interface IssueNodeData {
   hasChildren?: boolean;
   isSelected?: boolean;
   isEditing?: boolean;
+  attachmentCount?: number;
   onClick?: (issue: Issue) => void;
   onCollapseToggle?: (issue: Issue) => void;
   onTitleUpdated?: (updated: Issue) => void;
@@ -33,7 +34,7 @@ interface IssueNodeData {
 }
 
 function IssueNode({ data }: NodeProps<IssueNodeData>) {
-  const { issue, hiddenChildCount = 0, hasChildren = false, isSelected = false, onClick, onCollapseToggle, onTitleUpdated, onContextMenu, onMemoUpdated } = data;
+  const { issue, hiddenChildCount = 0, hasChildren = false, isSelected = false, attachmentCount = 0, onClick, onCollapseToggle, onTitleUpdated, onContextMenu, onMemoUpdated } = data;
   const style = PRIORITY_STYLES[issue.priority] ?? PRIORITY_STYLES.normal;
   const statusColor = STATUS_COLOR[issue.status] ?? '#999';
   const showCollapseBtn = hasChildren || issue.is_collapsed === 1;
@@ -160,9 +161,14 @@ function IssueNode({ data }: NodeProps<IssueNodeData>) {
         )}
       </div>
 
-      {/* カテゴリ・重要度 */}
-      <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
-        {issue.category} / {issue.status}
+      {/* カテゴリ・重要度・添付 */}
+      <div style={{ fontSize: 12, color: '#555', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span>{issue.category} / {issue.status}</span>
+        {attachmentCount > 0 && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 1, fontSize: 10, color: '#6B7280' }}>
+            📎{attachmentCount}
+          </span>
+        )}
       </div>
 
       {/* 折りたたみバッジ */}
