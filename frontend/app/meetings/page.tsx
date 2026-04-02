@@ -48,11 +48,10 @@ interface MeetingDetail extends MeetingSession {
 type Phase = 'list' | 'recording' | 'done';
 
 // ===== Web Speech API 型宣言 =====
+interface SpeechRecognitionEvent extends Event { results: SpeechRecognitionResultList; resultIndex: number; }
+interface SpeechRecognitionErrorEvent extends Event { error: string; }
 declare global {
-  interface Window {
-    SpeechRecognition: typeof SpeechRecognition;
-    webkitSpeechRecognition: typeof SpeechRecognition;
-  }
+  interface Window { SpeechRecognition: any; webkitSpeechRecognition: any; }
 }
 
 // ===== API =====

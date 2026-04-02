@@ -683,6 +683,18 @@ def _run_migrations():
             created_at TEXT NOT NULL
         )""",
         """CREATE INDEX IF NOT EXISTS idx_issue_notes_issue ON issue_notes(issue_id)""",
+        # Phase 1: 課題添付ファイル（写真・図面・検査報告書）
+        """CREATE TABLE IF NOT EXISTS issue_attachments (
+            id                  TEXT PRIMARY KEY,
+            issue_id            TEXT NOT NULL,
+            document_version_id TEXT,
+            attachment_type     TEXT NOT NULL DEFAULT 'photo',
+            file_path           TEXT NOT NULL,
+            thumbnail_path      TEXT,
+            caption             TEXT,
+            created_at          TEXT NOT NULL
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue ON issue_attachments(issue_id)""",
     ]
     with engine.connect() as conn:
         for sql in migrations:

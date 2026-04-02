@@ -504,7 +504,7 @@ function TaskDetailPanel({
         status: editStatus,
         priority: editPriority,
         category_id: editCategory ? parseInt(editCategory) : undefined,
-        due_date: editDueDate || null,
+        due_date: editDueDate || undefined,
         estimated_minutes: editEstimated ? parseInt(editEstimated) : undefined,
         actual_minutes: editActual ? parseInt(editActual) : undefined,
       });

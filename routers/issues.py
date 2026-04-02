@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from database import get_db
-from config import ISSUE_MEMOS_DIR
+from config import ISSUE_MEMOS_DIR, ISSUE_ATTACHMENTS_DIR
 from issue_memo_indexer import IssueMemoIndexer
 
 logger = logging.getLogger(__name__)
@@ -1498,3 +1498,309 @@ def health_check(project_name: str, db=Depends(get_db)):
             "critical_unresolved_count": len(unresolved),
         },
     }
+
+
+# ===== Phase 1: 添付ファイル =====
+
+ALLOWED_ATTACHMENT_MIME = {
+    "image/png", "image/jpeg", "image/jpg", "image/webp",
+    "application/pdf",
+}
+
+
+@router.get("/api/issues/{issue_id}/attachments")
+def list_attachments(issue_id: str, db=Depends(get_db)):
+    rows = db.execute(text(
+        "SELECT id, issue_id, attachment_type, file_path, thumbnail_path, caption, created_at "
+        "FROM issue_attachments WHERE issue_id = :id ORDER BY created_at DESC"
+    ), {"id": issue_id}).fetchall()
+    return {"attachments": [
+        {"id": r[0], "issue_id": r[1], "attachment_type": r[2], "file_path": r[3],
+         "thumbnail_path": r[4], "caption": r[5], "created_at": r[6]}
+        for r in rows
+    ]}
+
+
+@router.post("/api/issues/{issue_id}/attachments", status_code=201)
+async def create_attachment(
+    issue_id: str, file: UploadFile = File(...),
+    attachment_type: str = Form("photo"), caption: str = Form(""),
+    db=Depends(get_db),
+):
+    mime = file.content_type or ""
+    if mime not in ALLOWED_ATTACHMENT_MIME:
+        raise HTTPException(status_code=400, detail=f"対応形式: PNG/JPEG/WebP/PDF。受信: {mime}")
+    file_bytes = await file.read()
+    if len(file_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="ファイルサイズは20MB以内")
+    att_id = str(uuid.uuid4())
+    now = _now_iso()
+    issue_dir = ISSUE_ATTACHMENTS_DIR / issue_id
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    ext = file.filename.rsplit(".", 1)[-1] if file.filename and "." in file.filename else "bin"
+    file_path = issue_dir / f"{att_id}.{ext}"
+    file_path.write_bytes(file_bytes)
+    thumbnail_path_str = None
+    if mime.startswith("image/"):
+        try:
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(file_bytes))
+            img.thumbnail((200, 200))
+            thumb_path = issue_dir / f"{att_id}_thumb.jpg"
+            img.convert("RGB").save(thumb_path, "JPEG", quality=80)
+            thumbnail_path_str = str(thumb_path.relative_to(ISSUE_ATTACHMENTS_DIR))
+        except Exception as e:
+            logger.warning(f"Thumbnail generation failed: {e}")
+    relative_path = str(file_path.relative_to(ISSUE_ATTACHMENTS_DIR))
+    db.execute(text(
+        "INSERT INTO issue_attachments (id, issue_id, attachment_type, file_path, thumbnail_path, caption, created_at) "
+        "VALUES (:id, :issue_id, :type, :path, :thumb, :caption, :now)"
+    ), {"id": att_id, "issue_id": issue_id, "type": attachment_type,
+        "path": relative_path, "thumb": thumbnail_path_str, "caption": caption or None, "now": now})
+    db.commit()
+    return {"id": att_id, "issue_id": issue_id, "attachment_type": attachment_type,
+            "file_path": relative_path, "thumbnail_path": thumbnail_path_str,
+            "caption": caption or None, "created_at": now}
+
+
+@router.delete("/api/issues/attachments/{attachment_id}")
+def delete_attachment(attachment_id: str, db=Depends(get_db)):
+    row = db.execute(text("SELECT file_path, thumbnail_path FROM issue_attachments WHERE id = :id"),
+                     {"id": attachment_id}).fetchone()
+    if row:
+        from pathlib import Path
+        for rel_path in [row[0], row[1]]:
+            if rel_path:
+                full = ISSUE_ATTACHMENTS_DIR / rel_path
+                if full.exists(): full.unlink()
+    db.execute(text("DELETE FROM issue_attachments WHERE id = :id"), {"id": attachment_id})
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/api/issues/attachments/{attachment_id}/file")
+def serve_attachment_file(attachment_id: str, db=Depends(get_db)):
+    from fastapi.responses import FileResponse
+    row = db.execute(text("SELECT file_path FROM issue_attachments WHERE id = :id"),
+                     {"id": attachment_id}).fetchone()
+    if not row: raise HTTPException(status_code=404)
+    full = ISSUE_ATTACHMENTS_DIR / row[0]
+    if not full.exists(): raise HTTPException(status_code=404)
+    return FileResponse(str(full))
+
+
+@router.get("/api/issues/attachments/{attachment_id}/thumbnail")
+def serve_attachment_thumbnail(attachment_id: str, db=Depends(get_db)):
+    from fastapi.responses import FileResponse
+    row = db.execute(text("SELECT thumbnail_path FROM issue_attachments WHERE id = :id"),
+                     {"id": attachment_id}).fetchone()
+    if not row or not row[0]: raise HTTPException(status_code=404)
+    full = ISSUE_ATTACHMENTS_DIR / row[0]
+    if not full.exists(): raise HTTPException(status_code=404)
+    return FileResponse(str(full))
+
+
+# ===== Phase 2: AI原因サジェスト =====
+
+@router.post("/api/issues/{issue_id}/suggest-causes")
+async def suggest_causes(issue_id: str, db=Depends(get_db)):
+    import asyncio
+    from gemini_client import get_client
+    from google.genai import types as genai_types
+
+    row = db.execute(text("SELECT * FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    if not row: raise HTTPException(status_code=404)
+    issue = _issue_row_to_dict(row)
+
+    existing_rows = db.execute(text(
+        "SELECT id, title, description, category FROM issues "
+        "WHERE project_name = :pn AND id != :id AND (is_task = 0 OR is_task IS NULL) LIMIT 30"
+    ), {"pn": issue["project_name"], "id": issue_id}).fetchall()
+    existing_context = "\n".join(f"- {r[1]} ({r[3]}): {(r[2] or '')[:60]}" for r in existing_rows) or "（他に課題なし）"
+
+    edge_rows = db.execute(text(
+        "SELECT from_id, to_id FROM issue_edges WHERE from_id = :id OR to_id = :id"
+    ), {"id": issue_id}).fetchall()
+    connected_ids = {r[0] for r in edge_rows} | {r[1] for r in edge_rows}
+    connected_ids.discard(issue_id)
+
+    prompt = f"""建設現場の課題について、考えられる原因を分析してください。
+
+対象課題: {issue['title']} ({issue['category']})
+説明: {issue.get('description') or '（なし）'}
+原因（既知）: {issue.get('cause') or '（未特定）'}
+
+同プロジェクトの他の課題:
+{existing_context}
+
+JSON配列のみ返答（3件以内）:
+[{{"title":"原因名（15字以内）","description":"説明（30字以内）","confidence":0.85,"reason":"理由（20字以内）"}}]
+"""
+    try:
+        client = get_client()
+        config = genai_types.GenerateContentConfig(
+            system_instruction="建設現場の課題分析アシスタント。JSON配列のみ返答。", temperature=0.3)
+
+        async def _call():
+            return client.models.generate_content(
+                model="gemini-2.5-flash", contents=[prompt], config=config).text.strip()
+
+        raw = await asyncio.wait_for(_call(), timeout=10.0)
+        cleaned = raw
+        if cleaned.startswith("```"): cleaned = cleaned.split("\n", 1)[-1]
+        if cleaned.endswith("```"): cleaned = cleaned.rsplit("```", 1)[0]
+        suggestions = json.loads(cleaned.strip())
+        if not isinstance(suggestions, list): suggestions = []
+        suggestions = [s for s in suggestions if s.get("confidence", 0) >= 0.3]
+        return {"suggestions": suggestions, "ai_status": "done"}
+    except asyncio.TimeoutError:
+        return {"suggestions": [], "ai_status": "error", "error": "AI分析がタイムアウトしました"}
+    except (json.JSONDecodeError, Exception) as e:
+        logger.warning(f"[SuggestCauses] error: {e}")
+        return {"suggestions": [], "ai_status": "error", "error": "AI分析が一時的に利用できません"}
+
+
+# ===== Phase 3: 構造的ギャップ検出 =====
+
+_graph_analysis_cache: dict = {}
+
+@router.get("/api/issues/graph-analysis")
+def analyze_graph_gaps(project_name: str, db=Depends(get_db)):
+    import networkx as nx
+
+    latest_row = db.execute(text(
+        "SELECT MAX(updated_at) FROM issues WHERE project_name = :pn AND (is_task = 0 OR is_task IS NULL)"
+    ), {"pn": project_name}).fetchone()
+    latest_ts = latest_row[0] if latest_row and latest_row[0] else ""
+    cached = _graph_analysis_cache.get(project_name)
+    if cached and cached.get("updated_at") == latest_ts:
+        return cached["result"]
+
+    issue_rows = db.execute(text(
+        "SELECT id, title, category FROM issues WHERE project_name = :pn AND (is_task = 0 OR is_task IS NULL)"
+    ), {"pn": project_name}).fetchall()
+    if len(issue_rows) < 2:
+        result = {"gaps": [], "stats": {"nodes": len(issue_rows), "edges": 0, "components": len(issue_rows)}}
+        _graph_analysis_cache[project_name] = {"result": result, "updated_at": latest_ts}
+        return result
+
+    issue_map = {r[0]: {"id": r[0], "title": r[1], "category": r[2]} for r in issue_rows}
+    issue_ids = set(issue_map.keys())
+    edge_rows = db.execute(text("SELECT from_id, to_id FROM issue_edges WHERE confirmed = 1")).fetchall()
+    valid_edges = [(r[0], r[1]) for r in edge_rows if r[0] in issue_ids and r[1] in issue_ids]
+
+    G = nx.DiGraph()
+    G.add_nodes_from(issue_ids)
+    G.add_edges_from(valid_edges)
+    UG = G.to_undirected()
+    components = list(nx.connected_components(UG))
+
+    gaps = []
+    if len(components) >= 2:
+        for i in range(min(len(components), 5)):
+            for j in range(i + 1, min(len(components), 5)):
+                comp_a, comp_b = list(components[i])[:5], list(components[j])[:5]
+                cats_a = {issue_map[n]["category"] for n in comp_a if n in issue_map}
+                cats_b = {issue_map[n]["category"] for n in comp_b if n in issue_map}
+                shared = cats_a & cats_b
+                if shared:
+                    ta = [issue_map[n]["title"] for n in comp_a[:3] if n in issue_map]
+                    tb = [issue_map[n]["title"] for n in comp_b[:3] if n in issue_map]
+                    gaps.append({"cluster_a": comp_a, "cluster_b": comp_b, "shared_categories": list(shared),
+                                 "suggestion": f"「{'、'.join(ta[:2])}」と「{'、'.join(tb[:2])}」は{'/'.join(shared)}カテゴリが共通。"})
+
+    key_nodes = []
+    if len(G.nodes) >= 3 and len(valid_edges) >= 2:
+        try:
+            bc = nx.betweenness_centrality(G, k=min(len(G.nodes), 100))
+            key_nodes = [{"id": n, "title": issue_map.get(n, {}).get("title", ""), "centrality": round(s, 3)}
+                         for n, s in sorted(bc.items(), key=lambda x: x[1], reverse=True)[:5] if s > 0]
+        except Exception:
+            pass
+
+    result = {"gaps": gaps[:10], "key_nodes": key_nodes,
+              "stats": {"nodes": len(G.nodes), "edges": len(valid_edges), "components": len(components)}}
+    _graph_analysis_cache[project_name] = {"result": result, "updated_at": latest_ts}
+    return result
+
+
+# ===== Phase 4: パターンライブラリ =====
+
+def _get_pattern_collection():
+    from dense_indexer import get_chroma_client
+    from config import CHROMA_DB_DIR, ISSUE_PATTERN_COLLECTION
+    client = get_chroma_client(CHROMA_DB_DIR)
+    return client.get_or_create_collection(name=ISSUE_PATTERN_COLLECTION, metadata={"hnsw:space": "cosine"})
+
+
+@router.post("/api/issues/patterns/extract")
+def extract_patterns(project_name: str = "", db=Depends(get_db)):
+    from dense_indexer import _embed_batch_with_retry
+    import networkx as nx
+
+    where = "WHERE status = '解決済み' AND (is_task = 0 OR is_task IS NULL)"
+    params: dict = {}
+    if project_name:
+        where += " AND project_name = :pn"
+        params["pn"] = project_name
+
+    rows = db.execute(text(f"SELECT id, title, description, category, project_name FROM issues {where}"), params).fetchall()
+    resolved_ids = {r[0] for r in rows}
+    resolved_map = {r[0]: {"id": r[0], "title": r[1], "description": r[2], "category": r[3], "project_name": r[4]} for r in rows}
+    if not resolved_ids:
+        return {"extracted": 0}
+
+    edge_rows = db.execute(text("SELECT from_id, to_id FROM issue_edges WHERE confirmed = 1")).fetchall()
+    G = nx.DiGraph()
+    for r in edge_rows:
+        if r[0] in resolved_ids and r[1] in resolved_ids:
+            G.add_edge(r[0], r[1])
+    chains = [c for c in nx.connected_components(G.to_undirected()) if len(c) >= 3]
+
+    collection = _get_pattern_collection()
+    extracted = 0
+    for chain in chains:
+        chain_list = list(chain)
+        pattern_id = f"pattern-{'_'.join(sorted(chain_list)[:5])}"
+        titles = [resolved_map[n]["title"] for n in chain_list if n in resolved_map]
+        categories = list({resolved_map[n]["category"] for n in chain_list if n in resolved_map})
+        pattern_text = f"因果パターン ({'/'.join(categories)}): {' → '.join(titles[:5])}"
+        try:
+            embeddings = _embed_batch_with_retry([pattern_text])
+            if not embeddings or not embeddings[0]: continue
+        except Exception:
+            continue
+        pn = next((resolved_map[n]["project_name"] for n in chain_list if n in resolved_map), "")
+        collection.upsert(ids=[pattern_id], embeddings=[embeddings[0]], documents=[pattern_text],
+                          metadatas=[{"project_name": pn, "categories": "/".join(categories),
+                                      "node_count": str(len(chain_list)), "titles": " → ".join(titles[:5])}])
+        extracted += 1
+    return {"extracted": extracted, "total_chains": len(chains)}
+
+
+@router.post("/api/issues/patterns/search")
+def search_patterns(query: str = "", db=Depends(get_db)):
+    from dense_indexer import _embed_batch_with_retry
+    if not query: raise HTTPException(status_code=400, detail="queryが必要")
+    try:
+        embeddings = _embed_batch_with_retry([query])
+        if not embeddings or not embeddings[0]: return {"patterns": []}
+    except Exception:
+        return {"patterns": []}
+    collection = _get_pattern_collection()
+    try:
+        count = collection.count()
+    except Exception:
+        count = 0
+    if count == 0: return {"patterns": []}
+    results = collection.query(query_embeddings=[embeddings[0]], n_results=min(5, count))
+    patterns = []
+    for i, doc_id in enumerate(results["ids"][0]):
+        distance = results["distances"][0][i] if results.get("distances") else 1.0
+        similarity = 1.0 - distance
+        if similarity < 0.3: continue
+        meta = results["metadatas"][0][i] if results.get("metadatas") else {}
+        patterns.append({"id": doc_id, "similarity": round(similarity, 3), "titles": meta.get("titles", ""),
+                          "categories": meta.get("categories", ""), "node_count": int(meta.get("node_count", 0))})
+    return {"patterns": patterns}

@@ -412,7 +412,7 @@ function ProjectGraphView({
         >
           <Maximize2 size={20} />
           <span className="text-[9px] font-bold">全体表示</span>
-        </button>
+        </Link>
         <div className="w-px h-8 bg-gray-200 mx-1" />
         <Link
           href={`/issues/mobile?project=${encodeURIComponent(projectName)}`}

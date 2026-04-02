@@ -153,6 +153,7 @@ AUDIO_VECTORS_COLLECTION = "audio_vectors"
 VIDEO_VECTORS_COLLECTION = "video_vectors"
 MIXED_VECTORS_COLLECTION = "mixed_vectors"
 ISSUE_MEMO_COLLECTION = "issue_memos"
+ISSUE_PATTERN_COLLECTION = "issue_patterns"
 
 # Gemini Embedding 2 設定
 EMBEDDING_MODEL_V2 = "gemini-embedding-2-preview"
@@ -160,6 +161,9 @@ EMBED_SEMAPHORE_LIMIT = int(os.getenv("EMBED_SEMAPHORE_LIMIT", "5"))
 
 # 課題因果メモ Markdown 保存先
 ISSUE_MEMOS_DIR = BASE_DIR / "data" / "issue_memos"
+
+# 課題添付ファイル保存先
+ISSUE_ATTACHMENTS_DIR = BASE_DIR / "data" / "issue_attachments"
 
 # 除外フォルダ（インデックス対象外）
 EXCLUDE_FOLDERS = [
