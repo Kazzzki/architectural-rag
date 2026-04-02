@@ -124,7 +124,7 @@ AVAILABLE_MODELS: Dict[str, str] = {
     "gemini-3-flash-preview":  "Gemini 3 Flash（高速・標準）",
     "gemini-3.1-pro-preview":  "Gemini 3.1 Pro（高精度・低速）",
     "gemini-2.0-flash":        "Gemini 2.0 Flash（安定板）",
-    "gemini-3.1-flash-lite":   "Gemini 3.1 Flash Lite（軽量・超高速）",
+    "gemini-3.1-flash-lite-preview":   "Gemini 3.1 Flash Lite（軽量・超高速）",
 }
 
 # ===== Layer A Memory v2 Feature Flags =====
@@ -148,6 +148,7 @@ AUDIO_VECTORS_COLLECTION = "audio_vectors"
 VIDEO_VECTORS_COLLECTION = "video_vectors"
 MIXED_VECTORS_COLLECTION = "mixed_vectors"
 ISSUE_MEMO_COLLECTION = "issue_memos"
+ISSUE_PATTERN_COLLECTION = "issue_patterns"
 
 # Gemini Embedding 2 設定
 EMBEDDING_MODEL_V2 = "gemini-embedding-2-preview"
@@ -155,6 +156,9 @@ EMBED_SEMAPHORE_LIMIT = int(os.getenv("EMBED_SEMAPHORE_LIMIT", "5"))
 
 # 課題因果メモ Markdown 保存先
 ISSUE_MEMOS_DIR = BASE_DIR / "data" / "issue_memos"
+
+# 課題添付ファイル保存先
+ISSUE_ATTACHMENTS_DIR = BASE_DIR / "data" / "issue_attachments"
 
 # 除外フォルダ（インデックス対象外）
 EXCLUDE_FOLDERS = [

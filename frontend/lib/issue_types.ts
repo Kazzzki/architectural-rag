@@ -17,7 +17,13 @@ export interface Issue {
   created_at: string;
   updated_at: string;
   assignee: string | null;
+  deadline: string | null;
   context_memo: string | null;
+  is_task: 0 | 1;
+  completed_at: string | null;
+  due_time: string | null;
+  section_name: string | null;
+  parent_id: string | null;
 }
 
 export interface IssueEdge {
@@ -58,6 +64,23 @@ export interface IssueCaptureData {
   issue: Issue;
   causal_candidates: CausalCandidate[];
   duplicate_candidates: DuplicateCandidate[];
+}
+
+export interface IssueAttachment {
+  id: string;
+  issue_id: string;
+  attachment_type: 'photo' | 'drawing' | 'report';
+  file_path: string;
+  thumbnail_path: string | null;
+  caption: string | null;
+  created_at: string;
+}
+
+export interface CausalSuggestion {
+  title: string;
+  description: string;
+  confidence: number;
+  reason: string;
 }
 
 export interface ProjectMember {

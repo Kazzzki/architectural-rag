@@ -610,6 +610,70 @@ def _run_migrations():
             template_id  TEXT
         )""",
         """CREATE INDEX IF NOT EXISTS idx_itq_project ON issue_triage_questions(project_name)""",
+        # 議事録作成ツール: meetings テーブル新規作成
+        """CREATE TABLE IF NOT EXISTS meetings (
+            id                TEXT PRIMARY KEY,
+            title             TEXT NOT NULL,
+            meeting_date      TEXT,
+            duration_sec      REAL,
+            participants      TEXT,
+            original_filename TEXT,
+            full_transcript   TEXT NOT NULL DEFAULT '',
+            summary           TEXT,
+            agenda_items      TEXT,
+            decisions         TEXT,
+            action_items      TEXT,
+            open_issues       TEXT,
+            status            TEXT NOT NULL DEFAULT 'transcribing',
+            error_message     TEXT,
+            created_at        TEXT NOT NULL,
+            updated_at        TEXT NOT NULL
+        )""",
+        # 課題に期限フィールド追加
+        """ALTER TABLE issues ADD COLUMN deadline TEXT""",
+        # タスク管理用カラム
+        """ALTER TABLE issues ADD COLUMN is_task INTEGER DEFAULT 0""",
+        """ALTER TABLE issues ADD COLUMN completed_at TEXT""",
+        """ALTER TABLE issues ADD COLUMN due_time TEXT""",
+        """ALTER TABLE issues ADD COLUMN section_name TEXT""",
+        # タグテーブル
+        """CREATE TABLE IF NOT EXISTS issue_tags (
+            id TEXT PRIMARY KEY,
+            issue_id TEXT NOT NULL,
+            tag_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(issue_id, tag_name)
+        )""",
+        # 議事録↔課題リンク
+        """CREATE TABLE IF NOT EXISTS issue_meetings (
+            id TEXT PRIMARY KEY,
+            issue_id TEXT NOT NULL,
+            meeting_id TEXT NOT NULL,
+            link_type TEXT DEFAULT 'mentioned',
+            created_at TEXT NOT NULL,
+            UNIQUE(issue_id, meeting_id)
+        )""",
+        # FTS5全文検索 (課題メモ)
+        """CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
+            issue_id, title, description, context_memo, content=''
+        )""",
+        # 議事録にプロジェクト紐づけ
+        """ALTER TABLE meetings ADD COLUMN project_name TEXT""",
+        # サブタスク: 親タスクID
+        """ALTER TABLE issues ADD COLUMN parent_id TEXT""",
+        """CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id)""",
+        # Phase 1: 課題添付ファイル（写真・図面・検査報告書）
+        """CREATE TABLE IF NOT EXISTS issue_attachments (
+            id                  TEXT PRIMARY KEY,
+            issue_id            TEXT NOT NULL,
+            document_version_id TEXT,
+            attachment_type     TEXT NOT NULL DEFAULT 'photo',
+            file_path           TEXT NOT NULL,
+            thumbnail_path      TEXT,
+            caption             TEXT,
+            created_at          TEXT NOT NULL
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue ON issue_attachments(issue_id)""",
     ]
     with engine.connect() as conn:
         for sql in migrations:
