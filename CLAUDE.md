@@ -40,6 +40,33 @@ cd frontend && npm run dev
 # TODO: pytest + jest/vitest 導入
 ```
 
+## Claude Code リモートセッション
+
+チーム開発時やリモート環境からの作業に使用する。
+
+### Web版（推奨）
+
+1. ブラウザで `claude.ai/code` にアクセス
+2. GitHubアカウントで認証 → リポジトリ `kazzzki/architectural-rag` を選択
+3. クラウド環境でClaude Codeが起動し、ターミナル操作・コード編集が可能
+
+### CLIからリモート起動
+
+```bash
+claude remote
+```
+
+### セッション移行（Teleport）
+
+- **Web → CLI**: Web画面の「Teleport」ボタンでローカルCLIへセッション移動
+- **CLI → Web**: ローカルセッションをブラウザで再開
+
+### 注意事項
+
+- リモートセッションではプロジェクトルートの `CLAUDE.md` が自動読み込みされる
+- `settings.json` のフック設定もリモート環境で有効
+- 長時間タスクはリモートセッションで実行し、完了通知を受け取ると効率的
+
 ## 重要なファイル構造
 
 ```
