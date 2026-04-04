@@ -31,7 +31,7 @@ export default function TaskReport({
         start_date: startDate || undefined,
         end_date: endDate || undefined,
       });
-      setReport(result.report ?? result.message ?? '');
+      setReport(result.report_markdown ?? result.report ?? result.message ?? '');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'レポート生成に失敗しました');
     } finally {

@@ -903,6 +903,10 @@ def get_tasks(
     category_id: Optional[int] = Query(None),
     priority: Optional[str] = Query(None),
     project_name: Optional[str] = Query(None),
+    assignee_name: Optional[str] = Query(None),
+    label_id: Optional[int] = Query(None),
+    milestone_id: Optional[int] = Query(None),
+    parent_id: Optional[int] = Query(None),
     db=Depends(get_db),
 ) -> List[Dict[str, Any]]:
     where = ["1=1"]
@@ -919,6 +923,18 @@ def get_tasks(
     if project_name:
         where.append("t.project_name = :project_name")
         params["project_name"] = project_name
+    if assignee_name:
+        where.append("t.assignee_name = :assignee_name")
+        params["assignee_name"] = assignee_name
+    if label_id is not None:
+        where.append("EXISTS (SELECT 1 FROM task_label_map tlm WHERE tlm.task_id = t.id AND tlm.label_id = :label_id)")
+        params["label_id"] = label_id
+    if milestone_id is not None:
+        where.append("t.milestone_id = :milestone_id")
+        params["milestone_id"] = milestone_id
+    if parent_id is not None:
+        where.append("t.parent_id = :parent_id")
+        params["parent_id"] = parent_id
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     params["day_start"] = f"{today_str}T00:00:00+00:00"
@@ -926,6 +942,16 @@ def get_tasks(
 
     sql = f"""
         SELECT t.*, c.name AS category_name, c.color AS category_color,
+            m.name AS milestone_name,
+            (SELECT GROUP_CONCAT(tl.name, ',') FROM task_label_map tlm
+             JOIN task_labels tl ON tlm.label_id = tl.id
+             WHERE tlm.task_id = t.id) AS label_names,
+            (SELECT GROUP_CONCAT(tl.color, ',') FROM task_label_map tlm
+             JOIN task_labels tl ON tlm.label_id = tl.id
+             WHERE tlm.task_id = t.id) AS label_colors,
+            (SELECT GROUP_CONCAT(CAST(tl.id AS TEXT), ',') FROM task_label_map tlm
+             JOIN task_labels tl ON tlm.label_id = tl.id
+             WHERE tlm.task_id = t.id) AS label_ids,
             CASE WHEN EXISTS (
                 SELECT 1 FROM task_reminders r
                 WHERE r.task_id = t.id AND r.is_sent = 0
@@ -933,6 +959,7 @@ def get_tasks(
             ) THEN 1 ELSE 0 END AS has_today_reminder
         FROM tasks t
         LEFT JOIN task_categories c ON t.category_id = c.id
+        LEFT JOIN task_milestones m ON t.milestone_id = m.id
         WHERE {' AND '.join(where)}
         ORDER BY
             CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
@@ -945,12 +972,20 @@ def get_tasks(
 @router.post("/api/tasks", status_code=201)
 def create_task(req: TaskCreate, db=Depends(get_db)) -> Dict[str, Any]:
     now = _now_iso()
+    # Validate parent depth if parent_id is set
+    if req.parent_id:
+        _check_parent_depth(req.parent_id, db)
+
     result = db.execute(
         text("""
             INSERT INTO tasks (title, description, status, priority, category_id, due_date,
-                               estimated_minutes, actual_minutes, project_name, created_at, updated_at)
+                               estimated_minutes, actual_minutes, project_name,
+                               assignee_id, assignee_name, parent_id, milestone_id, start_date,
+                               created_at, updated_at)
             VALUES (:title, :description, :status, :priority, :category_id, :due_date,
-                    :estimated_minutes, :actual_minutes, :project_name, :created_at, :updated_at)
+                    :estimated_minutes, :actual_minutes, :project_name,
+                    :assignee_id, :assignee_name, :parent_id, :milestone_id, :start_date,
+                    :created_at, :updated_at)
         """),
         {
             "title": req.title,
@@ -962,11 +997,21 @@ def create_task(req: TaskCreate, db=Depends(get_db)) -> Dict[str, Any]:
             "estimated_minutes": req.estimated_minutes,
             "actual_minutes": req.actual_minutes,
             "project_name": req.project_name,
+            "assignee_id": req.assignee_id,
+            "assignee_name": req.assignee_name,
+            "parent_id": req.parent_id,
+            "milestone_id": req.milestone_id,
+            "start_date": req.start_date,
             "created_at": now,
             "updated_at": now,
         },
     )
     db.commit()
+
+    # Recalc parent progress if this is a subtask
+    if req.parent_id:
+        _recalc_progress(req.parent_id, db)
+
     if req.due_date:
         _upsert_auto_reminder(result.lastrowid, req.title, req.due_date, db)
         db.commit()
@@ -1038,6 +1083,17 @@ def update_task(task_id: int, req: TaskUpdate, db=Depends(get_db)) -> Dict[str, 
         updates["actual_minutes"] = req.actual_minutes
     if "project_name" in req.model_fields_set:
         updates["project_name"] = req.project_name
+    if req.assignee_id is not None:
+        updates["assignee_id"] = req.assignee_id
+    if req.assignee_name is not None:
+        updates["assignee_name"] = req.assignee_name
+    if req.parent_id is not None:
+        _check_parent_depth(req.parent_id, db)
+        updates["parent_id"] = req.parent_id
+    if req.milestone_id is not None:
+        updates["milestone_id"] = req.milestone_id
+    if req.start_date is not None:
+        updates["start_date"] = req.start_date
 
     if updates:
         updates["updated_at"] = _now_iso()
@@ -1045,6 +1101,14 @@ def update_task(task_id: int, req: TaskUpdate, db=Depends(get_db)) -> Dict[str, 
         set_clause = ", ".join(f"{k} = :{k}" for k in updates if k != "id")
         db.execute(text(f"UPDATE tasks SET {set_clause} WHERE id = :id"), updates)
         db.commit()
+
+    # Recalc parent progress if status changed
+    if req.status is not None:
+        parent_row = db.execute(
+            text("SELECT parent_id FROM tasks WHERE id = :id"), {"id": task_id}
+        ).fetchone()
+        if parent_row and parent_row[0]:
+            _recalc_progress(parent_row[0], db)
 
     if "due_date" in req.model_fields_set:
         title_row = db.execute(

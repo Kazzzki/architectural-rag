@@ -85,7 +85,8 @@ function TasksPageInner() {
     if (filterLabel) params.set('label', filterLabel);
     const q = params.toString();
     router.replace(`/tasks${q ? `?${q}` : ''}`, { scroll: false });
-  }, [viewMode, filterProject, filterCategory, filterPriority, filterAssignee, filterLabel, router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, filterProject, filterCategory, filterPriority, filterAssignee, filterLabel]);
 
   // Data fetch
   const fetchTasks = useCallback(async () => {
