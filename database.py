@@ -695,6 +695,164 @@ def _run_migrations():
             created_at          TEXT NOT NULL
         )""",
         """CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue ON issue_attachments(issue_id)""",
+        # 会議文字起こし改善: メモ・タイムスタンプ列追加
+        "ALTER TABLE meeting_sessions ADD COLUMN notes TEXT",
+        "ALTER TABLE meeting_chunks ADD COLUMN note TEXT",
+        "ALTER TABLE meeting_chunks ADD COLUMN start_offset_sec INTEGER",
+        # 会議全文検索: FTS5 仮想テーブル（unicode61 トークナイザで日本語対応）
+        """CREATE VIRTUAL TABLE IF NOT EXISTS meeting_fts USING fts5(
+            session_id, title, summary, notes, transcript,
+            tokenize='unicode61'
+        )""",
+        # FTS5 同期トリガー: meeting_sessions INSERT
+        """CREATE TRIGGER IF NOT EXISTS trg_meeting_sessions_ai AFTER INSERT ON meeting_sessions
+        BEGIN
+            INSERT INTO meeting_fts(session_id, title, summary, notes, transcript)
+            VALUES (CAST(NEW.id AS TEXT), COALESCE(NEW.title,''), COALESCE(NEW.summary,''), COALESCE(NEW.notes,''), '');
+        END""",
+        # FTS5 同期トリガー: meeting_sessions UPDATE
+        """CREATE TRIGGER IF NOT EXISTS trg_meeting_sessions_au AFTER UPDATE ON meeting_sessions
+        BEGIN
+            UPDATE meeting_fts SET
+                title = COALESCE(NEW.title,''),
+                summary = COALESCE(NEW.summary,''),
+                notes = COALESCE(NEW.notes,'')
+            WHERE session_id = CAST(NEW.id AS TEXT);
+        END""",
+        # FTS5 同期トリガー: meeting_chunks INSERT（transcript を session 行に追記）
+        """CREATE TRIGGER IF NOT EXISTS trg_meeting_chunks_ai AFTER INSERT ON meeting_chunks
+        BEGIN
+            UPDATE meeting_fts SET
+                transcript = transcript || ' ' || COALESCE(NEW.transcript,'')
+            WHERE session_id = CAST(NEW.session_id AS TEXT);
+        END""",
+        # タスク管理: プロジェクト紐付け列追加
+        "ALTER TABLE tasks ADD COLUMN project_name TEXT",
+        # === Phase 1: AI差別化 + 担当者 ===
+        "ALTER TABLE tasks ADD COLUMN assignee_id TEXT",
+        "ALTER TABLE tasks ADD COLUMN assignee_name TEXT",
+        # === Phase 2: サブタスク ===
+        "ALTER TABLE tasks ADD COLUMN parent_id INTEGER REFERENCES tasks(id)",
+        "ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN progress INTEGER DEFAULT 0",
+        # === Phase 2: ラベル ===
+        """CREATE TABLE IF NOT EXISTS task_labels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR NOT NULL UNIQUE,
+            color VARCHAR NOT NULL DEFAULT '#6366f1',
+            created_at TEXT NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS task_label_map (
+            task_id INTEGER NOT NULL REFERENCES tasks(id),
+            label_id INTEGER NOT NULL REFERENCES task_labels(id),
+            PRIMARY KEY (task_id, label_id)
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_task_label_map_task ON task_label_map(task_id)""",
+        """CREATE INDEX IF NOT EXISTS idx_task_label_map_label ON task_label_map(label_id)""",
+        # === Phase 2: 繰り返しタスク ===
+        """CREATE TABLE IF NOT EXISTS task_recurrence_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_task_id INTEGER NOT NULL REFERENCES tasks(id),
+            rrule_type VARCHAR NOT NULL DEFAULT 'weekly',
+            interval_value INTEGER NOT NULL DEFAULT 1,
+            day_of_week VARCHAR,
+            day_of_month INTEGER,
+            next_generate TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_recurrence_source ON task_recurrence_rules(source_task_id)""",
+        """CREATE INDEX IF NOT EXISTS idx_recurrence_next ON task_recurrence_rules(next_generate)""",
+        # === Phase 3: マイルストーン ===
+        """CREATE TABLE IF NOT EXISTS task_milestones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_name TEXT NOT NULL,
+            name VARCHAR NOT NULL,
+            target_date TEXT,
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_milestones_project ON task_milestones(project_name)""",
+        "ALTER TABLE tasks ADD COLUMN milestone_id INTEGER REFERENCES task_milestones(id)",
+        "ALTER TABLE tasks ADD COLUMN start_date TEXT",
+        # === Phase 4: 依存関係 ===
+        """CREATE TABLE IF NOT EXISTS task_dependencies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            predecessor_id INTEGER NOT NULL REFERENCES tasks(id),
+            successor_id INTEGER NOT NULL REFERENCES tasks(id),
+            dep_type VARCHAR NOT NULL DEFAULT 'FS',
+            lag_days INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE(predecessor_id, successor_id)
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_task_dep_pred ON task_dependencies(predecessor_id)""",
+        """CREATE INDEX IF NOT EXISTS idx_task_dep_succ ON task_dependencies(successor_id)""",
+        # ========== 会議アップグレード Phase 0: 統一プロジェクトマスター ==========
+        """CREATE TABLE IF NOT EXISTS projects_master (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            building_type TEXT,
+            phase TEXT,
+            scale TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""",
+        # ========== Phase 1A: ライブタイムスタンプメモ ==========
+        """CREATE TABLE IF NOT EXISTS meeting_live_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL REFERENCES meeting_sessions(id) ON DELETE CASCADE,
+            timestamp_sec INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            note_type TEXT NOT NULL DEFAULT 'memo',
+            created_at TEXT NOT NULL
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_live_notes_session ON meeting_live_notes(session_id)""",
+        # ========== Phase 1B: AI自動エンティティリンク + タグ ==========
+        """CREATE TABLE IF NOT EXISTS meeting_entity_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL REFERENCES meeting_sessions(id) ON DELETE CASCADE,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            mention_text TEXT,
+            timestamp_sec INTEGER,
+            confidence REAL DEFAULT 0.8,
+            created_at TEXT NOT NULL
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_entity_links_session ON meeting_entity_links(session_id)""",
+        """CREATE INDEX IF NOT EXISTS idx_entity_links_entity ON meeting_entity_links(entity_type, entity_id)""",
+        """CREATE TABLE IF NOT EXISTS meeting_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL REFERENCES meeting_sessions(id) ON DELETE CASCADE,
+            tag_name TEXT NOT NULL,
+            source TEXT DEFAULT 'ai',
+            created_at TEXT NOT NULL,
+            UNIQUE(session_id, tag_name)
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_meeting_tags_session ON meeting_tags(session_id)""",
+        """CREATE INDEX IF NOT EXISTS idx_meeting_tags_name ON meeting_tags(tag_name)""",
+        # ========== Phase 1C: カスタム辞書 + シリーズ ==========
+        """CREATE TABLE IF NOT EXISTS custom_dictionary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT,
+            term TEXT NOT NULL,
+            reading TEXT,
+            category TEXT,
+            created_at TEXT NOT NULL
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_custom_dict_project ON custom_dictionary(project_id)""",
+        "ALTER TABLE meeting_sessions ADD COLUMN series_name TEXT",
+        # ========== Phase 2: タスク統合 + シリーズテンプレート ==========
+        "ALTER TABLE tasks ADD COLUMN source_meeting_id INTEGER",
+        "ALTER TABLE tasks ADD COLUMN source_type TEXT DEFAULT 'manual'",
+        """CREATE TABLE IF NOT EXISTS meeting_series_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            series_name TEXT NOT NULL UNIQUE,
+            agenda_template TEXT,
+            summary_prompt TEXT,
+            created_at TEXT NOT NULL
+        )""",
     ]
     with engine.connect() as conn:
         for sql in migrations:

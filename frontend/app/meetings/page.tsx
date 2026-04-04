@@ -1,8 +1,6 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import Link from 'next/link';
-import { authFetch } from '@/lib/api';
 import {
   Mic,
   Square,
@@ -17,35 +15,17 @@ import {
   RefreshCw,
   Radio,
   Pencil,
+  Search,
+  Download,
+  AlertTriangle,
+  ChevronUp,
 } from 'lucide-react';
-
-// ===== 型定義 =====
-
-interface MeetingSession {
-  id: number;
-  project_name?: string;
-  title: string;
-  participants?: string;
-  summary?: string;
-  created_at: string;
-  updated_at: string;
-  chunk_count?: number;
-}
-
-interface MeetingChunk {
-  id: number;
-  session_id: number;
-  chunk_index: number;
-  transcript: string;
-  created_at: string;
-}
-
-interface MeetingDetail extends MeetingSession {
-  chunks: MeetingChunk[];
-  full_transcript: string;
-}
-
-type Phase = 'list' | 'recording' | 'done';
+import { authFetch } from '@/lib/api';
+import MeetingLiveNotes from '../components/meetings/MeetingLiveNotes';
+import {
+  MeetingSession, MeetingChunk, MeetingDetail,
+  apiFetch, formatDate, formatDuration, formatOffset, defaultTitle,
+} from './utils';
 
 // ===== Web Speech API 型宣言 =====
 interface SpeechRecognitionEvent extends Event { results: SpeechRecognitionResultList; resultIndex: number; }
@@ -54,47 +34,7 @@ declare global {
   interface Window { SpeechRecognition: any; webkitSpeechRecognition: any; }
 }
 
-// ===== API =====
-
-async function apiFetch(path: string, opts?: RequestInit) {
-  const res = await authFetch(path, {
-    ...opts,
-    signal: AbortSignal.timeout(15000),
-  });
-  if (res.status === 204) return null;
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
-  }
-  return res.json();
-}
-
-// ===== ユーティリティ =====
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleString('ja-JP', {
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  });
-}
-
-function formatDuration(seconds: number) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function defaultTitle() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const mo = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  const h = String(now.getHours()).padStart(2, '0');
-  const mi = String(now.getMinutes()).padStart(2, '0');
-  return `会議_${y}-${mo}-${d}_${h}:${mi}`;
-}
+type Phase = 'list' | 'recording' | 'done';
 
 // ===== 会議詳細モーダル =====
 
@@ -108,13 +48,78 @@ function MeetingDetailModal({
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [notes, setNotes] = useState('');
+  const [notesDirty, setNotesDirty] = useState(false);
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [chunkNotes, setChunkNotes] = useState<Record<number, string>>({});
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     apiFetch(`/api/meetings/${sessionId}`)
-      .then(setDetail)
+      .then((d) => {
+        setDetail(d);
+        setNotes(d?.notes ?? '');
+        const cn: Record<number, string> = {};
+        d?.chunks?.forEach((c: MeetingChunk) => { cn[c.id] = c.note ?? ''; });
+        setChunkNotes(cn);
+      })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [sessionId]);
+
+  // beforeunload for unsaved notes
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (notesDirty) { e.preventDefault(); }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [notesDirty]);
+
+  const saveNotes = useCallback(async () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setNotesSaving(true);
+    try {
+      await apiFetch(`/api/meetings/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      });
+      setNotesDirty(false);
+    } catch (err) {
+      console.error('notes save error:', err);
+      alert('メモの保存に失敗しました');
+    } finally {
+      setNotesSaving(false);
+    }
+  }, [sessionId, notes]);
+
+  const handleNotesChange = (val: string) => {
+    setNotes(val);
+    setNotesDirty(true);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => saveNotes(), 2000);
+  };
+
+  const handleNotesBlur = () => {
+    if (notesDirty) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      saveNotes();
+    }
+  };
+
+  const saveChunkNote = async (chunkId: number, note: string) => {
+    try {
+      await apiFetch(`/api/meetings/chunks/${chunkId}/note`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note }),
+      });
+    } catch (err) {
+      console.error('chunk note save error:', err);
+      alert('チャンクメモの保存に失敗しました');
+    }
+  };
 
   const toggleChunk = (id: number) => {
     setExpanded(prev => {
@@ -122,6 +127,10 @@ function MeetingDetailModal({
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
+  };
+
+  const handleExport = () => {
+    window.open(`/api/meetings/${sessionId}/export`, '_blank');
   };
 
   return (
@@ -136,12 +145,23 @@ function MeetingDetailModal({
               <p className="text-sm text-gray-400 mt-0.5">{formatDate(detail.created_at)}</p>
             )}
           </div>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            閉じる
-          </button>
+          <div className="flex items-center gap-2">
+            {detail && (
+              <button
+                onClick={handleExport}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                title="Markdownでエクスポート"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              閉じる
+            </button>
+          </div>
         </div>
 
         {loading ? (
@@ -176,6 +196,21 @@ function MeetingDetailModal({
               </div>
             )}
 
+            {/* セッションメモ */}
+            <div className="bg-amber-50 rounded-xl p-4">
+              <h3 className="text-sm font-semibold text-amber-700 mb-2 flex items-center gap-2">
+                メモ
+                {notesSaving && <Loader2 className="w-3 h-3 animate-spin text-amber-500" />}
+              </h3>
+              <textarea
+                value={notes}
+                onChange={(e) => handleNotesChange(e.target.value)}
+                onBlur={handleNotesBlur}
+                placeholder="議事メモ、決定事項、アクションアイテム..."
+                className="w-full min-h-[80px] px-3 py-2 rounded-lg border border-amber-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-transparent resize-y"
+              />
+            </div>
+
             {detail.chunks.length > 0 ? (
               <div>
                 <h3 className="text-sm font-semibold text-gray-700 mb-2">
@@ -190,6 +225,11 @@ function MeetingDetailModal({
                       >
                         <span className="text-sm font-medium text-gray-700">
                           チャンク {chunk.chunk_index + 1}
+                          {chunk.start_offset_sec != null && chunk.start_offset_sec > 0 && (
+                            <span className="ml-2 text-xs text-blue-500 font-mono">
+                              {formatOffset(chunk.start_offset_sec)}
+                            </span>
+                          )}
                           <span className="ml-2 text-xs text-gray-400">
                             {formatDate(chunk.created_at)}
                           </span>
@@ -200,10 +240,17 @@ function MeetingDetailModal({
                         }
                       </button>
                       {expanded.has(chunk.id) && (
-                        <div className="px-4 pb-4">
+                        <div className="px-4 pb-4 space-y-3">
                           <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
                             {chunk.transcript}
                           </p>
+                          <textarea
+                            value={chunkNotes[chunk.id] ?? ''}
+                            onChange={(e) => setChunkNotes(prev => ({ ...prev, [chunk.id]: e.target.value }))}
+                            onBlur={() => saveChunkNote(chunk.id, chunkNotes[chunk.id] ?? '')}
+                            placeholder="このチャンクへのメモ..."
+                            className="w-full min-h-[40px] px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent resize-y"
+                          />
                         </div>
                       )}
                     </div>
@@ -274,27 +321,25 @@ function MeetingCard({
   );
 }
 
-// ===== メタデータフォーム（録音中・Done共通） =====
+// ===== メタデータフォーム =====
 
 function MetaForm({
   title, setTitle,
   project, setProject,
   participants, setParticipants,
+  notes, setNotes,
   onSave,
   saving,
 }: {
   title: string; setTitle: (v: string) => void;
   project: string; setProject: (v: string) => void;
   participants: string; setParticipants: (v: string) => void;
+  notes: string; setNotes: (v: string) => void;
   onSave: () => void;
   saving: boolean;
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-3">
-      <div className="flex items-center gap-2 mb-1">
-        <Pencil className="w-4 h-4 text-gray-400" />
-        <span className="text-sm font-semibold text-gray-700">会議情報（任意）</span>
-      </div>
+    <div className="space-y-3">
       <input
         type="text"
         value={title}
@@ -316,6 +361,12 @@ function MetaForm({
         placeholder="参加者（任意、カンマ区切り）"
         className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 focus:border-transparent"
       />
+      <textarea
+        value={notes}
+        onChange={e => setNotes(e.target.value)}
+        placeholder="議事メモ、決定事項、アクションアイテム..."
+        className="w-full min-h-[60px] px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 focus:border-transparent resize-y"
+      />
       <button
         onClick={onSave}
         disabled={saving}
@@ -336,10 +387,16 @@ export default function MeetingsPage() {
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [detailId, setDetailId] = useState<number | null>(null);
 
-  // 録音中のメタデータ（オプション）
+  // 検索
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // メタデータ
   const [metaTitle, setMetaTitle] = useState('');
   const [metaProject, setMetaProject] = useState('');
   const [metaParticipants, setMetaParticipants] = useState('');
+  const [metaNotes, setMetaNotes] = useState('');
   const [metaSaving, setMetaSaving] = useState(false);
 
   // Recording
@@ -348,6 +405,7 @@ export default function MeetingsPage() {
   const [chunkIndex, setChunkIndex] = useState(0);
   const [transcripts, setTranscripts] = useState<string[]>([]);
   const [sendingChunk, setSendingChunk] = useState(false);
+  const [chunkError, setChunkError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -355,18 +413,27 @@ export default function MeetingsPage() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const chunkIndexRef = useRef(0);
   const isRecordingRef = useRef(false);
+  const elapsedRef = useRef(0);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
-  // Web Speech API
+  // Web Speech API — committed buffer pattern
   const recognitionRef = useRef<InstanceType<typeof window.SpeechRecognition> | null>(null);
   const [speechSupported, setSpeechSupported] = useState<boolean | null>(null);
-  const [speechInterim, setSpeechInterim] = useState(''); // 中間結果
-  const [speechFinal, setSpeechFinal] = useState('');     // 確定済み全文
+  const [speechInterim, setSpeechInterim] = useState('');
+  const [speechFinal, setSpeechFinal] = useState('');
   const [speechError, setSpeechError] = useState<string | null>(null);
+  const speechCommittedRef = useRef('');
+  const speechFinalRef = useRef('');
+  const speechErrorCountRef = useRef(0);
 
   // Done
   const [summary, setSummary] = useState('');
   const [finalizing, setFinalizing] = useState(false);
+
+  // 折りたたみ状態
+  const [speechCollapsed, setSpeechCollapsed] = useState(false);
+  const [geminiCollapsed, setGeminiCollapsed] = useState(true);
+  const [metaCollapsed, setMetaCollapsed] = useState(true);
 
   // 会議一覧取得
   const fetchSessions = useCallback(async () => {
@@ -390,6 +457,31 @@ export default function MeetingsPage() {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [transcripts]);
 
+  // ===== 検索 =====
+
+  const doSearch = useCallback(async (q: string) => {
+    if (!q.trim()) {
+      fetchSessions();
+      return;
+    }
+    setSearching(true);
+    try {
+      const data = await apiFetch(`/api/meetings/search?q=${encodeURIComponent(q)}`);
+      setSessions(data ?? []);
+    } catch {
+      // fallback to full list
+      fetchSessions();
+    } finally {
+      setSearching(false);
+    }
+  }, [fetchSessions]);
+
+  const handleSearchChange = (q: string) => {
+    setSearchQuery(q);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => doSearch(q), 300);
+  };
+
   // ===== メタデータ保存 =====
 
   const saveMetadata = async () => {
@@ -406,6 +498,7 @@ export default function MeetingsPage() {
           title: metaTitle.trim() || undefined,
           project_name: metaProject.trim() || undefined,
           participants: metaParticipants.trim() || undefined,
+          notes: metaNotes.trim() || undefined,
         }),
       });
     } catch (err) {
@@ -416,20 +509,22 @@ export default function MeetingsPage() {
     }
   };
 
-  // ===== 録音開始 =====
+  // ===== チャンク送信 =====
 
   const sendChunk = useCallback(async (blob: Blob, sid: number, idx: number) => {
     if (blob.size === 0) return;
     setSendingChunk(true);
+    setChunkError(null);
     try {
       const fd = new FormData();
       fd.append('session_id', String(sid));
       fd.append('chunk_index', String(idx));
+      fd.append('start_offset_sec', String(elapsedRef.current));
       fd.append('file', blob, `chunk_${idx}.webm`);
       const result = await authFetch('/api/meetings/chunk', {
         method: 'POST',
         body: fd,
-        signal: AbortSignal.timeout(120000), // Gemini処理に最大2分
+        signal: AbortSignal.timeout(120000),
       });
       const data = await result.json();
       if (data.transcript) {
@@ -438,16 +533,19 @@ export default function MeetingsPage() {
       chunkIndexRef.current = idx + 1;
       setChunkIndex(prev => prev + 1);
     } catch (err) {
-      console.error('chunk send error:', err);
+      const msg = err instanceof Error ? err.message : 'チャンク送信エラー';
+      console.error('chunk send error:', msg);
+      setChunkError(msg);
     } finally {
       setSendingChunk(false);
     }
   }, []);
 
+  // ===== 録音開始 =====
+
   const handleStartRecording = async () => {
     setStarting(true);
     try {
-      // デフォルトタイトルでセッション作成
       const title = defaultTitle();
       const session: MeetingSession = await apiFetch('/api/meetings', {
         method: 'POST',
@@ -458,14 +556,16 @@ export default function MeetingsPage() {
       setMetaTitle(title);
       setMetaProject('');
       setMetaParticipants('');
+      setMetaNotes('');
 
-      // 録音開始
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       chunkIndexRef.current = 0;
       setChunkIndex(0);
       setTranscripts([]);
       setElapsed(0);
+      elapsedRef.current = 0;
+      setChunkError(null);
 
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       mediaRecorderRef.current = recorder;
@@ -474,50 +574,66 @@ export default function MeetingsPage() {
           sendChunk(e.data, session.id, chunkIndexRef.current);
         }
       };
-      recorder.start(5 * 60 * 1000); // 5分ごとにチャンク送信
+      recorder.start(5 * 60 * 1000);
 
       timerRef.current = setInterval(() => {
         setElapsed(prev => prev + 1);
+        elapsedRef.current += 1;
       }, 1000);
 
-      // Web Speech API 起動
+      // Web Speech API — committed buffer pattern
       setSpeechFinal('');
       setSpeechInterim('');
       setSpeechError(null);
+      speechCommittedRef.current = '';
+      speechFinalRef.current = '';
+      speechErrorCountRef.current = 0;
+
       const SpeechRecognitionClass =
         typeof window !== 'undefined'
           ? (window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null)
           : null;
+
       if (SpeechRecognitionClass) {
         setSpeechSupported(true);
         const recognition = new SpeechRecognitionClass();
         recognition.lang = 'ja-JP';
         recognition.continuous = true;
         recognition.interimResults = true;
+
         recognition.onresult = (event: SpeechRecognitionEvent) => {
           let interim = '';
-          let finalText = '';
+          let sessionFinal = '';
           for (let i = 0; i < event.results.length; i++) {
             const result = event.results[i];
             if (result.isFinal) {
-              finalText += result[0].transcript;
+              sessionFinal += result[0].transcript;
             } else {
               interim += result[0].transcript;
             }
           }
-          setSpeechFinal(finalText);
+          speechFinalRef.current = sessionFinal;
+          setSpeechFinal(speechCommittedRef.current + sessionFinal);
           setSpeechInterim(interim);
         };
+
         recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-          if (event.error === 'no-speech') return; // 無音は無視
-          if (event.error === 'network' || event.error === 'service-not-allowed') {
-            // onend が自動的に再起動を試みる
-            return;
+          if (event.error === 'no-speech') return;
+          speechErrorCountRef.current += 1;
+          if (speechErrorCountRef.current >= 5) {
+            setSpeechError('音声認識で繰り返しエラーが発生しています。Gemini高精度版は引き続き動作します。');
           }
-          setSpeechError(`音声認識エラー: ${event.error}`);
+          if (event.error === 'network' || event.error === 'service-not-allowed') return;
+          if (speechErrorCountRef.current < 5) {
+            setSpeechError(`音声認識エラー: ${event.error}`);
+          }
         };
+
         recognition.onend = () => {
           if (isRecordingRef.current) {
+            // Commit current session's finals before restart
+            speechCommittedRef.current = speechCommittedRef.current + speechFinalRef.current;
+            speechFinalRef.current = '';
             setTimeout(() => {
               if (isRecordingRef.current) {
                 try { recognition.start(); } catch (_) {}
@@ -525,6 +641,7 @@ export default function MeetingsPage() {
             }, 300);
           }
         };
+
         recognition.start();
         recognitionRef.current = recognition;
       } else {
@@ -558,7 +675,6 @@ export default function MeetingsPage() {
     recognitionRef.current = null;
 
     if (sessionId) {
-      // メタデータを保存してからサマリー生成
       setFinalizing(true);
       setPhase('done');
       try {
@@ -569,6 +685,7 @@ export default function MeetingsPage() {
             title: metaTitle.trim() || undefined,
             project_name: metaProject.trim() || undefined,
             participants: metaParticipants.trim() || undefined,
+            notes: metaNotes.trim() || undefined,
           }),
         });
         const result = await apiFetch(`/api/meetings/${sessionId}/finalize`, {
@@ -596,12 +713,14 @@ export default function MeetingsPage() {
     setMetaTitle('');
     setMetaProject('');
     setMetaParticipants('');
+    setMetaNotes('');
     setTranscripts([]);
     setSpeechFinal('');
     setSpeechInterim('');
     setSpeechError(null);
     setElapsed(0);
     setSummary('');
+    setChunkError(null);
   };
 
   // ===== レンダリング =====
@@ -657,6 +776,21 @@ export default function MeetingsPage() {
                 </div>
               )}
 
+              {/* 検索 */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  placeholder="会議を検索..."
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent bg-white"
+                />
+                {searching && (
+                  <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 animate-spin" />
+                )}
+              </div>
+
               {/* 会議一覧 */}
               {loadingSessions ? (
                 <div className="flex items-center justify-center py-16">
@@ -665,12 +799,14 @@ export default function MeetingsPage() {
               ) : sessions.length === 0 ? (
                 <div className="text-center py-16 text-gray-400">
                   <FileText className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                  <p className="text-sm">まだ会議記録がありません</p>
+                  <p className="text-sm">
+                    {searchQuery ? '該当する会議がありません' : 'まだ会議記録がありません'}
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-3">
                   <p className="text-sm font-medium text-gray-500">
-                    過去の会議 ({sessions.length}件)
+                    {searchQuery ? `検索結果 (${sessions.length}件)` : `過去の会議 (${sessions.length}件)`}
                   </p>
                   {sessions.map(s => (
                     <MeetingCard
@@ -717,6 +853,14 @@ export default function MeetingsPage() {
                   )}
                 </div>
 
+                {/* チャンク送信エラー */}
+                {chunkError && (
+                  <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-4">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                    {chunkError}
+                  </div>
+                )}
+
                 <button
                   onClick={stopRecording}
                   className="w-full py-3 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900 transition-colors flex items-center justify-center gap-2"
@@ -739,71 +883,120 @@ export default function MeetingsPage() {
                 </button>
               </div>
 
-              {/* メタデータ入力（オプション） */}
-              <MetaForm
-                title={metaTitle} setTitle={setMetaTitle}
-                project={metaProject} setProject={setMetaProject}
-                participants={metaParticipants} setParticipants={setMetaParticipants}
-                onSave={saveMetadata}
-                saving={metaSaving}
-              />
+              {/* ライブメモ（メイン操作エリア） */}
+              {sessionId && (
+                <MeetingLiveNotes
+                  sessionId={sessionId}
+                  elapsedSec={elapsed}
+                />
+              )}
 
-              {/* Web Speech API — リアルタイム速報 */}
-              <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                  <span>📝</span>
-                  リアルタイム（Web Speech）
-                </h3>
-                {speechSupported === false ? (
-                  <p className="text-sm text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
-                    Web Speech APIは非対応です。Geminiのみで文字起こしします。
-                  </p>
-                ) : speechError ? (
-                  <p className="text-sm text-red-500">{speechError}</p>
-                ) : (speechFinal || speechInterim) ? (
-                  <div className="max-h-48 overflow-y-auto text-sm leading-relaxed">
-                    <span className="text-gray-800">{speechFinal}</span>
-                    {speechInterim && (
-                      <span className="text-gray-400 italic">{speechInterim}</span>
+              {/* Web Speech API — リアルタイム速報（折りたたみ可） */}
+              <div className="bg-white rounded-2xl border border-gray-200">
+                <button
+                  onClick={() => setSpeechCollapsed(!speechCollapsed)}
+                  className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors rounded-2xl"
+                >
+                  <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                    リアルタイム（Web Speech）
+                    {(speechFinal || speechInterim) && !speechCollapsed && (
+                      <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
                     )}
-                  </div>
-                ) : (
-                  <div className="py-6 text-center">
-                    <p className="text-sm text-gray-400">話し始めると文字起こしが表示されます</p>
-                    <div className="flex justify-center gap-1 mt-2">
-                      {[0, 1, 2].map(i => (
-                        <span key={i} className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"
-                          style={{ animationDelay: `${i * 0.15}s` }} />
-                      ))}
-                    </div>
+                  </h3>
+                  {speechCollapsed ? <ChevronRight className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                </button>
+                {!speechCollapsed && (
+                  <div className="px-5 pb-4">
+                    {speechSupported === false ? (
+                      <p className="text-sm text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
+                        Web Speech APIは非対応です。Geminiのみで文字起こしします。
+                      </p>
+                    ) : speechError ? (
+                      <p className="text-sm text-amber-600 bg-amber-50 rounded-lg px-3 py-2">{speechError}</p>
+                    ) : (speechFinal || speechInterim) ? (
+                      <div className="max-h-48 overflow-y-auto text-sm leading-relaxed">
+                        <span className="text-gray-800">{speechFinal}</span>
+                        {speechInterim && (
+                          <span className="text-gray-400 italic">{speechInterim}</span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="py-4 text-center">
+                        <p className="text-sm text-gray-400">話し始めると文字起こしが表示されます</p>
+                        <div className="flex justify-center gap-1 mt-2">
+                          {[0, 1, 2].map(i => (
+                            <span key={i} className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"
+                              style={{ animationDelay: `${i * 0.15}s` }} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
 
-              {/* Gemini — 高精度版 */}
-              <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                  <span>✨</span>
-                  Gemini高精度版
-                  {sendingChunk && (
-                    <span className="flex items-center gap-1 text-blue-500 ml-auto text-xs font-normal">
-                      <Loader2 className="w-3 h-3 animate-spin" />処理中...
-                    </span>
-                  )}
-                </h3>
-                {transcripts.length === 0 ? (
-                  <div className="py-6 text-center">
-                    <p className="text-sm text-gray-400">5分ごとに高精度版が表示されます</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3 max-h-64 overflow-y-auto">
-                    {transcripts.map((text, i) => (
-                      <div key={i} className="border-l-2 border-blue-200 pl-3">
-                        <p className="text-xs text-gray-400 mb-1">チャンク {i + 1}</p>
-                        <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{text}</p>
+              {/* Gemini — 高精度版（折りたたみ可） */}
+              <div className="bg-white rounded-2xl border border-gray-200">
+                <button
+                  onClick={() => setGeminiCollapsed(!geminiCollapsed)}
+                  className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors rounded-2xl"
+                >
+                  <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                    Gemini高精度版
+                    {sendingChunk && (
+                      <span className="flex items-center gap-1 text-blue-500 text-xs font-normal">
+                        <Loader2 className="w-3 h-3 animate-spin" />処理中...
+                      </span>
+                    )}
+                    {chunkIndex > 0 && (
+                      <span className="text-xs text-gray-400 font-normal">{chunkIndex}件</span>
+                    )}
+                  </h3>
+                  {geminiCollapsed ? <ChevronRight className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                </button>
+                {!geminiCollapsed && (
+                  <div className="px-5 pb-4">
+                    {transcripts.length === 0 ? (
+                      <div className="py-4 text-center">
+                        <p className="text-sm text-gray-400">5分ごとに高精度版が表示されます</p>
                       </div>
-                    ))}
-                    <div ref={transcriptEndRef} />
+                    ) : (
+                      <div className="space-y-3 max-h-64 overflow-y-auto">
+                        {transcripts.map((text, i) => (
+                          <div key={i} className="border-l-2 border-blue-200 pl-3">
+                            <p className="text-xs text-gray-400 mb-1">チャンク {i + 1}</p>
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{text}</p>
+                          </div>
+                        ))}
+                        <div ref={transcriptEndRef} />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* メタデータ + メモ入力（折りたたみ可） */}
+              <div className="bg-white rounded-2xl border border-gray-200">
+                <button
+                  onClick={() => setMetaCollapsed(!metaCollapsed)}
+                  className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors rounded-2xl"
+                >
+                  <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                    <Pencil className="w-4 h-4 text-gray-400" />
+                    会議情報
+                  </h3>
+                  {metaCollapsed ? <ChevronRight className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                </button>
+                {!metaCollapsed && (
+                  <div className="px-5 pb-4">
+                    <MetaForm
+                      title={metaTitle} setTitle={setMetaTitle}
+                      project={metaProject} setProject={setMetaProject}
+                      participants={metaParticipants} setParticipants={setMetaParticipants}
+                      notes={metaNotes} setNotes={setMetaNotes}
+                      onSave={saveMetadata}
+                      saving={metaSaving}
+                    />
                   </div>
                 )}
               </div>
@@ -822,11 +1015,12 @@ export default function MeetingsPage() {
                 </div>
               </div>
 
-              {/* メタデータ編集 */}
+              {/* メタデータ + メモ編集 */}
               <MetaForm
                 title={metaTitle} setTitle={setMetaTitle}
                 project={metaProject} setProject={setMetaProject}
                 participants={metaParticipants} setParticipants={setMetaParticipants}
+                notes={metaNotes} setNotes={setMetaNotes}
                 onSave={saveMetadata}
                 saving={metaSaving}
               />
@@ -875,12 +1069,6 @@ export default function MeetingsPage() {
               >
                 一覧に戻る
               </button>
-              <Link
-                href="/"
-                className="block w-full py-2 text-center text-sm text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                ← チャットに戻る
-              </Link>
             </div>
           )}
         </div>

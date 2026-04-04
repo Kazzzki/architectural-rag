@@ -9,6 +9,7 @@ import {
   Pencil, Save, X, ClipboardList,
 } from 'lucide-react';
 import { authFetch } from '@/lib/api';
+import MeetingTimeline from '../../components/meetings/MeetingTimeline';
 
 interface MeetingDetail {
   id: string;
@@ -30,7 +31,7 @@ interface MeetingDetail {
   updated_at: string;
 }
 
-type TabId = 'minutes' | 'transcript';
+type TabId = 'minutes' | 'timeline' | 'transcript';
 
 function formatDuration(sec: number | null): string {
   if (!sec) return '-';
@@ -282,6 +283,16 @@ export default function MeetingDetailPage() {
                 議事録
               </button>
               <button
+                onClick={() => setActiveTab('timeline')}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                  activeTab === 'timeline'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                タイムライン
+              </button>
+              <button
                 onClick={() => setActiveTab('transcript')}
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
                   activeTab === 'transcript'
@@ -438,6 +449,11 @@ export default function MeetingDetailPage() {
                     )}
                   </div>
                 )}
+              </div>
+            ) : activeTab === 'timeline' ? (
+              /* Timeline Tab */
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <MeetingTimeline sessionId={parseInt(meetingId)} />
               </div>
             ) : (
               /* Transcript Tab */

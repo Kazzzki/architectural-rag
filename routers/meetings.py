@@ -112,6 +112,7 @@ def get_meeting(session_id: int, db=Depends(get_db)) -> Dict[str, Any]:
 async def receive_chunk(
     session_id: int = Form(...),
     chunk_index: int = Form(0),
+    start_offset_sec: int = Form(0),
     file: UploadFile = File(...),
     db=Depends(get_db),
 ) -> Dict[str, Any]:
@@ -153,12 +154,13 @@ async def receive_chunk(
     # DB 保存
     now = _now_iso()
     result = db.execute(text("""
-        INSERT INTO meeting_chunks (session_id, chunk_index, transcript, created_at)
-        VALUES (:session_id, :chunk_index, :transcript, :created_at)
+        INSERT INTO meeting_chunks (session_id, chunk_index, transcript, start_offset_sec, created_at)
+        VALUES (:session_id, :chunk_index, :transcript, :start_offset_sec, :created_at)
     """), {
         "session_id": session_id,
         "chunk_index": chunk_index,
         "transcript": transcript,
+        "start_offset_sec": start_offset_sec,
         "created_at": now,
     })
     # セッションの updated_at を更新
@@ -178,6 +180,7 @@ class SessionUpdate(BaseModel):
     title: Optional[str] = None
     project_name: Optional[str] = None
     participants: Optional[str] = None
+    notes: Optional[str] = None
 
 
 @router.patch("/api/meetings/{session_id}")
@@ -197,6 +200,8 @@ def update_meeting(session_id: int, req: SessionUpdate, db=Depends(get_db)) -> D
         updates["project_name"] = req.project_name
     if req.participants is not None:
         updates["participants"] = req.participants
+    if req.notes is not None:
+        updates["notes"] = req.notes
 
     if updates:
         set_clause = ", ".join(f"{k} = :{k}" for k in updates)
@@ -252,3 +257,299 @@ def finalize_meeting(session_id: int, db=Depends(get_db)) -> Dict[str, Any]:
     db.commit()
 
     return {"session_id": session_id, "summary": summary}
+
+
+# ===== チャンクメモ =====
+
+class ChunkNoteUpdate(BaseModel):
+    note: str
+
+
+@router.patch("/api/meetings/chunks/{chunk_id}/note")
+def update_chunk_note(chunk_id: int, req: ChunkNoteUpdate, db=Depends(get_db)) -> Dict[str, Any]:
+    """チャンク単位のメモを更新"""
+    chunk = db.execute(
+        text("SELECT id FROM meeting_chunks WHERE id = :id"),
+        {"id": chunk_id}
+    ).fetchone()
+    if not chunk:
+        raise HTTPException(status_code=404, detail="チャンクが見つかりません")
+
+    try:
+        db.execute(
+            text("UPDATE meeting_chunks SET note = :note WHERE id = :id"),
+            {"note": req.note, "id": chunk_id}
+        )
+        db.commit()
+    except Exception as e:
+        logger.error(f"Chunk note update error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"保存エラー: {str(e)}")
+
+    return {"chunk_id": chunk_id, "note": req.note}
+
+
+# ===== ライブメモ (Phase 1A) =====
+
+ALLOWED_NOTE_TYPES = {"memo", "decision", "action", "risk"}
+
+
+class LiveNoteCreate(BaseModel):
+    session_id: int
+    timestamp_sec: int
+    content: str
+    note_type: str = "memo"
+
+
+class LiveNoteUpdate(BaseModel):
+    content: Optional[str] = None
+    note_type: Optional[str] = None
+
+
+@router.post("/api/meetings/live-notes", status_code=201)
+def create_live_note(req: LiveNoteCreate, db=Depends(get_db)) -> Dict[str, Any]:
+    """ライブメモを作成（録音中にタイムスタンプ付きで追加）"""
+    session = db.execute(
+        text("SELECT id FROM meeting_sessions WHERE id = :id"),
+        {"id": req.session_id}
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議セッションが見つかりません")
+
+    note_type = req.note_type if req.note_type in ALLOWED_NOTE_TYPES else "memo"
+    now = _now_iso()
+    result = db.execute(text("""
+        INSERT INTO meeting_live_notes (session_id, timestamp_sec, content, note_type, created_at)
+        VALUES (:session_id, :timestamp_sec, :content, :note_type, :created_at)
+    """), {
+        "session_id": req.session_id,
+        "timestamp_sec": req.timestamp_sec,
+        "content": req.content,
+        "note_type": note_type,
+        "created_at": now,
+    })
+    db.commit()
+    row = db.execute(
+        text("SELECT * FROM meeting_live_notes WHERE id = :id"),
+        {"id": result.lastrowid}
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+@router.get("/api/meetings/{session_id}/live-notes")
+def get_live_notes(session_id: int, db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """セッションのライブメモ一覧（タイムスタンプ昇順）"""
+    rows = db.execute(text("""
+        SELECT * FROM meeting_live_notes
+        WHERE session_id = :sid
+        ORDER BY timestamp_sec ASC, id ASC
+    """), {"sid": session_id}).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+@router.patch("/api/meetings/live-notes/{note_id}")
+def update_live_note(note_id: int, req: LiveNoteUpdate, db=Depends(get_db)) -> Dict[str, Any]:
+    """ライブメモの内容・タイプを更新"""
+    note = db.execute(
+        text("SELECT id FROM meeting_live_notes WHERE id = :id"),
+        {"id": note_id}
+    ).fetchone()
+    if not note:
+        raise HTTPException(status_code=404, detail="メモが見つかりません")
+
+    updates: Dict[str, Any] = {}
+    if req.content is not None:
+        updates["content"] = req.content
+    if req.note_type is not None:
+        if req.note_type in ALLOWED_NOTE_TYPES:
+            updates["note_type"] = req.note_type
+
+    if updates:
+        set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+        updates["id"] = note_id
+        db.execute(text(f"UPDATE meeting_live_notes SET {set_clause} WHERE id = :id"), updates)
+        db.commit()
+
+    row = db.execute(
+        text("SELECT * FROM meeting_live_notes WHERE id = :id"),
+        {"id": note_id}
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+@router.delete("/api/meetings/live-notes/{note_id}")
+def delete_live_note(note_id: int, db=Depends(get_db)) -> Dict[str, str]:
+    """ライブメモを削除"""
+    note = db.execute(
+        text("SELECT id FROM meeting_live_notes WHERE id = :id"),
+        {"id": note_id}
+    ).fetchone()
+    if not note:
+        raise HTTPException(status_code=404, detail="メモが見つかりません")
+
+    db.execute(text("DELETE FROM meeting_live_notes WHERE id = :id"), {"id": note_id})
+    db.commit()
+    return {"status": "deleted"}
+
+
+@router.get("/api/meetings/{session_id}/timeline")
+def get_meeting_timeline(session_id: int, db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """チャンク（文字起こし）とライブメモを時間軸で統合して返す"""
+    chunks = db.execute(text("""
+        SELECT id, chunk_index, transcript, start_offset_sec, note, created_at
+        FROM meeting_chunks
+        WHERE session_id = :sid
+        ORDER BY chunk_index ASC
+    """), {"sid": session_id}).fetchall()
+
+    notes = db.execute(text("""
+        SELECT id, timestamp_sec, content, note_type, created_at
+        FROM meeting_live_notes
+        WHERE session_id = :sid
+        ORDER BY timestamp_sec ASC
+    """), {"sid": session_id}).fetchall()
+
+    timeline = []
+    for c in chunks:
+        cd = _row_to_dict(c)
+        timeline.append({
+            "type": "chunk",
+            "timestamp_sec": cd.get("start_offset_sec") or 0,
+            "id": cd["id"],
+            "chunk_index": cd["chunk_index"],
+            "transcript": cd.get("transcript", ""),
+            "note": cd.get("note"),
+            "created_at": cd["created_at"],
+        })
+    for n in notes:
+        nd = _row_to_dict(n)
+        timeline.append({
+            "type": "live_note",
+            "timestamp_sec": nd["timestamp_sec"],
+            "id": nd["id"],
+            "content": nd["content"],
+            "note_type": nd["note_type"],
+            "created_at": nd["created_at"],
+        })
+
+    timeline.sort(key=lambda x: (x["timestamp_sec"], 0 if x["type"] == "chunk" else 1))
+    return timeline
+
+
+# ===== 会議検索 (FTS5) =====
+
+import re
+
+def _sanitize_fts_query(q: str) -> str:
+    """FTS5 クエリをサニタイズ: 英数字・日本語・空白のみ残しフレーズ検索"""
+    cleaned = re.sub(r'[^\w\s\u3000-\u9fff\uff00-\uffef]', '', q).strip()
+    if not cleaned:
+        return ''
+    return f'"{cleaned}"'
+
+
+@router.get("/api/meetings/search")
+def search_meetings(q: str = "", db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """会議をFTS5全文検索（空クエリは全件返却）"""
+    if not q.strip():
+        return list_meetings(db)
+
+    safe_q = _sanitize_fts_query(q)
+    if not safe_q:
+        return list_meetings(db)
+
+    try:
+        rows = db.execute(text("""
+            SELECT s.*, COUNT(c.id) AS chunk_count
+            FROM meeting_fts f
+            JOIN meeting_sessions s ON s.id = CAST(f.session_id AS INTEGER)
+            LEFT JOIN meeting_chunks c ON c.session_id = s.id
+            WHERE meeting_fts MATCH :q
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+        """), {"q": safe_q}).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"FTS5 search error (falling back to full list): {e}")
+        return list_meetings(db)
+
+
+# ===== Markdownエクスポート =====
+
+from fastapi.responses import PlainTextResponse
+
+
+def _format_offset(sec: Optional[int]) -> str:
+    if sec is None or sec < 0:
+        return ""
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    s = sec % 60
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+@router.get("/api/meetings/{session_id}/export")
+def export_meeting(session_id: int, db=Depends(get_db)):
+    """会議をMarkdown形式でエクスポート"""
+    session = db.execute(
+        text("SELECT * FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議が見つかりません")
+
+    s = _row_to_dict(session)
+    chunks = db.execute(text("""
+        SELECT * FROM meeting_chunks
+        WHERE session_id = :sid
+        ORDER BY chunk_index ASC, created_at ASC
+    """), {"sid": session_id}).fetchall()
+
+    lines = [f"# {s.get('title', '無題')}"]
+    lines.append("")
+    if s.get("created_at"):
+        lines.append(f"- 日時: {s['created_at']}")
+    if s.get("project_name"):
+        lines.append(f"- プロジェクト: {s['project_name']}")
+    if s.get("participants"):
+        lines.append(f"- 参加者: {s['participants']}")
+    lines.append("")
+
+    if s.get("notes"):
+        lines.append("## メモ")
+        lines.append("")
+        lines.append(s["notes"])
+        lines.append("")
+
+    if chunks:
+        lines.append("## 文字起こし")
+        lines.append("")
+        for i, row in enumerate(chunks):
+            c = _row_to_dict(row)
+            ts = _format_offset(c.get("start_offset_sec"))
+            header = f"### チャンク {c.get('chunk_index', i) + 1}"
+            if ts:
+                header += f" ({ts})"
+            lines.append(header)
+            lines.append("")
+            if c.get("transcript"):
+                lines.append(c["transcript"])
+                lines.append("")
+            if c.get("note"):
+                lines.append(f"> メモ: {c['note']}")
+                lines.append("")
+
+    if s.get("summary"):
+        lines.append("## AI サマリー")
+        lines.append("")
+        lines.append(s["summary"])
+        lines.append("")
+
+    md = "\n".join(lines)
+    filename = f"{s.get('title', 'meeting')}_{session_id}.md"
+    return PlainTextResponse(
+        content=md,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
