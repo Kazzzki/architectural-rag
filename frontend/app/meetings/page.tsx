@@ -549,34 +549,46 @@ export default function MeetingsPage() {
 
   // ===== チャンク送信 =====
 
-  const sendChunk = useCallback(async (blob: Blob, sid: number, idx: number) => {
+  // チャンク送信キュー: 前のチャンクの送信完了を待ってから次を送る
+  const chunkQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const sendChunk = useCallback(async (blob: Blob, sid: number) => {
     if (blob.size === 0) return;
-    setSendingChunk(true);
-    setChunkError(null);
-    try {
-      const fd = new FormData();
-      fd.append('session_id', String(sid));
-      fd.append('chunk_index', String(idx));
-      fd.append('start_offset_sec', String(elapsedRef.current));
-      fd.append('file', blob, `chunk_${idx}.webm`);
-      const result = await authFetch('/api/meetings/chunk', {
-        method: 'POST',
-        body: fd,
-        signal: AbortSignal.timeout(120000),
-      });
-      const data = await result.json();
-      if (data.transcript) {
-        setTranscripts(prev => [...prev, data.transcript]);
+
+    // キューに追加して順次実行（レースコンディション防止）
+    chunkQueueRef.current = chunkQueueRef.current.then(async () => {
+      const idx = chunkIndexRef.current;
+      setSendingChunk(true);
+      setChunkError(null);
+      try {
+        const fd = new FormData();
+        fd.append('session_id', String(sid));
+        fd.append('chunk_index', String(idx));
+        fd.append('start_offset_sec', String(elapsedRef.current));
+        fd.append('file', blob, `chunk_${idx}.webm`);
+        const result = await authFetch('/api/meetings/chunk', {
+          method: 'POST',
+          body: fd,
+          signal: AbortSignal.timeout(120000),
+        });
+        if (!result.ok) {
+          const err = await result.json().catch(() => ({}));
+          throw new Error((err as { detail?: string }).detail ?? `HTTP ${result.status}`);
+        }
+        const data = await result.json();
+        if (data.transcript) {
+          setTranscripts(prev => [...prev, data.transcript]);
+        }
+        chunkIndexRef.current = idx + 1;
+        setChunkIndex(prev => prev + 1);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'チャンク送信エラー';
+        console.error('chunk send error:', msg);
+        setChunkError(msg);
+      } finally {
+        setSendingChunk(false);
       }
-      chunkIndexRef.current = idx + 1;
-      setChunkIndex(prev => prev + 1);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'チャンク送信エラー';
-      console.error('chunk send error:', msg);
-      setChunkError(msg);
-    } finally {
-      setSendingChunk(false);
-    }
+    });
   }, []);
 
   // ===== 録音開始 =====
@@ -611,7 +623,7 @@ export default function MeetingsPage() {
       mediaRecorderRef.current = recorder;
       recorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
-          sendChunk(e.data, session.id, chunkIndexRef.current);
+          sendChunk(e.data, session.id);
         }
       };
       recorder.start(5 * 60 * 1000);
@@ -717,6 +729,8 @@ export default function MeetingsPage() {
     if (sessionId) {
       setFinalizing(true);
       setPhase('done');
+      // Wait for any pending chunk sends to complete before finalizing
+      await chunkQueueRef.current;
       try {
         await apiFetch(`/api/meetings/${sessionId}`, {
           method: 'PATCH',

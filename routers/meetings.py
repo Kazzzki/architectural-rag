@@ -183,6 +183,9 @@ async def receive_chunk(
             ],
         )
         transcript = (response.text or "").strip()
+        if not transcript:
+            logger.warning(f"Gemini returned empty transcript for session {session_id} chunk {chunk_index}")
+            transcript = "[音声を認識できませんでした]"
     except Exception as e:
         logger.error(f"Gemini transcribe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"文字起こしエラー: {str(e)}")
