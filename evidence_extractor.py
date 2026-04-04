@@ -70,10 +70,7 @@ def _extract_from_chunk(query: str, chunk_text: str) -> List[Dict[str, Any]]:
     client = get_client()
     from config import GEMINI_MODEL_RAG
 
-    prompt = _EXTRACTION_PROMPT.format(
-        query=query,
-        chunk_text=chunk_text[:2000],
-    )
+    prompt = _EXTRACTION_PROMPT.replace("{query}", query).replace("{chunk_text}", chunk_text[:2000])
     response = client.models.generate_content(
         model=GEMINI_MODEL_RAG,
         contents=[prompt],

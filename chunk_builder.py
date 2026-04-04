@@ -136,11 +136,15 @@ class ChunkBuilder:
                     continue
 
                 # Contextual header: メタデータから文脈ヘッダーを生成
-                contextual_content = self._build_contextual_content(
-                    clean_leaf, source_file, section_title, leaf_page,
-                    source_metadata.get("doc_type", ""),
-                    source_metadata.get("category", ""),
-                )
+                from config import CONTEXTUAL_CHUNKING_ENABLED
+                if CONTEXTUAL_CHUNKING_ENABLED:
+                    contextual_content = self._build_contextual_content(
+                        clean_leaf, source_file, section_title, leaf_page,
+                        source_metadata.get("doc_type", ""),
+                        source_metadata.get("category", ""),
+                    )
+                else:
+                    contextual_content = clean_leaf
 
                 # 決定論的ID
                 leaf_id = f"leaf_{version_id}_{i}_{j}"
