@@ -641,6 +641,57 @@ def list_series(db=Depends(get_db)) -> List[str]:
     return [r[0] for r in rows]
 
 
+# ===== Phase 2: タスク統合 + テンプレート =====
+
+@router.post("/api/meetings/{session_id}/create-tasks")
+def create_tasks_from_meeting(session_id: int, db=Depends(get_db)) -> Dict[str, Any]:
+    """議事録のアクションアイテムからタスクを自動作成"""
+    session = db.execute(
+        text("SELECT id FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議が見つかりません")
+
+    tasks = meeting_ai.create_tasks_from_meeting(session_id, db)
+    return {"session_id": session_id, "tasks_created": tasks, "count": len(tasks)}
+
+
+@router.get("/api/meetings/{session_id}/carry-forward")
+def get_carry_forward(session_id: int, db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """同シリーズの未完了タスクを取得（キャリーフォワード）"""
+    session = db.execute(
+        text("SELECT series_name FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議が見つかりません")
+
+    series_name = dict(session._mapping).get("series_name")
+    return meeting_ai.get_carry_forward_tasks(series_name or "", session_id, db)
+
+
+class SeriesTemplateRequest(BaseModel):
+    series_name: str
+    agenda_template: str = ""
+    summary_prompt: str = ""
+
+
+@router.get("/api/meetings/templates/{series_name}")
+def get_series_template(series_name: str, db=Depends(get_db)) -> Dict[str, Any]:
+    """シリーズテンプレート取得"""
+    tpl = meeting_ai.get_series_template(series_name, db)
+    if not tpl:
+        return {"series_name": series_name, "agenda_template": "", "summary_prompt": ""}
+    return tpl
+
+
+@router.put("/api/meetings/templates")
+def save_series_template(req: SeriesTemplateRequest, db=Depends(get_db)) -> Dict[str, Any]:
+    """シリーズテンプレート保存"""
+    return meeting_ai.save_series_template(req.series_name, req.agenda_template, req.summary_prompt, db)
+
+
 # ===== 会議検索 (FTS5) =====
 
 import re

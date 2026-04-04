@@ -413,3 +413,138 @@ def auto_classify_project(session_id: int, db) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Auto-classify error: {e}")
         return None
+
+
+# ===== M2: アクションアイテム → tasks 統合 =====
+
+def create_tasks_from_meeting(session_id: int, db) -> List[Dict[str, Any]]:
+    """議事録のアクションアイテムからタスクを自動作成"""
+    session = db.execute(
+        text("SELECT * FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        return []
+
+    s = dict(session._mapping)
+    summary = s.get("summary", "")
+    if not summary:
+        return []
+
+    # Gemini でアクションアイテム抽出
+    prompt = f"""以下の会議サマリーからアクションアイテムを抽出してください。
+
+## 会議サマリー
+{summary[:4000]}
+
+## 指示
+JSON配列で返してください。各要素:
+{{"title": "タスクタイトル(30字以内)", "description": "詳細", "assignee": "担当者名(不明なら空文字)", "due_date": "期限(YYYY-MM-DD、不明ならnull)"}}
+アクションアイテムがない場合は空配列 [] を返してください。
+JSON配列のみ返してください。"""
+
+    try:
+        client = get_client()
+        response = client.models.generate_content(
+            model=config.GEMINI_MODEL_RAG,
+            contents=prompt,
+        )
+        raw = (response.text or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+            raw = raw.rsplit("```", 1)[0]
+        actions = json.loads(raw)
+        if not isinstance(actions, list):
+            actions = []
+    except Exception as e:
+        logger.error(f"Action extraction error: {e}", exc_info=True)
+        return []
+
+    # tasks テーブルに INSERT
+    now = _now_iso()
+    created = []
+    for act in actions[:10]:
+        if not isinstance(act, dict) or not act.get("title"):
+            continue
+        try:
+            result = db.execute(text("""
+                INSERT INTO tasks (title, description, status, priority, assignee_name,
+                    due_date, source_meeting_id, source_type, project_name, created_at, updated_at)
+                VALUES (:title, :desc, 'todo', 'medium', :assignee,
+                    :due, :mid, 'meeting_action', :pn, :ca, :ua)
+            """), {
+                "title": act["title"][:100],
+                "desc": act.get("description", ""),
+                "assignee": act.get("assignee", ""),
+                "due": act.get("due_date"),
+                "mid": session_id,
+                "pn": s.get("project_name"),
+                "ca": now, "ua": now,
+            })
+            created.append({
+                "id": result.lastrowid,
+                "title": act["title"],
+                "assignee": act.get("assignee", ""),
+            })
+        except Exception as e:
+            logger.warning(f"Failed to create task from meeting: {e}")
+
+    if created:
+        db.commit()
+    return created
+
+
+def get_carry_forward_tasks(series_name: str, current_session_id: int, db) -> List[Dict[str, Any]]:
+    """同シリーズの過去会議から未完了タスクを取得（キャリーフォワード）"""
+    if not series_name:
+        return []
+
+    rows = db.execute(text("""
+        SELECT t.id, t.title, t.status, t.assignee_name, t.due_date,
+               t.source_meeting_id, ms.title as meeting_title
+        FROM tasks t
+        LEFT JOIN meeting_sessions ms ON ms.id = t.source_meeting_id
+        WHERE t.source_type = 'meeting_action'
+          AND t.status != 'done'
+          AND ms.series_name = :sn
+          AND t.source_meeting_id != :sid
+        ORDER BY t.created_at DESC
+        LIMIT 20
+    """), {"sn": series_name, "sid": current_session_id}).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+# ===== M5: アジェンダ連動型要約テンプレート =====
+
+def get_series_template(series_name: str, db) -> Optional[Dict[str, Any]]:
+    """シリーズのテンプレートを取得"""
+    row = db.execute(text("""
+        SELECT * FROM meeting_series_templates WHERE series_name = :sn
+    """), {"sn": series_name}).fetchone()
+    return dict(row._mapping) if row else None
+
+
+def save_series_template(series_name: str, agenda_template: str, summary_prompt: str, db) -> Dict[str, Any]:
+    """シリーズテンプレートを保存（upsert）"""
+    now = _now_iso()
+    existing = db.execute(text(
+        "SELECT id FROM meeting_series_templates WHERE series_name = :sn"
+    ), {"sn": series_name}).fetchone()
+
+    if existing:
+        db.execute(text("""
+            UPDATE meeting_series_templates
+            SET agenda_template = :at, summary_prompt = :sp
+            WHERE series_name = :sn
+        """), {"at": agenda_template, "sp": summary_prompt, "sn": series_name})
+    else:
+        db.execute(text("""
+            INSERT INTO meeting_series_templates (series_name, agenda_template, summary_prompt, created_at)
+            VALUES (:sn, :at, :sp, :ca)
+        """), {"sn": series_name, "at": agenda_template, "sp": summary_prompt, "ca": now})
+
+    db.commit()
+    row = db.execute(text(
+        "SELECT * FROM meeting_series_templates WHERE series_name = :sn"
+    ), {"sn": series_name}).fetchone()
+    return dict(row._mapping)
