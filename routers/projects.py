@@ -1,9 +1,102 @@
-from fastapi import APIRouter, Depends
+import uuid
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from sqlalchemy import text
+from typing import Optional, Any, Dict, List
+
 from database import get_db, Settings, ProjectProfile
 
 router = APIRouter(tags=["Projects"])
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ===== 統一プロジェクトマスター =====
+
+class ProjectMasterCreate(BaseModel):
+    name: str
+    building_type: Optional[str] = None
+    phase: Optional[str] = None
+    scale: Optional[str] = None
+
+
+class ProjectMasterUpdate(BaseModel):
+    name: Optional[str] = None
+    building_type: Optional[str] = None
+    phase: Optional[str] = None
+    scale: Optional[str] = None
+
+
+def _pm_row_to_dict(row: Any) -> Dict[str, Any]:
+    if row is None:
+        return {}
+    return dict(row._mapping)
+
+
+@router.get("/api/projects/master")
+def list_projects_master(db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """統一プロジェクトマスター一覧"""
+    rows = db.execute(text(
+        "SELECT * FROM projects_master ORDER BY updated_at DESC"
+    )).fetchall()
+    return [_pm_row_to_dict(r) for r in rows]
+
+
+@router.post("/api/projects/master", status_code=201)
+def create_project_master(req: ProjectMasterCreate, db=Depends(get_db)) -> Dict[str, Any]:
+    """プロジェクトマスター新規作成"""
+    now = _now_iso()
+    pid = str(uuid.uuid4())[:8]
+    try:
+        db.execute(text("""
+            INSERT INTO projects_master (id, name, building_type, phase, scale, created_at, updated_at)
+            VALUES (:id, :name, :bt, :phase, :scale, :ca, :ua)
+        """), {
+            "id": pid, "name": req.name,
+            "bt": req.building_type, "phase": req.phase, "scale": req.scale,
+            "ca": now, "ua": now,
+        })
+        db.commit()
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise HTTPException(status_code=409, detail="同名のプロジェクトが既に存在します")
+        raise
+    row = db.execute(text("SELECT * FROM projects_master WHERE id = :id"), {"id": pid}).fetchone()
+    return _pm_row_to_dict(row)
+
+
+@router.patch("/api/projects/master/{project_id}")
+def update_project_master(project_id: str, req: ProjectMasterUpdate, db=Depends(get_db)) -> Dict[str, Any]:
+    """プロジェクトマスター更新"""
+    existing = db.execute(
+        text("SELECT id FROM projects_master WHERE id = :id"), {"id": project_id}
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="プロジェクトが見つかりません")
+
+    updates: Dict[str, Any] = {}
+    if req.name is not None:
+        updates["name"] = req.name
+    if req.building_type is not None:
+        updates["building_type"] = req.building_type
+    if req.phase is not None:
+        updates["phase"] = req.phase
+    if req.scale is not None:
+        updates["scale"] = req.scale
+
+    if updates:
+        updates["updated_at"] = _now_iso()
+        updates["id"] = project_id
+        set_clause = ", ".join(f"{k} = :{k}" for k in updates if k != "id")
+        db.execute(text(f"UPDATE projects_master SET {set_clause} WHERE id = :id"), updates)
+        db.commit()
+
+    row = db.execute(text("SELECT * FROM projects_master WHERE id = :id"), {"id": project_id}).fetchone()
+    return _pm_row_to_dict(row)
 
 class ActiveScopeRequest(BaseModel):
     project_id: Optional[str] = None
