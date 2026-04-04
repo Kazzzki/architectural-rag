@@ -18,6 +18,9 @@ export interface Issue {
   updated_at: string;
   assignee: string | null;
   context_memo: string | null;
+  legal_risk_level: 'high' | 'medium' | 'low' | null;
+  evidence_status: 'recorded' | 'partial' | 'unrecorded' | null;
+  evidence_gap?: boolean;
 }
 
 export type EdgeRelationType = 'direct_cause' | 'indirect_cause' | 'correlation' | 'countermeasure';
@@ -42,9 +45,13 @@ export interface IssueNote {
 }
 
 export interface AIInvestigationResult {
-  type: 'rca' | 'impact' | 'countermeasure';
+  type: 'rca' | 'impact' | 'countermeasure' | 'technical' | 'legal';
   result: string;
   related_issue_ids: string[];
+  // D2 legal mode の拡張フィールド
+  suggested_level?: 'high' | 'medium' | 'low';
+  evidence_recommendations?: string[];
+  sources?: { title: string; rel_path: string }[];
 }
 
 export interface HealthCheckResult {
@@ -117,4 +124,19 @@ export interface ProjectMember {
   name: string;
   role: string | null;
   created_at: string;
+}
+
+export interface RelatedStandard {
+  standard_name: string;
+  clause: string;
+  key_values: string;
+  relevance: string;
+}
+
+export interface ChainRiskScanResult {
+  technical_risks: { issue_id: string; risk: string; severity: 'high' | 'medium' | 'low' }[];
+  legal_risks: { issue_id: string; risk: string; law_reference: string }[];
+  evidence_gaps: { issue_id: string; gap: string; urgency: 'high' | 'medium' | 'low' }[];
+  recommended_actions: { action: string; priority: 'high' | 'medium' | 'low'; target_issue_ids: string[] }[];
+  scanned_issue_ids: string[];
 }

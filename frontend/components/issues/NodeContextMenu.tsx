@@ -15,6 +15,7 @@ interface NodeContextMenuProps {
   onStartEdge: (issueId: string) => void;
   onAIInvestigate: (issue: Issue) => void;
   onOpenMemo: (issue: Issue) => void;
+  onChainRiskScan?: (issue: Issue) => void;
 }
 
 const STATUS_OPTIONS = ['発生中', '対応中', '解決済み'] as const;
@@ -24,7 +25,7 @@ const PRIORITY_LABELS: Record<string, string> = { critical: 'Critical', normal: 
 export default function NodeContextMenu({
   x, y, issue, onClose,
   onStatusChange, onPriorityChange, onDelete, onDuplicate,
-  onStartEdge, onAIInvestigate, onOpenMemo,
+  onStartEdge, onAIInvestigate, onOpenMemo, onChainRiskScan,
 }: NodeContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -111,6 +112,11 @@ export default function NodeContextMenu({
       <button onClick={() => { onAIInvestigate(issue); onClose(); }} className={menuItemClass}>
         <span className="w-4 text-center">🔍</span>
         AI調査
+      </button>
+
+      <button onClick={() => { onChainRiskScan?.(issue); onClose(); }} className={menuItemClass}>
+        <span className="w-4 text-center">🔗</span>
+        チェーンリスク分析
       </button>
 
       <div className="border-t border-gray-100 my-1" />

@@ -22,6 +22,7 @@ import { Issue, IssueEdge, EdgeRelationType } from '@/lib/issue_types';
 import IssueNodeComponent from './IssueNode';
 import DeletableEdge from './DeletableEdge';
 import NodeContextMenu from './NodeContextMenu';
+import ChainRiskScanPanel from './ChainRiskScanPanel';
 import type { PriorityFilter } from './IssueFilterBar';
 
 // カテゴリラベル用カスタムノード
@@ -194,6 +195,7 @@ function IssueCausalGraphInner({
 
   // コンテキストメニュー
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; issue: Issue } | null>(null);
+  const [chainRiskIssueId, setChainRiskIssueId] = useState<string | null>(null);
 
   // ギャップ検出
   const [gapEdges, setGapEdges] = useState<Edge[]>([]);
@@ -522,6 +524,22 @@ function IssueCausalGraphInner({
           onStartEdge={() => {}}
           onAIInvestigate={(issue) => onNodeClick(issue)}
           onOpenMemo={(issue) => onNodeClick(issue)}
+          onChainRiskScan={(issue) => { setChainRiskIssueId(issue.id); }}
+        />
+      )}
+
+      {/* チェーンリスク分析パネル (D3) — Drawerと排他表示 */}
+      {chainRiskIssueId && (
+        <ChainRiskScanPanel
+          issueId={chainRiskIssueId}
+          onClose={() => setChainRiskIssueId(null)}
+          onNodeHighlight={(id) => {
+            // Find and select the node on the graph
+            const node = rfNodes.find(n => n.id === id || n.id.startsWith(id));
+            if (node) {
+              onNodeClick(node.data?.issue);
+            }
+          }}
         />
       )}
     </div>

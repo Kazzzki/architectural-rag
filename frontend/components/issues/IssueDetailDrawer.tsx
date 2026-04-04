@@ -2,10 +2,67 @@
 
 import React, { useEffect, useState } from 'react';
 import { authFetch } from '@/lib/api';
-import { Issue, IssueAttachment, CausalSuggestion } from '@/lib/issue_types';
-import { X, Paperclip, Upload, Loader2, Sparkles, Check, Edit3, XCircle } from 'lucide-react';
+import { Issue, IssueAttachment, CausalSuggestion, RelatedStandard } from '@/lib/issue_types';
+import { X, Paperclip, Upload, Loader2, Sparkles, Check, Edit3, XCircle, BookOpen } from 'lucide-react';
 import NoteTimeline from './NoteTimeline';
 import AIInvestigatePanel from './AIInvestigatePanel';
+
+// --- Related Standards Section (D5) ---
+function RelatedStandardsSection({ issueId }: { issueId: string }) {
+  const [standards, setStandards] = React.useState<RelatedStandard[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [fetched, setFetched] = React.useState(false);
+
+  async function fetchStandards() {
+    setLoading(true);
+    try {
+      const res = await authFetch(`/api/issues/${issueId}/related-standards`);
+      if (res.ok) {
+        const data = await res.json();
+        setStandards(data.standards || []);
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setLoading(false);
+      setFetched(true);
+    }
+  }
+
+  return (
+    <div>
+      <label className="text-xs font-medium text-gray-500 block mb-1.5">技術基準</label>
+      {!fetched && (
+        <button
+          onClick={fetchStandards}
+          disabled={loading}
+          className="w-full flex items-center justify-center gap-1.5 p-2 border border-gray-200 rounded-lg hover:bg-blue-50 hover:border-blue-300 transition-colors text-xs text-gray-600 disabled:opacity-40"
+        >
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <BookOpen size={14} />}
+          {loading ? '検索中...' : '関連技術基準を検索'}
+        </button>
+      )}
+      {fetched && standards.length === 0 && (
+        <p className="text-xs text-gray-400">関連する技術基準が見つかりませんでした</p>
+      )}
+      {standards.length > 0 && (
+        <div className="space-y-1.5">
+          {standards.map((s, i) => (
+            <div key={i} className="p-2 bg-blue-50 rounded-lg border border-blue-100">
+              <div className="flex items-start justify-between gap-1">
+                <span className="text-[11px] font-medium text-blue-800">{s.standard_name}</span>
+                <span className="text-[9px] text-blue-600 bg-blue-100 px-1 rounded flex-shrink-0">{s.clause}</span>
+              </div>
+              {s.key_values && <p className="text-[10px] text-blue-700 mt-0.5">{s.key_values}</p>}
+              <p className="text-[9px] text-gray-500 mt-0.5">{s.relevance}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // --- Attachment Section ---
 function AttachmentSection({ issueId }: { issueId: string }) {
@@ -388,6 +445,27 @@ export default function IssueDetailDrawer({ issue, onClose, onUpdated }: IssueDe
             </div>
           )}
 
+          {/* エビデンス状態 (D4) */}
+          <div>
+            <label className="text-xs font-medium text-gray-500 block mb-1.5">エビデンス状態</label>
+            <select
+              value={issue.evidence_status || ''}
+              onChange={(e) => {
+                const val = e.target.value || null;
+                patch({ evidence_status: val });
+              }}
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              <option value="">未設定</option>
+              <option value="recorded">記録済み</option>
+              <option value="partial">一部記録</option>
+              <option value="unrecorded">未記録</option>
+            </select>
+            {issue.evidence_gap && (
+              <p className="text-[10px] text-orange-600 mt-1">法的リスクが中以上のため、エビデンスの記録を推奨します</p>
+            )}
+          </div>
+
           {/* AI原因分析 */}
           <AISuggestSection issueId={issue.id} projectName={issue.project_name} onCauseAccepted={() => onUpdated(issue)} />
 
@@ -398,7 +476,10 @@ export default function IssueDetailDrawer({ issue, onClose, onUpdated }: IssueDe
           <NoteTimeline issueId={issue.id} />
 
           {/* AI調査 */}
-          <AIInvestigatePanel issue={issue} />
+          <AIInvestigatePanel issue={issue} onUpdated={onUpdated} />
+
+          {/* 技術基準リファレンス (D5) */}
+          <RelatedStandardsSection issueId={issue.id} />
         </div>
 
         {/* フッター: 折りたたみトグル */}

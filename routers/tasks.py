@@ -99,6 +99,12 @@ class TaskCreate(BaseModel):
     due_date: Optional[str] = None
     estimated_minutes: Optional[int] = None
     actual_minutes: Optional[int] = None
+    project_name: Optional[str] = None
+    assignee_id: Optional[str] = None
+    assignee_name: Optional[str] = None
+    parent_id: Optional[int] = None
+    milestone_id: Optional[int] = None
+    start_date: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
@@ -110,6 +116,12 @@ class TaskUpdate(BaseModel):
     due_date: Optional[str] = None
     estimated_minutes: Optional[int] = None
     actual_minutes: Optional[int] = None
+    project_name: Optional[str] = None
+    assignee_id: Optional[str] = None
+    assignee_name: Optional[str] = None
+    parent_id: Optional[int] = None
+    milestone_id: Optional[int] = None
+    start_date: Optional[str] = None
 
 
 class CommentCreate(BaseModel):
@@ -123,6 +135,99 @@ class ReminderCreate(BaseModel):
 
 class TaskChatRequest(BaseModel):
     message: str
+
+
+class BulkUpdateRequest(BaseModel):
+    task_ids: List[int]
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    assignee_id: Optional[str] = None
+    assignee_name: Optional[str] = None
+
+
+class BulkCreateRequest(BaseModel):
+    tasks: List[TaskCreate]
+
+
+class LabelCreate(BaseModel):
+    name: str
+    color: str = "#6366f1"
+
+
+class LabelAttach(BaseModel):
+    label_ids: List[int]
+
+
+class MilestoneCreate(BaseModel):
+    project_name: str
+    name: str
+    target_date: Optional[str] = None
+    status: str = "pending"
+    sort_order: int = 0
+
+
+class MilestoneUpdate(BaseModel):
+    name: Optional[str] = None
+    target_date: Optional[str] = None
+    status: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+class RecurrenceCreate(BaseModel):
+    rrule_type: str = "weekly"
+    interval_value: int = 1
+    day_of_week: Optional[str] = None
+    day_of_month: Optional[int] = None
+
+
+class MeetingExtractRequest(BaseModel):
+    meeting_id: int
+
+
+class ReportGenerateRequest(BaseModel):
+    period: str = "weekly"
+    project_name: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+# ===== ヘルパー（進捗再計算） =====
+
+def _recalc_progress(parent_id: int, db) -> None:
+    """親タスクの progress を子タスクのステータスから再計算"""
+    if not parent_id:
+        return
+    children = db.execute(
+        text("SELECT status FROM tasks WHERE parent_id = :pid"),
+        {"pid": parent_id},
+    ).fetchall()
+    if not children:
+        return
+    total = len(children)
+    done = sum(1 for c in children if c[0] == "done")
+    progress = int((done / total) * 100)
+    db.execute(
+        text("UPDATE tasks SET progress = :progress, updated_at = :now WHERE id = :id"),
+        {"progress": progress, "now": _now_iso(), "id": parent_id},
+    )
+    db.commit()
+
+
+def _check_parent_depth(parent_id: int, db, max_depth: int = 3) -> int:
+    """親チェーンの深さを返す。max_depth 超で HTTPException"""
+    depth = 0
+    current = parent_id
+    while current:
+        depth += 1
+        if depth > max_depth:
+            raise HTTPException(status_code=400, detail=f"サブタスクの最大ネスト深度({max_depth})を超えています")
+        row = db.execute(
+            text("SELECT parent_id FROM tasks WHERE id = :id"), {"id": current}
+        ).fetchone()
+        if not row:
+            break
+        current = row[0]
+    return depth
 
 
 # ===== カテゴリ =====
@@ -359,6 +464,437 @@ def task_chat(req: TaskChatRequest, db=Depends(get_db)) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="テキストを解析できませんでした")
 
 
+# ===== ラベル CRUD =====
+
+@router.get("/api/task-labels")
+def get_labels(db=Depends(get_db)) -> List[Dict[str, Any]]:
+    rows = db.execute(
+        text("SELECT * FROM task_labels ORDER BY name")
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+@router.post("/api/task-labels", status_code=201)
+def create_label(req: LabelCreate, db=Depends(get_db)) -> Dict[str, Any]:
+    now = _now_iso()
+    result = db.execute(
+        text("INSERT INTO task_labels (name, color, created_at) VALUES (:name, :color, :created_at)"),
+        {"name": req.name, "color": req.color, "created_at": now},
+    )
+    db.commit()
+    row = db.execute(
+        text("SELECT * FROM task_labels WHERE id = :id"), {"id": result.lastrowid}
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+# ===== マイルストーン CRUD =====
+
+@router.get("/api/task-milestones")
+def get_milestones(
+    project_name: Optional[str] = Query(None),
+    db=Depends(get_db),
+) -> List[Dict[str, Any]]:
+    if project_name:
+        rows = db.execute(
+            text("SELECT * FROM task_milestones WHERE project_name = :pn ORDER BY sort_order, target_date"),
+            {"pn": project_name},
+        ).fetchall()
+    else:
+        rows = db.execute(
+            text("SELECT * FROM task_milestones ORDER BY project_name, sort_order, target_date")
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+@router.post("/api/task-milestones", status_code=201)
+def create_milestone(req: MilestoneCreate, db=Depends(get_db)) -> Dict[str, Any]:
+    now = _now_iso()
+    result = db.execute(
+        text("""
+            INSERT INTO task_milestones (project_name, name, target_date, status, sort_order, created_at, updated_at)
+            VALUES (:project_name, :name, :target_date, :status, :sort_order, :created_at, :updated_at)
+        """),
+        {
+            "project_name": req.project_name,
+            "name": req.name,
+            "target_date": req.target_date,
+            "status": req.status,
+            "sort_order": req.sort_order,
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+    db.commit()
+    row = db.execute(
+        text("SELECT * FROM task_milestones WHERE id = :id"), {"id": result.lastrowid}
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+@router.put("/api/task-milestones/{milestone_id}")
+def update_milestone(milestone_id: int, req: MilestoneUpdate, db=Depends(get_db)) -> Dict[str, Any]:
+    existing = db.execute(
+        text("SELECT id FROM task_milestones WHERE id = :id"), {"id": milestone_id}
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="マイルストーンが見つかりません")
+    updates: Dict[str, Any] = {}
+    if req.name is not None:
+        updates["name"] = req.name
+    if req.target_date is not None:
+        updates["target_date"] = req.target_date
+    if req.status is not None:
+        updates["status"] = req.status
+    if req.sort_order is not None:
+        updates["sort_order"] = req.sort_order
+    if updates:
+        updates["updated_at"] = _now_iso()
+        updates["id"] = milestone_id
+        set_clause = ", ".join(f"{k} = :{k}" for k in updates if k != "id")
+        db.execute(text(f"UPDATE task_milestones SET {set_clause} WHERE id = :id"), updates)
+        db.commit()
+    row = db.execute(
+        text("SELECT * FROM task_milestones WHERE id = :id"), {"id": milestone_id}
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+@router.delete("/api/task-milestones/{milestone_id}", status_code=204)
+def delete_milestone(milestone_id: int, db=Depends(get_db)) -> None:
+    existing = db.execute(
+        text("SELECT id FROM task_milestones WHERE id = :id"), {"id": milestone_id}
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="マイルストーンが見つかりません")
+    # Unlink tasks from this milestone
+    db.execute(
+        text("UPDATE tasks SET milestone_id = NULL WHERE milestone_id = :id"),
+        {"id": milestone_id},
+    )
+    db.execute(
+        text("DELETE FROM task_milestones WHERE id = :id"), {"id": milestone_id}
+    )
+    db.commit()
+
+
+# ===== バルク操作 =====
+
+@router.put("/api/tasks/bulk")
+def bulk_update_tasks(req: BulkUpdateRequest, db=Depends(get_db)) -> Dict[str, Any]:
+    if len(req.task_ids) > 50:
+        raise HTTPException(status_code=400, detail="一度に更新できるのは50件までです")
+    if not req.task_ids:
+        raise HTTPException(status_code=400, detail="task_ids が空です")
+
+    updates: Dict[str, Any] = {}
+    if req.status is not None:
+        updates["status"] = req.status
+    if req.priority is not None:
+        updates["priority"] = req.priority
+    if req.assignee_id is not None:
+        updates["assignee_id"] = req.assignee_id
+    if req.assignee_name is not None:
+        updates["assignee_name"] = req.assignee_name
+    if not updates:
+        raise HTTPException(status_code=400, detail="更新フィールドが指定されていません")
+
+    updates["updated_at"] = _now_iso()
+    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+    # SQLite does not support array bind; use IN with individual params
+    id_params = {f"id_{i}": tid for i, tid in enumerate(req.task_ids)}
+    id_placeholders = ", ".join(f":id_{i}" for i in range(len(req.task_ids)))
+    params = {**updates, **id_params}
+    db.execute(text(f"UPDATE tasks SET {set_clause} WHERE id IN ({id_placeholders})"), params)
+    db.commit()
+    return {"updated": len(req.task_ids)}
+
+
+@router.post("/api/tasks/bulk-create", status_code=201)
+def bulk_create_tasks(req: BulkCreateRequest, db=Depends(get_db)) -> List[Dict[str, Any]]:
+    if len(req.tasks) > 50:
+        raise HTTPException(status_code=400, detail="一度に作成できるのは50件までです")
+    created = []
+    now = _now_iso()
+    for t in req.tasks:
+        result = db.execute(
+            text("""
+                INSERT INTO tasks (title, description, status, priority, category_id, due_date,
+                                   estimated_minutes, actual_minutes, project_name,
+                                   assignee_id, assignee_name, parent_id, milestone_id, start_date,
+                                   created_at, updated_at)
+                VALUES (:title, :description, :status, :priority, :category_id, :due_date,
+                        :estimated_minutes, :actual_minutes, :project_name,
+                        :assignee_id, :assignee_name, :parent_id, :milestone_id, :start_date,
+                        :created_at, :updated_at)
+            """),
+            {
+                "title": t.title, "description": t.description, "status": t.status,
+                "priority": t.priority, "category_id": t.category_id, "due_date": t.due_date,
+                "estimated_minutes": t.estimated_minutes, "actual_minutes": t.actual_minutes,
+                "project_name": t.project_name,
+                "assignee_id": t.assignee_id, "assignee_name": t.assignee_name,
+                "parent_id": t.parent_id, "milestone_id": t.milestone_id, "start_date": t.start_date,
+                "created_at": now, "updated_at": now,
+            },
+        )
+        created.append(result.lastrowid)
+    db.commit()
+    # Fetch all created
+    id_params = {f"id_{i}": tid for i, tid in enumerate(created)}
+    id_placeholders = ", ".join(f":id_{i}" for i in range(len(created)))
+    rows = db.execute(
+        text(f"""
+            SELECT t.*, c.name AS category_name, c.color AS category_color
+            FROM tasks t LEFT JOIN task_categories c ON t.category_id = c.id
+            WHERE t.id IN ({id_placeholders})
+        """),
+        id_params,
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+# ===== AI: 議事録からタスク抽出 =====
+
+@router.post("/api/tasks/extract-from-meeting")
+def extract_tasks_from_meeting(req: MeetingExtractRequest, db=Depends(get_db)) -> Dict[str, Any]:
+    from gemini_client import get_client
+
+    # Fetch meeting info
+    session = db.execute(
+        text("SELECT id, title, participants FROM meeting_sessions WHERE id = :id"),
+        {"id": req.meeting_id},
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議が見つかりません")
+    session_dict = _row_to_dict(session)
+
+    # Fetch transcripts
+    chunks = db.execute(
+        text("SELECT transcript FROM meeting_chunks WHERE session_id = :sid ORDER BY id"),
+        {"sid": req.meeting_id},
+    ).fetchall()
+    transcript = " ".join(c[0] for c in chunks if c[0])
+
+    if not transcript.strip():
+        raise HTTPException(status_code=400, detail="議事録のテキストが空です")
+
+    prompt = f"""以下の会議録からアクションアイテム（タスク）を抽出してJSON配列で返してください。
+
+会議タイトル: {session_dict.get('title', '不明')}
+参加者: {session_dict.get('participants', '不明')}
+
+議事録:
+{transcript[:8000]}
+
+以下のJSON配列形式で返してください。JSONのみ返してください。
+[
+  {{
+    "title": "タスクタイトル",
+    "assignee_name": "担当者名（議事録から推定、不明ならnull）",
+    "due_date": "YYYY-MM-DD（推定、不明ならnull）",
+    "priority": "low|medium|high",
+    "description": "詳細説明"
+  }}
+]
+"""
+
+    try:
+        client = get_client()
+        response = client.models.generate_content(
+            model=GEMINI_MODEL_RAG,
+            contents=prompt,
+        )
+        raw = response.text.strip()
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+        parsed = json.loads(raw)
+    except Exception as e:
+        logger.error(f"Meeting extraction error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI解析エラー: {e}")
+
+    # Validate and normalize
+    proposed_tasks = []
+    for item in parsed:
+        if not isinstance(item, dict) or not item.get("title"):
+            continue
+        proposed_tasks.append({
+            "title": item.get("title", ""),
+            "assignee_name": item.get("assignee_name"),
+            "due_date": item.get("due_date"),
+            "priority": item.get("priority", "medium"),
+            "description": item.get("description"),
+        })
+
+    return {
+        "meeting_id": req.meeting_id,
+        "meeting_title": session_dict.get("title", ""),
+        "proposed_tasks": proposed_tasks,
+        "count": len(proposed_tasks),
+    }
+
+
+# ===== AI: レポート生成 =====
+
+@router.post("/api/tasks/report/generate")
+def generate_report(req: ReportGenerateRequest, db=Depends(get_db)) -> Dict[str, Any]:
+    from gemini_client import get_client
+
+    now = datetime.now(timezone.utc)
+
+    # Determine date range
+    if req.start_date and req.end_date:
+        start = req.start_date
+        end = req.end_date
+    elif req.period == "weekly":
+        start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        end = now.strftime("%Y-%m-%d")
+    elif req.period == "monthly":
+        start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+        end = now.strftime("%Y-%m-%d")
+    else:
+        start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        end = now.strftime("%Y-%m-%d")
+
+    # Query tasks
+    where = ["(t.created_at >= :start OR t.updated_at >= :start)", "t.updated_at <= :end_dt"]
+    params: Dict[str, Any] = {"start": f"{start}T00:00:00", "end_dt": f"{end}T23:59:59"}
+    if req.project_name:
+        where.append("t.project_name = :pn")
+        params["pn"] = req.project_name
+
+    tasks = db.execute(
+        text(f"""
+            SELECT t.title, t.status, t.priority, t.assignee_name, t.due_date, t.project_name
+            FROM tasks t
+            WHERE {' AND '.join(where)}
+            ORDER BY t.status, t.priority
+        """),
+        params,
+    ).fetchall()
+
+    task_list = [_row_to_dict(r) for r in tasks]
+    total = len(task_list)
+    done = sum(1 for t in task_list if t.get("status") == "done")
+    in_progress = sum(1 for t in task_list if t.get("status") == "in_progress")
+    todo = sum(1 for t in task_list if t.get("status") == "todo")
+    overdue = sum(1 for t in task_list if t.get("due_date") and t["due_date"] < end and t.get("status") != "done")
+    completion_rate = int((done / total) * 100) if total > 0 else 0
+
+    summary_data = {
+        "period": f"{start} ~ {end}",
+        "project_name": req.project_name or "全プロジェクト",
+        "total": total,
+        "done": done,
+        "in_progress": in_progress,
+        "todo": todo,
+        "overdue": overdue,
+        "completion_rate": completion_rate,
+        "tasks": task_list[:50],  # limit for prompt size
+    }
+
+    prompt = f"""以下のタスク管理データに基づいて、日本語でフォーマルなPMステータスレポートをMarkdown形式で生成してください。
+
+レポート期間: {summary_data['period']}
+プロジェクト: {summary_data['project_name']}
+タスク総数: {total}
+完了: {done} ({completion_rate}%)
+進行中: {in_progress}
+未着手: {todo}
+期限超過: {overdue}
+
+タスク一覧:
+{json.dumps(summary_data['tasks'], ensure_ascii=False, indent=2)[:4000]}
+
+以下の構成でレポートを生成してください:
+1. エグゼクティブサマリー
+2. 進捗状況（完了率、主要な完了タスク）
+3. 課題・リスク（期限超過タスク、遅延の傾向）
+4. 次週のアクション計画
+5. 所見
+
+Markdownのみ返してください。"""
+
+    try:
+        client = get_client()
+        response = client.models.generate_content(
+            model=GEMINI_MODEL_RAG,
+            contents=prompt,
+        )
+        report_md = response.text.strip()
+    except Exception as e:
+        logger.error(f"Report generation error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI レポート生成エラー: {e}")
+
+    return {
+        "period": summary_data["period"],
+        "project_name": summary_data["project_name"],
+        "stats": {
+            "total": total,
+            "done": done,
+            "in_progress": in_progress,
+            "todo": todo,
+            "overdue": overdue,
+            "completion_rate": completion_rate,
+        },
+        "report_markdown": report_md,
+    }
+
+
+# ===== ポートフォリオ & ワークロード =====
+
+@router.get("/api/tasks/portfolio")
+def get_portfolio(db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """プロジェクト別のタスク集計（ポートフォリオダッシュボード用）"""
+    rows = db.execute(
+        text("""
+            SELECT
+                COALESCE(t.project_name, '未分類') AS project_name,
+                COUNT(*) AS total,
+                SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS done,
+                SUM(CASE WHEN t.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress,
+                SUM(CASE WHEN t.status = 'todo' THEN 1 ELSE 0 END) AS todo,
+                SUM(CASE WHEN t.due_date IS NOT NULL AND t.due_date < date('now') AND t.status != 'done' THEN 1 ELSE 0 END) AS overdue,
+                MIN(t.due_date) AS earliest_due,
+                MAX(t.due_date) AS latest_due
+            FROM tasks t
+            GROUP BY COALESCE(t.project_name, '未分類')
+            ORDER BY project_name
+        """)
+    ).fetchall()
+    results = []
+    for r in rows:
+        d = _row_to_dict(r)
+        total = d.get("total", 0)
+        done = d.get("done", 0)
+        d["completion_rate"] = int((done / total) * 100) if total > 0 else 0
+        results.append(d)
+    return results
+
+
+@router.get("/api/tasks/workload")
+def get_workload(db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """担当者別のタスク集計（ワークロード表示用）"""
+    rows = db.execute(
+        text("""
+            SELECT
+                COALESCE(t.assignee_name, '未割当') AS assignee_name,
+                COALESCE(t.assignee_id, '') AS assignee_id,
+                COUNT(*) AS total,
+                SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS done,
+                SUM(CASE WHEN t.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress,
+                SUM(CASE WHEN t.status = 'todo' THEN 1 ELSE 0 END) AS todo,
+                SUM(CASE WHEN t.due_date IS NOT NULL AND t.due_date < date('now') AND t.status != 'done' THEN 1 ELSE 0 END) AS overdue
+            FROM tasks t
+            GROUP BY COALESCE(t.assignee_name, '未割当'), COALESCE(t.assignee_id, '')
+            ORDER BY total DESC
+        """)
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
 # ===== タスク CRUD =====
 
 @router.get("/api/tasks")
@@ -366,6 +902,7 @@ def get_tasks(
     status: Optional[str] = Query(None),
     category_id: Optional[int] = Query(None),
     priority: Optional[str] = Query(None),
+    project_name: Optional[str] = Query(None),
     db=Depends(get_db),
 ) -> List[Dict[str, Any]]:
     where = ["1=1"]
@@ -379,6 +916,9 @@ def get_tasks(
     if priority:
         where.append("t.priority = :priority")
         params["priority"] = priority
+    if project_name:
+        where.append("t.project_name = :project_name")
+        params["project_name"] = project_name
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     params["day_start"] = f"{today_str}T00:00:00+00:00"
@@ -408,9 +948,9 @@ def create_task(req: TaskCreate, db=Depends(get_db)) -> Dict[str, Any]:
     result = db.execute(
         text("""
             INSERT INTO tasks (title, description, status, priority, category_id, due_date,
-                               estimated_minutes, actual_minutes, created_at, updated_at)
+                               estimated_minutes, actual_minutes, project_name, created_at, updated_at)
             VALUES (:title, :description, :status, :priority, :category_id, :due_date,
-                    :estimated_minutes, :actual_minutes, :created_at, :updated_at)
+                    :estimated_minutes, :actual_minutes, :project_name, :created_at, :updated_at)
         """),
         {
             "title": req.title,
@@ -421,6 +961,7 @@ def create_task(req: TaskCreate, db=Depends(get_db)) -> Dict[str, Any]:
             "due_date": req.due_date,
             "estimated_minutes": req.estimated_minutes,
             "actual_minutes": req.actual_minutes,
+            "project_name": req.project_name,
             "created_at": now,
             "updated_at": now,
         },
@@ -495,6 +1036,8 @@ def update_task(task_id: int, req: TaskUpdate, db=Depends(get_db)) -> Dict[str, 
         updates["estimated_minutes"] = req.estimated_minutes
     if req.actual_minutes is not None:
         updates["actual_minutes"] = req.actual_minutes
+    if "project_name" in req.model_fields_set:
+        updates["project_name"] = req.project_name
 
     if updates:
         updates["updated_at"] = _now_iso()

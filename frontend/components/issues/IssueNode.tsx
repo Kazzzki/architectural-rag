@@ -84,7 +84,11 @@ function IssueNode({ data }: NodeProps<IssueNodeData>) {
       onClick={() => !editing && onClick?.(issue)}
       onDoubleClick={handleDoubleClick}
       style={{
-        border: isSelected ? '2.5px solid #3B82F6' : style.border,
+        border: isSelected
+          ? '2.5px solid #3B82F6'
+          : issue.evidence_gap
+            ? '2px dashed #F97316'
+            : style.border,
         backgroundColor: style.bg,
         borderRadius: 8,
         padding: '10px 14px',
@@ -107,6 +111,19 @@ function IssueNode({ data }: NodeProps<IssueNodeData>) {
           border: '1px solid rgba(0,0,0,0.2)',
         }}
       />
+
+      {/* 法的リスクバッジ (左上) */}
+      {issue.legal_risk_level && issue.legal_risk_level !== 'low' && (
+        <div
+          style={{
+            position: 'absolute', top: 6, left: 6,
+            width: 10, height: 10, borderRadius: '50%',
+            backgroundColor: issue.legal_risk_level === 'high' ? '#DC2626' : '#F59E0B',
+            border: '1px solid rgba(0,0,0,0.2)',
+          }}
+          title={`法的リスク: ${issue.legal_risk_level}`}
+        />
+      )}
 
       {/* アイコンゾーン（右上） */}
       <div style={{ position: 'absolute', top: 5, right: 22, display: 'flex', gap: 2 }}>
@@ -223,6 +240,8 @@ export default memo(IssueNode, (prev, next) => {
     p.issue.status === n.issue.status &&
     p.issue.priority === n.issue.priority &&
     p.issue.context_memo === n.issue.context_memo &&
+    p.issue.legal_risk_level === n.issue.legal_risk_level &&
+    p.issue.evidence_gap === n.issue.evidence_gap &&
     p.isSelected === n.isSelected &&
     p.hiddenChildCount === n.hiddenChildCount &&
     p.hasChildren === n.hasChildren
