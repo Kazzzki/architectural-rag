@@ -16,6 +16,12 @@ _HEADER_SPLIT_RE = re.compile(r'(?m)(?=^(?:#{1,3}\s+|\[\[PAGE_\d+\]\]))', )
 # [[PAGE_N]] マーカーからページ番号を抽出する正規表現
 _PAGE_MARKER_RE = re.compile(r'\[\[PAGE_(\d+)\]\]')
 
+# Markdown テーブルパターン（ヘッダー行 + 区切り行 + データ行群）
+_TABLE_PATTERN = re.compile(
+    r'(\|[^\n]+\|\n\|[-:| ]+\|\n(?:\|[^\n]+\|\n?)*)',
+    re.MULTILINE
+)
+
 
 class ChunkBuilder:
     """
@@ -215,8 +221,50 @@ class ChunkBuilder:
     def _split_into_leaves(self, text: str, size: int, overlap: int) -> List[str]:
         """
         テキストを日本語文末（句点・感嘆符・疑問符・改行）境界を優先して分割。
+        Markdownテーブルは分割せず独立チャンクとして保持する。
         境界が見つからない場合は固定サイズでフォールバック。
         """
+        if not text:
+            return []
+
+        # テーブルを検出し、テーブル部分と非テーブル部分に分離
+        segments = self._split_preserving_tables(text)
+        chunks = []
+        for segment_text, is_table in segments:
+            if is_table:
+                # テーブルは分割せずそのまま1チャンクとして追加
+                stripped = segment_text.strip()
+                if stripped:
+                    chunks.append(stripped)
+            else:
+                # 非テーブル部分は従来通り分割
+                chunks.extend(self._split_text_into_leaves(segment_text, size, overlap))
+        return chunks
+
+    @staticmethod
+    def _split_preserving_tables(text: str) -> List[Tuple[str, bool]]:
+        """テキストをテーブル部分と非テーブル部分に分離する。
+        戻り値: [(テキスト, is_table), ...]
+        """
+        segments: List[Tuple[str, bool]] = []
+        last_end = 0
+        for m in _TABLE_PATTERN.finditer(text):
+            # テーブル前の非テーブル部分
+            if m.start() > last_end:
+                segments.append((text[last_end:m.start()], False))
+            # テーブル部分
+            segments.append((m.group(0), True))
+            last_end = m.end()
+        # テーブル後の残り
+        if last_end < len(text):
+            segments.append((text[last_end:], False))
+        if not segments:
+            segments.append((text, False))
+        return segments
+
+    @staticmethod
+    def _split_text_into_leaves(text: str, size: int, overlap: int) -> List[str]:
+        """テキストを日本語文末境界優先で分割する（テーブル非含有テキスト用）。"""
         if not text:
             return []
         chunks = []

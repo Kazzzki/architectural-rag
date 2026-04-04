@@ -853,6 +853,18 @@ def _run_migrations():
             summary_prompt TEXT,
             created_at TEXT NOT NULL
         )""",
+        # ========== 課題因果グラフ D2/D4: 法的リスク + エビデンス管理 ==========
+        "ALTER TABLE issues ADD COLUMN legal_risk_level TEXT",
+        "ALTER TABLE issues ADD COLUMN evidence_status TEXT",
+        # Evidence Trail: chat_feedback テーブル
+        """CREATE TABLE IF NOT EXISTS chat_feedback (
+            id            TEXT PRIMARY KEY,
+            session_id    TEXT,
+            message_id    TEXT,
+            feedback_type TEXT,
+            claim_refs    TEXT,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     with engine.connect() as conn:
         for sql in migrations:

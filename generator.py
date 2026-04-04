@@ -162,13 +162,17 @@ def extract_web_sources_from_grounding_metadata(grounding_metadata) -> List[Dict
     return sources
     
 def _format_sources(source_files: List[Dict[str, Any]]) -> str:
-    """参照ファイル一覧をフォーマットする。source_id優先。(#6)"""
+    """参照ファイル一覧をフォーマットする。source_id優先、ページ範囲付き。(#6, Evidence Trail)"""
     lines = []
     for i, sf in enumerate(source_files):
         sid = sf.get('source_id')
         if not sid:
             sid = f"S{i+1}"
-        lines.append(f"- [{sid}] {sf['filename']}（{sf['category']}）")
+        pages = sf.get('pages', [])
+        page_info = f" p.{','.join(str(p) for p in pages[:5])}" if pages else ""
+        if len(pages) > 5:
+            page_info += "..."
+        lines.append(f"- [{sid}] {sf['filename']}（{sf['category']}）{page_info}")
     return "\n".join(lines) if lines else "（関連ファイルなし）"
 
 def _get_project_context(user_id: str, question: str, project_id: Optional[str], scope_mode: str) -> Dict[str, str]:
@@ -249,12 +253,14 @@ def _build_rag_user_prompt(
     """RAG用ユーザープロンプトを構築する。v4: 出典ルール冒頭配置・空セクション除去 (#16)"""
     parts = []
 
-    # 出典ルール（最重要 → 冒頭に配置）
+    # 出典ルール（最重要 → 冒頭に配置）— Evidence Trail 強化版
     parts.append("""【回答ルール（厳守）】
 1. 回答は必ず知識ベースの情報に基づくこと。知識ベースに該当情報がない場合は「知識ベースには該当する情報がありませんでした」と明示した上で、一般知識で補足すること。
 2. 本文中で参照した箇所に [S番号:p.ページ番号] の形式でインラインタグを挿入すること（例: [S1:p.12]）。
-3. 回答末尾に「📎 関連資料」セクションを記載すること。
-4. 知識ベースの情報と一般知識を混在させない。区別して記載すること。""")
+3. 数値（強度値、寸法、面積、期間、金額等）を含む主張には必ず出典タグを付与すること。出典なしの数値記載は禁止。
+4. 出典タグのない文は「一般的な専門知識による補足」として扱われる。重要な判断に関わる情報には必ず出典を付与すること。
+5. 回答末尾に「📎 関連資料」セクションを記載すること。
+6. 知識ベースの情報と一般知識を混在させない。区別して記載すること。""")
 
     # Layer B: プロジェクトコンテキスト（空でなければ注入）
     context_sheet_block = build_layer_b_manual_block(context_sheet)
@@ -558,3 +564,94 @@ def generate_answer_stream_direct(
     except Exception as e:
         logger.error(f"generate_answer_stream_direct init failed: {e}", exc_info=True)
         raise
+
+
+# ─── Groundedness Check（非同期根拠検証）─────────────────────────────────────
+import re as _re
+
+# 引用パターン（寛容版: スペース揺れ等に対応）
+_CITATION_RE = _re.compile(r'\[S\s*(\d+)\s*:\s*p\s*\.\s*(\d+)\s*\]')
+
+GROUNDEDNESS_TIMEOUT = 5.0  # 秒
+
+
+def verify_groundedness(
+    answer: str,
+    evidence_trail: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """生成回答の各主張を出典チャンクと照合し、確信度を返す。
+
+    非同期呼び出し前提。タイムアウト時は None を返す。
+
+    Returns:
+        {
+            "overall": "high" | "medium" | "low",
+            "ungrounded_claims": ["文1...", ...],
+            "verified_count": int,
+            "total_count": int,
+        }
+    """
+    if not answer or not evidence_trail:
+        return None
+
+    # 回答を文単位に分解（句点、改行、ピリオドで分割）
+    sentences = _re.split(r'(?<=[。．.！？\n])', answer)
+    sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 5]
+
+    if not sentences:
+        return None
+
+    # evidence_trail から excerpt テキストを収集
+    evidence_texts = []
+    for ev in evidence_trail:
+        excerpt = ev.get("excerpt", "")
+        if excerpt:
+            evidence_texts.append(excerpt)
+
+    all_evidence_text = "\n".join(evidence_texts)
+
+    verified_count = 0
+    ungrounded_claims: List[str] = []
+
+    for sentence in sentences:
+        # 引用マーカーを含む文は「出典あり」と判定
+        has_citation = bool(_CITATION_RE.search(sentence))
+
+        if has_citation:
+            # 数値を含む場合は、その数値が evidence テキストに含まれるか確認
+            numbers = _re.findall(r'\d+(?:\.\d+)?', sentence)
+            if numbers:
+                # 少なくとも1つの数値が evidence に含まれていれば verified
+                number_found = any(n in all_evidence_text for n in numbers)
+                if number_found:
+                    verified_count += 1
+                else:
+                    ungrounded_claims.append(sentence[:100])
+            else:
+                verified_count += 1
+        else:
+            # 引用なしの文は ungrounded（ただし一般的な接続文等は除外）
+            if len(sentence) > 20:
+                ungrounded_claims.append(sentence[:100])
+            else:
+                # 短い接続文はカウントしない
+                verified_count += 1
+
+    total_count = verified_count + len(ungrounded_claims)
+    if total_count == 0:
+        return None
+
+    ratio = verified_count / total_count
+    if ratio >= 0.8:
+        overall = "high"
+    elif ratio >= 0.5:
+        overall = "medium"
+    else:
+        overall = "low"
+
+    return {
+        "overall": overall,
+        "ungrounded_claims": ungrounded_claims[:5],  # 最大5件
+        "verified_count": verified_count,
+        "total_count": total_count,
+    }
