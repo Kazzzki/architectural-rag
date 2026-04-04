@@ -262,3 +262,154 @@ def get_entity_links(session_id: int, db) -> List[Dict[str, Any]]:
         SELECT * FROM meeting_entity_links WHERE session_id = :sid ORDER BY confidence DESC
     """), {"sid": session_id}).fetchall()
     return [dict(r._mapping) for r in rows]
+
+
+# ===== M1: クロスミーティングRAG検索 =====
+
+def ask_across_meetings(
+    question: str,
+    project_name: Optional[str],
+    db,
+) -> Dict[str, Any]:
+    """全会議横断で質問 → ソース付き回答"""
+
+    # 1. FTS5 で関連会議を検索
+    from routers.meetings import _sanitize_fts_query
+    safe_q = _sanitize_fts_query(question)
+    fts_results = []
+    if safe_q:
+        try:
+            rows = db.execute(text("""
+                SELECT s.id, s.title, s.summary, s.created_at, s.project_name
+                FROM meeting_fts f
+                JOIN meeting_sessions s ON s.id = CAST(f.session_id AS INTEGER)
+                WHERE meeting_fts MATCH :q
+                ORDER BY s.updated_at DESC
+                LIMIT 10
+            """), {"q": safe_q}).fetchall()
+            fts_results = [dict(r._mapping) for r in rows]
+        except Exception as e:
+            logger.warning(f"FTS5 meeting search error: {e}")
+
+    # 2. project_name フィルタ（FTS が不十分な場合の補完）
+    if not fts_results and project_name:
+        rows = db.execute(text("""
+            SELECT id, title, summary, created_at, project_name
+            FROM meeting_sessions
+            WHERE project_name = :pn AND summary IS NOT NULL
+            ORDER BY created_at DESC LIMIT 10
+        """), {"pn": project_name}).fetchall()
+        fts_results = [dict(r._mapping) for r in rows]
+
+    if not fts_results:
+        return {"answer": "関連する会議が見つかりませんでした。", "sources": []}
+
+    # 3. 上位N件のサマリー + チャンクをコンテキスト構築
+    context_parts = []
+    sources = []
+    for meeting in fts_results[:5]:
+        mid = meeting["id"]
+        title = meeting.get("title", "無題")
+        date = (meeting.get("created_at") or "")[:10]
+        summary = meeting.get("summary", "")
+
+        # チャンク取得（最初の3つ）
+        chunks = db.execute(text("""
+            SELECT transcript FROM meeting_chunks
+            WHERE session_id = :sid ORDER BY chunk_index ASC LIMIT 3
+        """), {"sid": mid}).fetchall()
+        chunk_text = "\n".join(r[0] for r in chunks if r[0])[:2000]
+
+        context_parts.append(
+            f"### {title} ({date})\n{summary}\n\n{chunk_text}"
+        )
+        sources.append({"id": mid, "title": title, "date": date})
+
+    context = "\n\n---\n\n".join(context_parts)
+
+    # 4. Gemini で回答生成
+    prompt = f"""以下の会議記録を参照して質問に回答してください。
+
+## 質問
+{question}
+
+## 会議記録
+{context[:12000]}
+
+## 指示
+- 会議記録に基づいて正確に回答してください
+- どの会議の情報かを明示してください（会議名と日付）
+- 記録にない内容は推測せず「記録にありません」と答えてください
+- 簡潔に回答してください"""
+
+    try:
+        client = get_client()
+        response = client.models.generate_content(
+            model=config.GEMINI_MODEL_RAG,
+            contents=prompt,
+        )
+        answer = (response.text or "").strip()
+    except Exception as e:
+        logger.error(f"Cross-meeting RAG error: {e}", exc_info=True)
+        answer = f"回答生成エラー: {e}"
+
+    return {"answer": answer, "sources": sources}
+
+
+# ===== P4: 自動プロジェクト分類 =====
+
+def auto_classify_project(session_id: int, db) -> Optional[Dict[str, Any]]:
+    """文字起こし完了後にプロジェクトを自動マッチング"""
+    try:
+        from backend.scope_resolver import resolve_scope
+    except ImportError:
+        logger.warning("scope_resolver not available, skipping auto-classify")
+        return None
+
+    session = db.execute(
+        text("SELECT * FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        return None
+
+    s = dict(session._mapping)
+    # 既にプロジェクトが設定されている場合はスキップ
+    if s.get("project_name") or s.get("project_id"):
+        return {"project_name": s.get("project_name"), "source": "already_set"}
+
+    # タイトル + サマリーからプロジェクト推定
+    query = f"{s.get('title', '')} {s.get('summary', '')}"
+    try:
+        scope = resolve_scope(
+            user_id="meeting_auto",
+            question=query,
+            project_id=None,
+            scope_mode="auto",
+        )
+        if scope.get("confidence", 0) >= 0.8 and scope.get("project_name"):
+            db.execute(text("""
+                UPDATE meeting_sessions
+                SET project_name = :pn, project_id = :pid, updated_at = :now
+                WHERE id = :id
+            """), {
+                "pn": scope["project_name"],
+                "pid": scope.get("project_id"),
+                "now": _now_iso(),
+                "id": session_id,
+            })
+            db.commit()
+            return {
+                "project_name": scope["project_name"],
+                "project_id": scope.get("project_id"),
+                "confidence": scope["confidence"],
+                "source": "auto",
+            }
+        return {
+            "project_name": scope.get("project_name"),
+            "confidence": scope.get("confidence", 0),
+            "source": "low_confidence",
+        }
+    except Exception as e:
+        logger.warning(f"Auto-classify error: {e}")
+        return None

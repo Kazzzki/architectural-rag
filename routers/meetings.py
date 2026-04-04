@@ -135,6 +135,37 @@ async def receive_chunk(
 
     mime_type = file.content_type or "audio/webm"
 
+    # M4: カスタム辞書をプロンプトに注入
+    dict_hint = ""
+    try:
+        # セッションのプロジェクトから辞書を取得
+        sess = db.execute(
+            text("SELECT project_id FROM meeting_sessions WHERE id = :id"),
+            {"id": session_id}
+        ).fetchone()
+        pid = dict(sess._mapping).get("project_id") if sess else None
+        if pid:
+            dict_rows = db.execute(text("""
+                SELECT term, reading, category FROM custom_dictionary
+                WHERE project_id = :pid OR project_id IS NULL LIMIT 30
+            """), {"pid": pid}).fetchall()
+        else:
+            dict_rows = db.execute(text("""
+                SELECT term, reading, category FROM custom_dictionary
+                WHERE project_id IS NULL LIMIT 20
+            """)).fetchall()
+        if dict_rows:
+            terms = []
+            for r in dict_rows:
+                d = dict(r._mapping)
+                t = d["term"]
+                if d.get("reading"):
+                    t += f"（{d['reading']}）"
+                terms.append(f"- {t}")
+            dict_hint = "\n以下の専門用語が使われる可能性があります:\n" + "\n".join(terms) + "\n"
+    except Exception:
+        pass
+
     # Gemini 文字起こし（既存 transcribe.py と同パターン）
     try:
         client = get_client()
@@ -147,6 +178,7 @@ async def receive_chunk(
                     "句読点をつけて自然な日本語にしてください。"
                     "会議・ミーティングの音声です。"
                     "余計な説明・補足・翻訳は不要です。文字起こし結果のテキストのみ返してください。"
+                    + dict_hint
                 )),
             ],
         )
@@ -261,10 +293,12 @@ def finalize_meeting(session_id: int, db=Depends(get_db)) -> Dict[str, Any]:
     db.commit()
 
     # Phase 1B: finalize 後に自動エンティティリンク + タグ付与
+    # Phase 1C P4: 自動プロジェクト分類
     try:
         import meeting_ai as _mai
         _mai.extract_entity_links(session_id, db)
         _mai.auto_tag_meeting(session_id, db)
+        _mai.auto_classify_project(session_id, db)
     except Exception as e:
         logger.warning(f"Post-finalize AI extraction failed (non-blocking): {e}")
 
@@ -499,6 +533,112 @@ def add_tag(session_id: int, tag_name: str, db=Depends(get_db)) -> Dict[str, Any
     if not result:
         raise HTTPException(status_code=400, detail="タグの追加に失敗しました")
     return result
+
+
+# ===== M1: クロスミーティングRAG =====
+
+class MeetingAskRequest(BaseModel):
+    question: str
+    project_name: Optional[str] = None
+
+
+@router.post("/api/meetings/ask")
+def ask_meetings(req: MeetingAskRequest, db=Depends(get_db)) -> Dict[str, Any]:
+    """全会議横断で質問 → ソース付き回答"""
+    return meeting_ai.ask_across_meetings(req.question, req.project_name, db)
+
+
+# ===== M4: カスタム辞書 =====
+
+class DictionaryEntry(BaseModel):
+    project_id: Optional[str] = None
+    term: str
+    reading: Optional[str] = None
+    category: Optional[str] = None
+
+
+@router.get("/api/dictionary")
+def list_dictionary(project_id: Optional[str] = None, db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """カスタム辞書一覧"""
+    if project_id:
+        rows = db.execute(text("""
+            SELECT * FROM custom_dictionary
+            WHERE project_id = :pid OR project_id IS NULL
+            ORDER BY term
+        """), {"pid": project_id}).fetchall()
+    else:
+        rows = db.execute(text("SELECT * FROM custom_dictionary ORDER BY term")).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+@router.post("/api/dictionary", status_code=201)
+def add_dictionary_entry(req: DictionaryEntry, db=Depends(get_db)) -> Dict[str, Any]:
+    """辞書エントリ追加"""
+    now = _now_iso()
+    result = db.execute(text("""
+        INSERT INTO custom_dictionary (project_id, term, reading, category, created_at)
+        VALUES (:pid, :term, :reading, :cat, :ca)
+    """), {
+        "pid": req.project_id,
+        "term": req.term,
+        "reading": req.reading,
+        "cat": req.category,
+        "ca": now,
+    })
+    db.commit()
+    row = db.execute(
+        text("SELECT * FROM custom_dictionary WHERE id = :id"),
+        {"id": result.lastrowid}
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+@router.delete("/api/dictionary/{entry_id}")
+def delete_dictionary_entry(entry_id: int, db=Depends(get_db)) -> Dict[str, str]:
+    """辞書エントリ削除"""
+    db.execute(text("DELETE FROM custom_dictionary WHERE id = :id"), {"id": entry_id})
+    db.commit()
+    return {"status": "deleted"}
+
+
+# ===== M8: 音声ストリーミング =====
+
+import os
+from fastapi.responses import FileResponse
+
+
+@router.get("/api/meetings/{session_id}/audio")
+def stream_audio(session_id: int, db=Depends(get_db)):
+    """音声ファイルをストリーミング返却"""
+    session = db.execute(
+        text("SELECT audio_file_path FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議が見つかりません")
+
+    audio_path = dict(session._mapping).get("audio_file_path")
+    if not audio_path or not os.path.exists(audio_path):
+        raise HTTPException(status_code=404, detail="音声ファイルが見つかりません")
+
+    return FileResponse(
+        path=audio_path,
+        media_type="audio/webm",
+        filename=os.path.basename(audio_path),
+    )
+
+
+# ===== P5: シリーズ名一覧 =====
+
+@router.get("/api/meetings/series")
+def list_series(db=Depends(get_db)) -> List[str]:
+    """使用中のシリーズ名一覧"""
+    rows = db.execute(text("""
+        SELECT DISTINCT series_name FROM meeting_sessions
+        WHERE series_name IS NOT NULL AND series_name != ''
+        ORDER BY series_name
+    """)).fetchall()
+    return [r[0] for r in rows]
 
 
 # ===== 会議検索 (FTS5) =====
