@@ -134,7 +134,7 @@ def extract_entity_links(session_id: int, db) -> List[Dict[str, Any]]:
             continue
         entity_type = ent.get("entity_type", "")
         entity_id = str(ent.get("entity_id", ""))
-        if not entity_type or not entity_id:
+        if entity_type not in ("issue", "meeting", "task") or not entity_id:
             continue
 
         try:
