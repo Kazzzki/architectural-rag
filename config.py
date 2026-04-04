@@ -95,6 +95,11 @@ EXECUTOR_WORKERS = int(os.environ.get("EXECUTOR_WORKERS", "12"))
 API_CONCURRENCY = int(os.environ.get("API_CONCURRENCY", "5"))
 TEMPERATURE = 0.2  # 技術的正確性を重視
 
+# Evidence Trail: Groundedness Check タイムアウト（秒）
+GROUNDEDNESS_TIMEOUT = float(os.environ.get("GROUNDEDNESS_TIMEOUT", "5.0"))
+# Evidence Trail: Contextual Chunking 有効化
+CONTEXTUAL_CHUNKING_ENABLED = os.environ.get("CONTEXTUAL_CHUNKING_ENABLED", "true").lower() == "true"
+
 GEMINI_MODEL_RAG = "gemini-3-flash-preview"  # RAG用
 GEMINI_MODEL_OCR = "gemini-3-flash-preview"  # OCR用
 GEMINI_MODEL_TRANSCRIPTION = os.getenv("GEMINI_MODEL_TRANSCRIPTION", "gemini-3-flash-preview")  # 音声文字起こし用（WER 3.1%、高速・低コスト）

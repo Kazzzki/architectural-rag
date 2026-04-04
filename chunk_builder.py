@@ -135,19 +135,27 @@ class ChunkBuilder:
                 if len(clean_leaf) < 50:
                     continue
 
+                # Contextual header: メタデータから文脈ヘッダーを生成
+                contextual_content = self._build_contextual_content(
+                    clean_leaf, source_file, section_title, leaf_page,
+                    source_metadata.get("doc_type", ""),
+                    source_metadata.get("category", ""),
+                )
+
                 # 決定論的ID
                 leaf_id = f"leaf_{version_id}_{i}_{j}"
                 leaf_chunk = {
                     "id": leaf_id,
                     "version_id": version_id,
                     "chunk_type": "leaf",
-                    "content": clean_leaf,
+                    "content": contextual_content,
                     "metadata": {
                         "section_id": chunk_id,
                         "section_title": section_title,
                         "leaf_index": j,
                         "page_number": leaf_page,
                         "source_file": source_file,
+                        "has_contextual_header": True,
                         **source_metadata
                     }
                 }
@@ -201,6 +209,48 @@ class ChunkBuilder:
             else:
                 break
         return resolved
+
+    @staticmethod
+    def _build_contextual_content(
+        chunk_text: str,
+        source_file: str,
+        section_title: str,
+        page_number: Optional[int],
+        doc_type: str,
+        category: str,
+    ) -> str:
+        """チャンクにメタデータ由来の文脈ヘッダーを付加する (Contextual Chunking)。
+
+        Anthropic方式: 各チャンクの先頭に「このチャンクが何の文書のどの部分か」を
+        短いテキストで付加し、検索時の文脈情報を補う。検索精度49%改善 (Anthropic検証)。
+
+        API呼び出しなし。メタデータから決定論的に生成するため高速・無コスト。
+        """
+        # doc_type の日本語ラベル
+        type_labels = {
+            "law": "法規・基準",
+            "drawing": "図面",
+            "spec": "仕様書",
+            "catalog": "カタログ",
+        }
+        type_label = type_labels.get(doc_type, "文書")
+
+        # ファイル名から拡張子を除去して表示名に
+        doc_name = Path(source_file).stem if source_file else "不明"
+
+        # ヘッダー構築
+        parts = [f"[{type_label}]"]
+        if doc_name:
+            parts.append(doc_name)
+        if category:
+            parts.append(f"({category})")
+        if section_title:
+            parts.append(f"- {section_title}")
+        if page_number:
+            parts.append(f"p.{page_number}")
+
+        header = " ".join(parts)
+        return f"{header}\n{chunk_text}"
 
     def _split_by_headers(self, text: str) -> List[str]:
         """
