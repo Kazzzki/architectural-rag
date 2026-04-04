@@ -7,6 +7,10 @@ routers/meetings.py — 会議文字起こし API
   GET    /api/meetings/{id}             セッション詳細 + 全チャンク（文字起こし全文）
   POST   /api/meetings/chunk            音声チャンク受信 → Gemini文字起こし → DB保存
   POST   /api/meetings/{id}/finalize    全チャンクを Gemini でサマリー生成
+  POST   /api/meetings/{id}/extract-links  エンティティ自動リンク抽出
+  POST   /api/meetings/{id}/auto-tag       タグ自動付与
+  GET    /api/meetings/{id}/tags           タグ一覧
+  GET    /api/meetings/{id}/entity-links   エンティティリンク一覧
 """
 import logging
 from datetime import datetime, timezone
@@ -256,6 +260,14 @@ def finalize_meeting(session_id: int, db=Depends(get_db)) -> Dict[str, Any]:
     ), {"summary": summary, "now": now, "id": session_id})
     db.commit()
 
+    # Phase 1B: finalize 後に自動エンティティリンク + タグ付与
+    try:
+        import meeting_ai as _mai
+        _mai.extract_entity_links(session_id, db)
+        _mai.auto_tag_meeting(session_id, db)
+    except Exception as e:
+        logger.warning(f"Post-finalize AI extraction failed (non-blocking): {e}")
+
     return {"session_id": session_id, "summary": summary}
 
 
@@ -433,6 +445,60 @@ def get_meeting_timeline(session_id: int, db=Depends(get_db)) -> List[Dict[str, 
 
     timeline.sort(key=lambda x: (x["timestamp_sec"], 0 if x["type"] == "chunk" else 1))
     return timeline
+
+
+# ===== AI エンティティリンク + タグ (Phase 1B) =====
+
+import meeting_ai
+
+
+@router.post("/api/meetings/{session_id}/extract-links")
+def extract_links(session_id: int, db=Depends(get_db)) -> Dict[str, Any]:
+    """文字起こし + メモからエンティティを自動検出してリンク"""
+    session = db.execute(
+        text("SELECT id FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議が見つかりません")
+
+    links = meeting_ai.extract_entity_links(session_id, db)
+    return {"session_id": session_id, "links": links, "count": len(links)}
+
+
+@router.post("/api/meetings/{session_id}/auto-tag")
+def auto_tag(session_id: int, db=Depends(get_db)) -> Dict[str, Any]:
+    """文字起こしからタグを自動付与"""
+    session = db.execute(
+        text("SELECT id FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議が見つかりません")
+
+    tags = meeting_ai.auto_tag_meeting(session_id, db)
+    return {"session_id": session_id, "tags": tags, "count": len(tags)}
+
+
+@router.get("/api/meetings/{session_id}/tags")
+def get_tags(session_id: int, db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """セッションのタグ一覧"""
+    return meeting_ai.get_meeting_tags(session_id, db)
+
+
+@router.get("/api/meetings/{session_id}/entity-links")
+def get_entity_links(session_id: int, db=Depends(get_db)) -> List[Dict[str, Any]]:
+    """セッションのエンティティリンク一覧"""
+    return meeting_ai.get_entity_links(session_id, db)
+
+
+@router.post("/api/meetings/{session_id}/add-tag")
+def add_tag(session_id: int, tag_name: str, db=Depends(get_db)) -> Dict[str, Any]:
+    """手動タグ追加"""
+    result = meeting_ai.add_manual_tag(session_id, tag_name, db)
+    if not result:
+        raise HTTPException(status_code=400, detail="タグの追加に失敗しました")
+    return result
 
 
 # ===== 会議検索 (FTS5) =====

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { authFetch } from '@/lib/api';
 import MeetingTimeline from '../../components/meetings/MeetingTimeline';
+import EntityLinksPanel from '../../components/meetings/EntityLinksPanel';
 
 interface MeetingDetail {
   id: string;
@@ -449,6 +450,8 @@ export default function MeetingDetailPage() {
                     )}
                   </div>
                 )}
+                {/* エンティティリンク + タグ (Phase 1B) */}
+                <EntityLinksPanel sessionId={parseInt(meetingId)} />
               </div>
             ) : activeTab === 'timeline' ? (
               /* Timeline Tab */
