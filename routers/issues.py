@@ -1563,8 +1563,14 @@ def chain_risk_scan(issue_id: str, db=Depends(get_db)):
             response = future.result(timeout=45)
 
         parsed = _parse_gemini_json(response.text.strip())
-        parsed["scanned_issue_ids"] = [c["id"] for c in chain]
-        return parsed
+        # Whitelist expected keys to prevent LLM output injection
+        return {
+            "technical_risks": parsed.get("technical_risks", [])[:10],
+            "legal_risks": parsed.get("legal_risks", [])[:10],
+            "evidence_gaps": parsed.get("evidence_gaps", [])[:10],
+            "recommended_actions": parsed.get("recommended_actions", [])[:10],
+            "scanned_issue_ids": [c["id"] for c in chain],
+        }
     except concurrent.futures.TimeoutError:
         # Partial results on timeout
         return {
