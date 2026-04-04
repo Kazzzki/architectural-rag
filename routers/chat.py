@@ -221,6 +221,7 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
     answer = ""
     source_files = []
     web_sources = None
+    evidence_trail = []
     
     try:
         if request.use_rag or request.use_web_search:

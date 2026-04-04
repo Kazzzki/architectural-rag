@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+from typing import Optional
 import os
 import time
 import logging
@@ -14,7 +15,7 @@ router = APIRouter(tags=["System & Settings"])
 class StatsResponse(BaseModel):
     file_count: int
     chunk_count: int
-    last_updated: str
+    last_updated: Optional[str] = None
 
 class IndexResponse(BaseModel):
     total_files: int

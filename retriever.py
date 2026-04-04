@@ -21,7 +21,7 @@ from config import (
     RERANK_THRESHOLD,
     RERANK_CANDIDATE_COUNT,
 )
-from indexer import GeminiEmbeddingFunction, get_query_embedding, load_parent_chunk
+from indexer import get_query_embedding, load_parent_chunk
 from dense_indexer import get_chroma_client
 from lexical_indexer import LexicalIndexer
 from gemini_client import get_client
@@ -31,12 +31,10 @@ from google.genai import types
 
 # ─── Collection ────────────────────────────────────────────────────────────────
 def get_collection():
-    """ChromaDB コレクションを取得"""
+    """ChromaDB コレクションを取得（検索用: embedding は query_embeddings で直接渡すため embedding_function 不要）"""
     client = get_chroma_client()
-    embedding_function = GeminiEmbeddingFunction()
     return client.get_or_create_collection(
         name=COLLECTION_NAME,
-        embedding_function=embedding_function,
     )
 
 

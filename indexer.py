@@ -73,6 +73,10 @@ def _call_embed_content(client, model, contents, config):
 class GeminiEmbeddingFunction(EmbeddingFunction):
     """Gemini Embedding API を使用するカスタム EmbeddingFunction"""
 
+    def name(self) -> str:
+        """ChromaDB が要求する embedding function 識別名"""
+        return "gemini-embedding"
+
     def __call__(self, input: List[str]) -> List[List[float]]:
         client = get_client()
         # Batch size for Gemini is 100
