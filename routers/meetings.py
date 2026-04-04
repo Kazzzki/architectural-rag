@@ -217,6 +217,7 @@ class SessionUpdate(BaseModel):
     project_name: Optional[str] = None
     participants: Optional[str] = None
     notes: Optional[str] = None
+    series_name: Optional[str] = None
 
 
 @router.patch("/api/meetings/{session_id}")
@@ -238,6 +239,8 @@ def update_meeting(session_id: int, req: SessionUpdate, db=Depends(get_db)) -> D
         updates["participants"] = req.participants
     if req.notes is not None:
         updates["notes"] = req.notes
+    if req.series_name is not None:
+        updates["series_name"] = req.series_name
 
     if updates:
         set_clause = ", ".join(f"{k} = :{k}" for k in updates)

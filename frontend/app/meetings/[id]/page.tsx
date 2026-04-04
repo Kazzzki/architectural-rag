@@ -11,6 +11,7 @@ import {
 import { authFetch } from '@/lib/api';
 import MeetingTimeline from '../../components/meetings/MeetingTimeline';
 import EntityLinksPanel from '../../components/meetings/EntityLinksPanel';
+import MeetingAudioPlayer from '../../components/meetings/MeetingAudioPlayer';
 
 interface MeetingDetail {
   id: string;
@@ -59,6 +60,8 @@ export default function MeetingDetailPage() {
   const [extractingTasks, setExtractingTasks] = useState(false);
   const [taskCandidates, setTaskCandidates] = useState<any[]>([]);
   const [createdTasks, setCreatedTasks] = useState<Set<number>>(new Set());
+  const [audioSeekSec, setAudioSeekSec] = useState<number | undefined>(undefined);
+  const [audioCurrentSec, setAudioCurrentSec] = useState(0);
 
   const fetchMeeting = useCallback(async () => {
     try {
@@ -316,6 +319,17 @@ export default function MeetingDetailPage() {
           </div>
         )}
 
+        {/* Audio Player */}
+        {meeting.status === 'completed' && (
+          <div className="mb-6">
+            <MeetingAudioPlayer
+              sessionId={parseInt(meetingId)}
+              seekToSec={audioSeekSec}
+              onTimeUpdate={setAudioCurrentSec}
+            />
+          </div>
+        )}
+
         {/* Tabs */}
         {meeting.status === 'completed' && (
           <>
@@ -552,7 +566,11 @@ export default function MeetingDetailPage() {
             ) : activeTab === 'timeline' ? (
               /* Timeline Tab */
               <div className="bg-white rounded-xl border border-gray-200 p-6">
-                <MeetingTimeline sessionId={parseInt(meetingId)} />
+                <MeetingTimeline
+                  sessionId={parseInt(meetingId)}
+                  currentTimeSec={audioCurrentSec}
+                  onSeek={(sec) => setAudioSeekSec(sec)}
+                />
               </div>
             ) : (
               /* Transcript Tab */

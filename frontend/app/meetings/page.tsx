@@ -19,9 +19,13 @@ import {
   Download,
   AlertTriangle,
   ChevronUp,
+  ListChecks,
+  CircleDot,
 } from 'lucide-react';
 import { authFetch } from '@/lib/api';
 import MeetingLiveNotes from '../components/meetings/MeetingLiveNotes';
+import CrossMeetingSearch from '../components/meetings/CrossMeetingSearch';
+import CustomDictionaryPanel from '../components/meetings/CustomDictionaryPanel';
 import {
   MeetingSession, MeetingChunk, MeetingDetail,
   apiFetch, formatDate, formatDuration, formatOffset, defaultTitle,
@@ -328,6 +332,7 @@ function MetaForm({
   project, setProject,
   participants, setParticipants,
   notes, setNotes,
+  series, setSeries,
   onSave,
   saving,
 }: {
@@ -335,9 +340,18 @@ function MetaForm({
   project: string; setProject: (v: string) => void;
   participants: string; setParticipants: (v: string) => void;
   notes: string; setNotes: (v: string) => void;
+  series: string; setSeries: (v: string) => void;
   onSave: () => void;
   saving: boolean;
 }) {
+  const [seriesList, setSeriesList] = useState<string[]>([]);
+  const [projectsList, setProjectsList] = useState<{id: string; name: string}[]>([]);
+
+  useEffect(() => {
+    authFetch('/api/meetings/series').then(r => r.ok ? r.json() : []).then(setSeriesList).catch(() => {});
+    authFetch('/api/projects/master').then(r => r.ok ? r.json() : []).then(setProjectsList).catch(() => {});
+  }, []);
+
   return (
     <div className="space-y-3">
       <input
@@ -347,13 +361,34 @@ function MetaForm({
         placeholder="会議タイトル（空欄可）"
         className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 focus:border-transparent"
       />
-      <input
-        type="text"
-        value={project}
-        onChange={e => setProject(e.target.value)}
-        placeholder="プロジェクト名（任意）"
-        className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 focus:border-transparent"
-      />
+      <div className="grid grid-cols-2 gap-2">
+        <div className="relative">
+          <input
+            type="text"
+            value={project}
+            onChange={e => setProject(e.target.value)}
+            list="project-list"
+            placeholder="プロジェクト名"
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 focus:border-transparent"
+          />
+          <datalist id="project-list">
+            {projectsList.map(p => <option key={p.id} value={p.name} />)}
+          </datalist>
+        </div>
+        <div className="relative">
+          <input
+            type="text"
+            value={series}
+            onChange={e => setSeries(e.target.value)}
+            list="series-list"
+            placeholder="シリーズ (例: OAC定例)"
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 focus:border-transparent"
+          />
+          <datalist id="series-list">
+            {seriesList.map(s => <option key={s} value={s} />)}
+          </datalist>
+        </div>
+      </div>
       <input
         type="text"
         value={participants}
@@ -397,7 +432,9 @@ export default function MeetingsPage() {
   const [metaProject, setMetaProject] = useState('');
   const [metaParticipants, setMetaParticipants] = useState('');
   const [metaNotes, setMetaNotes] = useState('');
+  const [metaSeries, setMetaSeries] = useState('');
   const [metaSaving, setMetaSaving] = useState(false);
+  const [carryForward, setCarryForward] = useState<any[]>([]);
 
   // Recording
   const [sessionId, setSessionId] = useState<number | null>(null);
@@ -499,6 +536,7 @@ export default function MeetingsPage() {
           project_name: metaProject.trim() || undefined,
           participants: metaParticipants.trim() || undefined,
           notes: metaNotes.trim() || undefined,
+          series_name: metaSeries.trim() || undefined,
         }),
       });
     } catch (err) {
@@ -556,6 +594,8 @@ export default function MeetingsPage() {
       setMetaTitle(title);
       setMetaProject('');
       setMetaParticipants('');
+      setMetaSeries('');
+      setCarryForward([]);
       setMetaNotes('');
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -686,6 +726,7 @@ export default function MeetingsPage() {
             project_name: metaProject.trim() || undefined,
             participants: metaParticipants.trim() || undefined,
             notes: metaNotes.trim() || undefined,
+          series_name: metaSeries.trim() || undefined,
           }),
         });
         const result = await apiFetch(`/api/meetings/${sessionId}/finalize`, {
@@ -714,6 +755,8 @@ export default function MeetingsPage() {
     setMetaProject('');
     setMetaParticipants('');
     setMetaNotes('');
+    setMetaSeries('');
+    setCarryForward([]);
     setTranscripts([]);
     setSpeechFinal('');
     setSpeechInterim('');
@@ -758,6 +801,12 @@ export default function MeetingsPage() {
           {/* ===== 一覧フェーズ ===== */}
           {phase === 'list' && (
             <div className="space-y-4">
+              {/* クロスRAG検索 */}
+              <CrossMeetingSearch />
+
+              {/* カスタム辞書 */}
+              <CustomDictionaryPanel />
+
               {/* 録音開始ボタン */}
               <button
                 onClick={() => { setStartError(null); handleStartRecording(); }}
@@ -883,6 +932,25 @@ export default function MeetingsPage() {
                 </button>
               </div>
 
+              {/* キャリーフォワード（同シリーズの未完了タスク） */}
+              {carryForward.length > 0 && (
+                <div className="bg-amber-50 rounded-2xl border border-amber-200 p-4">
+                  <h3 className="text-sm font-semibold text-amber-700 mb-2 flex items-center gap-2">
+                    <ListChecks className="w-4 h-4" />
+                    前回からの未完了タスク ({carryForward.length}件)
+                  </h3>
+                  <div className="space-y-1.5">
+                    {carryForward.map((t: any) => (
+                      <div key={t.id} className="flex items-center gap-2 text-sm">
+                        <CircleDot className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                        <span className="text-gray-700 flex-1 truncate">{t.title}</span>
+                        {t.assignee_name && <span className="text-xs text-gray-400">{t.assignee_name}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* ライブメモ（メイン操作エリア） */}
               {sessionId && (
                 <MeetingLiveNotes
@@ -994,6 +1062,7 @@ export default function MeetingsPage() {
                       project={metaProject} setProject={setMetaProject}
                       participants={metaParticipants} setParticipants={setMetaParticipants}
                       notes={metaNotes} setNotes={setMetaNotes}
+                      series={metaSeries} setSeries={setMetaSeries}
                       onSave={saveMetadata}
                       saving={metaSaving}
                     />
@@ -1021,6 +1090,7 @@ export default function MeetingsPage() {
                 project={metaProject} setProject={setMetaProject}
                 participants={metaParticipants} setParticipants={setMetaParticipants}
                 notes={metaNotes} setNotes={setMetaNotes}
+                series={metaSeries} setSeries={setMetaSeries}
                 onSave={saveMetadata}
                 saving={metaSaving}
               />
