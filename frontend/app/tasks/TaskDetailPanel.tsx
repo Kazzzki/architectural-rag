@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Trash2, Bell, MessageSquare, Send, Loader2, Plus, CheckSquare } from 'lucide-react';
+import { X, Trash2, Bell, MessageSquare, Send, Loader2, Plus, CheckSquare, Repeat } from 'lucide-react';
 import type { Task, Category, Label, Milestone, Comment, Reminder } from './types';
 import { api } from './taskApi';
 
@@ -48,6 +48,8 @@ export default function TaskDetailPanel({
   const [addingReminder, setAddingReminder] = useState(false);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [addingSubtask, setAddingSubtask] = useState(false);
+  const [recurrenceType, setRecurrenceType] = useState('');
+  const [savingRecurrence, setSavingRecurrence] = useState(false);
 
   const loadTask = useCallback(async () => {
     setLoading(true);
@@ -167,6 +169,23 @@ export default function TaskDetailPanel({
       await api.attachLabels(task.id, [...currentIds, labelId]);
     }
     loadTask();
+  };
+
+  const handleSetRecurrence = async () => {
+    if (!task || !recurrenceType) return;
+    setSavingRecurrence(true);
+    try {
+      if (recurrenceType === 'none') {
+        await api.deleteRecurrence(task.id);
+      } else {
+        await api.setRecurrence(task.id, { rrule_type: recurrenceType });
+      }
+      setRecurrenceType('');
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSavingRecurrence(false);
+    }
   };
 
   const taskLabelIds = task?.label_ids?.split(',').filter(Boolean).map(Number) ?? [];
@@ -348,6 +367,30 @@ export default function TaskDetailPanel({
                 <button onClick={handleAddSubtask} disabled={!newSubtaskTitle.trim() || addingSubtask}
                   className="px-2 py-1.5 rounded-md bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50">
                   <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Recurrence */}
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <Repeat className="w-4 h-4 text-gray-500" />
+                <span className="text-sm font-medium text-gray-700">繰り返し</span>
+              </div>
+              <div className="flex gap-2">
+                <select value={recurrenceType} onChange={(e) => setRecurrenceType(e.target.value)}
+                  className="flex-1 px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white">
+                  <option value="">選択...</option>
+                  <option value="none">なし（解除）</option>
+                  <option value="daily">毎日</option>
+                  <option value="weekly">毎週</option>
+                  <option value="biweekly">隔週</option>
+                  <option value="monthly">毎月</option>
+                  <option value="quarterly">四半期</option>
+                </select>
+                <button onClick={handleSetRecurrence} disabled={!recurrenceType || savingRecurrence}
+                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:opacity-50">
+                  {savingRecurrence ? '...' : '設定'}
                 </button>
               </div>
             </div>

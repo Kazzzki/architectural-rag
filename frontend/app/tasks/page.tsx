@@ -24,10 +24,12 @@ import TaskTable from './TaskTable';
 import TaskReport from './TaskReport';
 import MeetingTaskExtractor from './MeetingTaskExtractor';
 import TodayView from './TodayView';
+import PortfolioDashboard from './PortfolioDashboard';
+import WorkloadView from './WorkloadView';
 
 const TaskMindMap = lazy(() => import('./TaskMindMap'));
 
-type ViewMode = 'today' | 'kanban' | 'table' | 'calendar' | 'mindmap';
+type ViewMode = 'today' | 'kanban' | 'table' | 'calendar' | 'mindmap' | 'portfolio' | 'workload';
 
 const VIEWS: { key: ViewMode; icon: typeof Sun; label: string }[] = [
   { key: 'today', icon: Sun, label: '今日' },
@@ -35,6 +37,8 @@ const VIEWS: { key: ViewMode; icon: typeof Sun; label: string }[] = [
   { key: 'table', icon: List, label: 'リスト' },
   { key: 'calendar', icon: Calendar, label: 'カレンダー' },
   { key: 'mindmap', icon: GitBranch, label: 'マップ' },
+  { key: 'portfolio', icon: FileText, label: 'PJ一覧' },
+  { key: 'workload', icon: ClipboardList, label: '負荷' },
 ];
 
 function TasksPageInner() {
@@ -365,6 +369,10 @@ function TasksPageInner() {
           ) : viewMode === 'table' ? (
             <TaskTable tasks={filteredTasks} onTaskClick={(t) => setSelectedTaskId(t.id)}
               onToggleDone={handleToggleDone} onRefresh={fetchTasks} />
+          ) : viewMode === 'portfolio' ? (
+            <PortfolioDashboard />
+          ) : viewMode === 'workload' ? (
+            <WorkloadView />
           ) : viewMode === 'calendar' ? (
             <TaskCalendar tasks={filteredTasks} onSelect={(id) => setSelectedTaskId(id)} />
           ) : (

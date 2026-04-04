@@ -1139,8 +1139,23 @@ def delete_task(task_id: int, db=Depends(get_db)) -> None:
     ).fetchone()
     if not existing:
         raise HTTPException(status_code=404, detail="タスクが見つかりません")
+    # Cascade: delete subtasks first (recursive children)
+    child_ids = db.execute(
+        text("SELECT id FROM tasks WHERE parent_id = :id"), {"id": task_id}
+    ).fetchall()
+    for child in child_ids:
+        cid = child[0]
+        db.execute(text("DELETE FROM task_comments WHERE task_id = :id"), {"id": cid})
+        db.execute(text("DELETE FROM task_reminders WHERE task_id = :id"), {"id": cid})
+        db.execute(text("DELETE FROM task_label_map WHERE task_id = :id"), {"id": cid})
+        db.execute(text("DELETE FROM task_recurrence_rules WHERE source_task_id = :id"), {"id": cid})
+        db.execute(text("DELETE FROM tasks WHERE id = :id"), {"id": cid})
+    # Delete own related data
     db.execute(text("DELETE FROM task_comments WHERE task_id = :id"), {"id": task_id})
     db.execute(text("DELETE FROM task_reminders WHERE task_id = :id"), {"id": task_id})
+    db.execute(text("DELETE FROM task_label_map WHERE task_id = :id"), {"id": task_id})
+    db.execute(text("DELETE FROM task_recurrence_rules WHERE source_task_id = :id"), {"id": task_id})
+    db.execute(text("DELETE FROM task_dependencies WHERE predecessor_id = :id OR successor_id = :id"), {"id": task_id})
     db.execute(text("DELETE FROM tasks WHERE id = :id"), {"id": task_id})
     db.commit()
 
@@ -1186,3 +1201,114 @@ def add_reminder(task_id: int, req: ReminderCreate, db=Depends(get_db)) -> Dict[
         text("SELECT * FROM task_reminders WHERE id = :id"), {"id": result.lastrowid}
     ).fetchone()
     return _row_to_dict(row)
+
+
+# ===== ラベル付与・削除 =====
+
+@router.post("/api/tasks/{task_id}/labels", status_code=200)
+def attach_labels(task_id: int, req: LabelAttach, db=Depends(get_db)) -> Dict[str, Any]:
+    existing = db.execute(
+        text("SELECT id FROM tasks WHERE id = :id"), {"id": task_id}
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="タスクが見つかりません")
+    # Clear existing and re-attach
+    db.execute(text("DELETE FROM task_label_map WHERE task_id = :tid"), {"tid": task_id})
+    for lid in req.label_ids:
+        db.execute(
+            text("INSERT OR IGNORE INTO task_label_map (task_id, label_id) VALUES (:tid, :lid)"),
+            {"tid": task_id, "lid": lid},
+        )
+    db.commit()
+    return {"task_id": task_id, "label_ids": req.label_ids}
+
+
+@router.delete("/api/tasks/{task_id}/labels/{label_id}", status_code=200)
+def detach_label(task_id: int, label_id: int, db=Depends(get_db)) -> Dict[str, Any]:
+    db.execute(
+        text("DELETE FROM task_label_map WHERE task_id = :tid AND label_id = :lid"),
+        {"tid": task_id, "lid": label_id},
+    )
+    db.commit()
+    return {"task_id": task_id, "removed_label_id": label_id}
+
+
+# ===== サブタスク取得 =====
+
+@router.get("/api/tasks/{task_id}/subtasks")
+def get_subtasks(task_id: int, db=Depends(get_db)) -> List[Dict[str, Any]]:
+    rows = db.execute(
+        text("""
+            SELECT t.*, c.name AS category_name, c.color AS category_color
+            FROM tasks t
+            LEFT JOIN task_categories c ON t.category_id = c.id
+            WHERE t.parent_id = :pid
+            ORDER BY t.sort_order, t.created_at
+        """),
+        {"pid": task_id},
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+# ===== 繰り返しタスク =====
+
+@router.post("/api/tasks/{task_id}/recurrence", status_code=201)
+def set_recurrence(task_id: int, req: RecurrenceCreate, db=Depends(get_db)) -> Dict[str, Any]:
+    existing = db.execute(
+        text("SELECT id FROM tasks WHERE id = :id"), {"id": task_id}
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="タスクが見つかりません")
+
+    # Remove existing rule if any
+    db.execute(
+        text("DELETE FROM task_recurrence_rules WHERE source_task_id = :tid"),
+        {"tid": task_id},
+    )
+
+    now = datetime.now(timezone.utc)
+    # Calculate next_generate based on rrule_type
+    if req.rrule_type == "daily":
+        next_gen = (now + timedelta(days=req.interval_value)).strftime("%Y-%m-%d")
+    elif req.rrule_type == "weekly":
+        next_gen = (now + timedelta(weeks=req.interval_value)).strftime("%Y-%m-%d")
+    elif req.rrule_type == "biweekly":
+        next_gen = (now + timedelta(weeks=2)).strftime("%Y-%m-%d")
+    elif req.rrule_type == "monthly":
+        next_gen = (now + timedelta(days=30 * req.interval_value)).strftime("%Y-%m-%d")
+    elif req.rrule_type == "quarterly":
+        next_gen = (now + timedelta(days=90)).strftime("%Y-%m-%d")
+    else:
+        next_gen = (now + timedelta(weeks=1)).strftime("%Y-%m-%d")
+
+    result = db.execute(
+        text("""
+            INSERT INTO task_recurrence_rules
+                (source_task_id, rrule_type, interval_value, day_of_week, day_of_month, next_generate, is_active, created_at)
+            VALUES (:source_task_id, :rrule_type, :interval_value, :day_of_week, :day_of_month, :next_generate, 1, :created_at)
+        """),
+        {
+            "source_task_id": task_id,
+            "rrule_type": req.rrule_type,
+            "interval_value": req.interval_value,
+            "day_of_week": req.day_of_week,
+            "day_of_month": req.day_of_month,
+            "next_generate": next_gen,
+            "created_at": _now_iso(),
+        },
+    )
+    db.commit()
+    row = db.execute(
+        text("SELECT * FROM task_recurrence_rules WHERE id = :id"), {"id": result.lastrowid}
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+@router.delete("/api/tasks/{task_id}/recurrence", status_code=200)
+def delete_recurrence(task_id: int, db=Depends(get_db)) -> Dict[str, Any]:
+    db.execute(
+        text("DELETE FROM task_recurrence_rules WHERE source_task_id = :tid"),
+        {"tid": task_id},
+    )
+    db.commit()
+    return {"task_id": task_id, "recurrence": "deleted"}

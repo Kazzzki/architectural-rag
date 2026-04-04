@@ -56,6 +56,9 @@ export default function MeetingDetailPage() {
   const [issueCandidates, setIssueCandidates] = useState<any[]>([]);
   const [extracting, setExtracting] = useState(false);
   const [createdIssues, setCreatedIssues] = useState<Set<number>>(new Set());
+  const [extractingTasks, setExtractingTasks] = useState(false);
+  const [taskCandidates, setTaskCandidates] = useState<any[]>([]);
+  const [createdTasks, setCreatedTasks] = useState<Set<number>>(new Set());
 
   const fetchMeeting = useCallback(async () => {
     try {
@@ -150,6 +153,50 @@ export default function MeetingDetailPage() {
       }
     } catch (e) {
       console.error('Failed to create issue:', e);
+    }
+  };
+
+  const handleExtractTasks = async () => {
+    setExtractingTasks(true);
+    try {
+      const res = await authFetch('/api/tasks/extract-from-meeting', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meeting_id: parseInt(meetingId) }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTaskCandidates(data.proposed_tasks ?? []);
+      }
+    } catch (e) {
+      console.error('Failed to extract tasks:', e);
+    } finally {
+      setExtractingTasks(false);
+    }
+  };
+
+  const handleCreateTask = async (idx: number) => {
+    const t = taskCandidates[idx];
+    if (!t) return;
+    try {
+      const res = await authFetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: t.title,
+          description: t.description,
+          assignee_name: t.assignee_name,
+          due_date: t.due_date,
+          priority: t.priority || 'medium',
+          status: 'todo',
+          project_name: meeting?.project_name || undefined,
+        }),
+      });
+      if (res.ok) {
+        setCreatedTasks(prev => new Set([...prev, idx]));
+      }
+    } catch (e) {
+      console.error('Failed to create task:', e);
     }
   };
 
@@ -450,6 +497,55 @@ export default function MeetingDetailPage() {
                     )}
                   </div>
                 )}
+                {/* タスク抽出 */}
+                <div className="bg-white rounded-xl border border-gray-200 p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                      <ListChecks className="w-4 h-4 text-gray-600" />
+                      タスクとして抽出
+                    </h3>
+                    <button
+                      onClick={handleExtractTasks}
+                      disabled={extractingTasks}
+                      className="text-xs px-3 py-1.5 bg-gray-800 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 flex items-center gap-1"
+                    >
+                      {extractingTasks ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                      タスクを抽出
+                    </button>
+                  </div>
+                  {taskCandidates.length > 0 && (
+                    <div className="space-y-2">
+                      {taskCandidates.map((t: any, i: number) => (
+                        <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-gray-50">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-gray-800 truncate">{t.title}</p>
+                            <p className="text-xs text-gray-400">
+                              {t.assignee_name ? `担当: ${t.assignee_name}` : ''}
+                              {t.due_date ? ` / 期限: ${t.due_date}` : ''}
+                              {t.priority ? ` / ${t.priority}` : ''}
+                            </p>
+                          </div>
+                          {createdTasks.has(i) ? (
+                            <span className="text-xs text-green-600 flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> 追加済み
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleCreateTask(i)}
+                              className="text-xs px-2 py-1 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100"
+                            >
+                              タスク追加
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {taskCandidates.length === 0 && !extractingTasks && (
+                    <p className="text-xs text-gray-400">「タスクを抽出」ボタンで議事録からアクションアイテムを抽出できます</p>
+                  )}
+                </div>
+
                 {/* エンティティリンク + タグ (Phase 1B) */}
                 <EntityLinksPanel sessionId={parseInt(meetingId)} />
               </div>
