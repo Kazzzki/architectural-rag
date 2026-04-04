@@ -6,7 +6,7 @@ import logging
 import json
 import concurrent.futures
 from datetime import datetime, timezone
-from retriever import search, build_context, build_context_with_evidence, get_source_files
+from retriever import search, build_context, build_context_with_evidence, get_source_files, resolve_evidence_source_ids
 from generator import generate_answer, generate_answer_stream, generate_answer_direct, generate_answer_stream_direct, verify_groundedness
 from database import get_db, ChatSession, ChatMessage
 from sqlalchemy.orm import Session
@@ -308,6 +308,10 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
                 project_id=request.project_id
             )
         
+        # evidence_trail の source_id を source_files と一致させる
+        if evidence_trail and source_files:
+            evidence_trail = resolve_evidence_source_ids(evidence_trail, source_files)
+
         return ChatResponse(
             answer=answer,
             sources=source_files,
@@ -375,8 +379,10 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
 
             # 初期情報の送出
             yield f"data: {json.dumps({'type': 'sources', 'data': source_files}, ensure_ascii=False)}\n\n"
-            # Evidence Trail を初期送出
+            # Evidence Trail を初期送出（source_id を source_files と一致させてから）
             if evidence_trail:
+                if source_files:
+                    resolve_evidence_source_ids(evidence_trail, source_files)
                 yield f"data: {json.dumps({'type': 'evidence_trail', 'data': evidence_trail}, ensure_ascii=False)}\n\n"
 
             # 課題キャプチャをメインストリームと並列で開始（ラグ解消）

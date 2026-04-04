@@ -4,6 +4,7 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+from config import CONTEXTUAL_CHUNKING_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,6 @@ class ChunkBuilder:
                     continue
 
                 # Contextual header: メタデータから文脈ヘッダーを生成
-                from config import CONTEXTUAL_CHUNKING_ENABLED
                 if CONTEXTUAL_CHUNKING_ENABLED:
                     contextual_content = self._build_contextual_content(
                         clean_leaf, source_file, section_title, leaf_page,

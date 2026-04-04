@@ -507,20 +507,15 @@ def build_context_with_evidence(search_results: Dict[str, Any]) -> Tuple[str, Li
         processed_groups = ordered
 
     # 4. コンテキスト文字列 + evidence_trail 構築
+    # 注意: source_id は get_source_files() が割り当てる番号と一致させる必要がある。
+    # ここでは rel_path をキーとして保持し、source_id は後からマッピングする。
     context_parts = []
-    evidence_idx = 0
-    source_id_map: Dict[str, str] = {}  # rel_path → S1, S2, ...
 
     for source_key, unique_hits, _ in processed_groups:
         meta0 = unique_hits[0].get("metadata") or {}
         source_name = meta0.get("source_pdf_name") or meta0.get("filename", "不明")
         doc_type = meta0.get("doc_type", "")
         category = meta0.get("category", "")
-
-        # source_id の割り当て
-        if source_key not in source_id_map:
-            source_id_map[source_key] = f"S{len(source_id_map) + 1}"
-        sid = source_id_map[source_key]
 
         header = f"━━━ 出典: {source_name}（{category}/{doc_type}）━━━"
 
@@ -533,7 +528,7 @@ def build_context_with_evidence(search_results: Dict[str, Any]) -> Tuple[str, Li
             page_label = f"[p.{page}]" if page else ""
             chunk_texts.append(f"{page_label} {text}")
 
-            # evidence_trail エントリ
+            # evidence_trail エントリ（source_id は未割当 — 呼び出し元で解決）
             page_int = None
             if page:
                 try:
@@ -543,7 +538,7 @@ def build_context_with_evidence(search_results: Dict[str, Any]) -> Tuple[str, Li
 
             excerpt = text[:200].strip() if text else ""
             evidence_trail.append({
-                "source_id": sid,
+                "source_id": "",  # resolve_evidence_source_ids() で後から設定
                 "document_id": m.get("version_id", ""),
                 "pdf_path": m.get("source_pdf", "") or m.get("source_pdf_name", ""),
                 "pdf_hash": m.get("source_pdf_hash", ""),
@@ -554,11 +549,31 @@ def build_context_with_evidence(search_results: Dict[str, Any]) -> Tuple[str, Li
                 "standard_ref": m.get("standard_ref", ""),
                 "rel_path": m.get("rel_path", ""),
             })
-            evidence_idx += 1
 
         context_parts.append(f"{header}\n" + "\n---\n".join(chunk_texts))
 
     return "\n\n".join(context_parts), evidence_trail
+
+
+def resolve_evidence_source_ids(
+    evidence_trail: List[Dict[str, Any]],
+    source_files: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """evidence_trail の source_id を get_source_files() の結果と一致させる。
+    LLMが生成する [S1:p.XX] と evidence_trail の source_id が一致することを保証する。
+    """
+    # rel_path → source_id マッピング構築
+    path_to_sid: Dict[str, str] = {}
+    for sf in source_files:
+        rp = sf.get("rel_path", "")
+        if rp:
+            path_to_sid[rp] = sf.get("source_id", "")
+
+    for ev in evidence_trail:
+        rp = ev.get("rel_path", "")
+        ev["source_id"] = path_to_sid.get(rp, "")
+
+    return evidence_trail
 
 
 # ─── ソースファイル一覧 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────

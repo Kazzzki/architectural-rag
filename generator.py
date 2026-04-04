@@ -619,7 +619,9 @@ def verify_groundedness(
 
         if has_citation:
             # 数値を含む場合は、その数値が evidence テキストに含まれるか確認
-            numbers = _re.findall(r'\d+(?:\.\d+)?', sentence)
+            # 引用マーカー [S*:p.*] 内の数値を除外してからチェック
+            sentence_without_citations = _CITATION_RE.sub('', sentence)
+            numbers = _re.findall(r'\d+(?:\.\d+)?', sentence_without_citations)
             if numbers:
                 # 少なくとも1つの数値が evidence に含まれていれば verified
                 number_found = any(n in all_evidence_text for n in numbers)
