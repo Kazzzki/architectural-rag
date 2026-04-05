@@ -110,7 +110,7 @@ export default function TaskCard({
           </span>
         )}
         {task.milestone_name && (
-          <span className="text-purple-500 text-[11px]">◆ {task.milestone_name}</span>
+          <span className="text-blue-600 text-[11px]">◆ {task.milestone_name}</span>
         )}
         {task.has_today_reminder === 1 && (
           <span title="本日リマインダーあり">
