@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1.0] - 2026-04-05
+
+### Fixed
+- 会議詳細ページの5つのAPI不整合を修正: 存在しないエンドポイント呼び出し、HTTPメソッド誤り、型定義不一致を解消し、編集・再生成・エンティティ抽出・タスク作成が正常動作するように
+- サマリー編集がnotesカラムに誤保存される問題を修正（SessionUpdateにsummaryフィールドを追加）
+- AI系エンドポイント（finalize/extract-links/create-tasks）のタイムアウトを15秒→60-120秒に延長し、Gemini応答待ちでの不要なエラーを防止
+- モバイルUI改善: ボトムナビゲーション、QuickAddSheet、スワイプ操作、レスポンシブ対応
+- 会議録音チャンク送信のレースコンディション修正
+- ChromaDB embedding function競合によるチャット停止を修正
+- LLM出力のホワイトリスト検証強化（entity_type、chain-risk-scanキー）
+- Geminiモデル名を実在するgemini-3-flash-previewに修正
+
 ## [0.1.0.0] - 2026-04-04
 
 ### Added
