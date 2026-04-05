@@ -64,15 +64,15 @@ export default function TodayView({
           <p className="text-xs text-gray-500">期限超過</p>
           <p className={`text-2xl font-bold ${overdue.length > 0 ? 'text-red-600' : 'text-gray-300'}`}>{overdue.length}</p>
         </div>
-        <div className="bg-white rounded-md p-4 border border-gray-100">
+        <div className="bg-white rounded-md p-3 sm:p-4 border border-gray-100">
           <p className="text-xs text-gray-500">今日の期限</p>
           <p className="text-2xl font-bold text-gray-900">{todayTasks.length}</p>
         </div>
-        <div className="bg-white rounded-md p-4 border border-gray-100">
+        <div className="bg-white rounded-md p-3 sm:p-4 border border-gray-100">
           <p className="text-xs text-gray-500">進行中</p>
           <p className="text-2xl font-bold text-gray-900">{inProgress.length}</p>
         </div>
-        <div className="bg-white rounded-md p-4 border border-gray-100">
+        <div className="bg-white rounded-md p-3 sm:p-4 border border-gray-100">
           <p className="text-xs text-gray-500">残り工数</p>
           <p className="text-2xl font-bold text-gray-900">{totalEstimated > 0 ? `${Math.round(totalEstimated / 60)}h` : '-'}</p>
         </div>

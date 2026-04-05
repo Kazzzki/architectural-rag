@@ -124,7 +124,7 @@ export default function MeetingTaskExtractor({
 
             <div className="space-y-2 mb-4">
               {extractedTasks.map((task, i) => (
-                <div key={i}
+                <div key={`${task.title}-${i}`}
                   className={`flex items-start gap-3 p-3 rounded-md border transition-colors ${
                     checked.has(i) ? 'border-gray-300 bg-gray-50' : 'border-gray-100'
                   }`}>

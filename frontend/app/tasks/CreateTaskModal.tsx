@@ -34,6 +34,7 @@ export default function CreateTaskModal({
   const [milestoneId, setMilestoneId] = useState('');
   const [selectedLabels, setSelectedLabels] = useState<number[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,6 +59,7 @@ export default function CreateTaskModal({
       onCreate(task);
     } catch (err) {
       console.error(err);
+      setError(err instanceof Error ? err.message : '作成に失敗しました');
     } finally {
       setLoading(false);
     }
@@ -185,6 +187,8 @@ export default function CreateTaskModal({
               placeholder="例: 60" min="1"
               className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm" />
           </div>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
 
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose}

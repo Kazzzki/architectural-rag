@@ -98,7 +98,8 @@ export default function TaskDetailPanel({
         milestone_id: editMilestone ? parseInt(editMilestone) : undefined,
       });
       onUpdate(updated);
-      setTask({ ...updated, comments: task.comments, reminders: task.reminders });
+      // Preserve comments/reminders from local state (not in update response)
+      setTask((prev) => ({ ...updated, comments: prev?.comments ?? [], reminders: prev?.reminders ?? [] }));
     } finally {
       setSaving(false);
     }
@@ -404,6 +405,7 @@ export default function TaskDetailPanel({
               {(task.reminders ?? []).length > 0 ? (
                 <ul className="space-y-1 mb-3">
                   {task.reminders!.map((r) => {
+                    // Backend auto-reminder format: 「{title}」の期限日です (routers/tasks.py:62)
                     const isAuto = r.message?.endsWith('の期限日です') ?? false;
                     return (
                       <li key={r.id} className="text-xs text-gray-600 bg-gray-50 rounded-md px-3 py-2">
