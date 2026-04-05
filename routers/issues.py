@@ -313,7 +313,7 @@ def _call_gemini_capture(raw_input: str, existing_issues: list) -> dict:
         pass
 
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
+        model="gemini-3-flash-preview",
         contents=prompt,
         config=config,
     )
@@ -466,7 +466,7 @@ def _generate_triage_questions(project_name: str, template_id: str, db) -> dict:
         temperature=0.1,
     )
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
+        model="gemini-3-flash-preview",
         contents=prompt,
         config=config,
     )
@@ -686,7 +686,7 @@ async def capture_issue_from_photo(
             temperature=0.1,
         )
         vision_response = client.models.generate_content(
-            model="gemini-3.1-flash-lite",
+            model="gemini-3-flash-preview",
             contents=[image_part, vision_prompt],
             config=config,
         )
@@ -1344,10 +1344,10 @@ def ai_investigate(issue_id: str, req: AIInvestigateRequest, db=Depends(get_db))
 
     # Model selection: higher quality for legal (high stakes)
     model_map = {
-        "rca": "gemini-3.1-flash-lite",
-        "impact": "gemini-3.1-flash-lite",
-        "countermeasure": "gemini-3.1-flash-lite",
-        "technical": "gemini-3.1-flash-lite",
+        "rca": "gemini-3-flash-preview",
+        "impact": "gemini-3-flash-preview",
+        "countermeasure": "gemini-3-flash-preview",
+        "technical": "gemini-3-flash-preview",
         "legal": "gemini-3-flash-preview",
     }
     system_map = {
@@ -1623,7 +1623,7 @@ JSON配列で返答（最大5件）:
 
         def call_gemini():
             return client.models.generate_content(
-                model="gemini-3.1-flash-lite", contents=prompt, config=config,
+                model="gemini-3-flash-preview", contents=prompt, config=config,
             )
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -1706,7 +1706,7 @@ def ai_infer_causation(req: AIInferCausationRequest, db=Depends(get_db)):
 
         def call_gemini():
             return client.models.generate_content(
-                model="gemini-3.1-flash-lite", contents=prompt, config=config,
+                model="gemini-3-flash-preview", contents=prompt, config=config,
             )
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -1814,7 +1814,7 @@ def health_check(project_name: str, db=Depends(get_db)):
                 system_instruction="建設PM/CMの因果分析アシスタント。JSON形式のみで返答。", temperature=0.2,
             )
             def call_gemini():
-                return client.models.generate_content(model="gemini-3.1-flash-lite", contents=prompt, config=config)
+                return client.models.generate_content(model="gemini-3-flash-preview", contents=prompt, config=config)
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(call_gemini)
                 response = future.result(timeout=30)
