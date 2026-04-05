@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2.0] - 2026-04-05
+
+### Added
+- **タスク依存関係CRUD**: 先行/後続タスクの作成・取得・削除API + 循環依存検知 + TaskDetailPanelにUI追加
+- **繰り返しタスク生成**: 設定済みルールに基づき1時間ごとにタスクを自動生成するバックグラウンドスケジューラー + 手動トリガーAPI
+
+### Fixed
+- **タスク詳細取得にラベル・マイルストーン情報が欠落**: GET /api/tasks/{id}、サブタスク取得、更新レスポンス等6箇所のSELECTを共通拡張クエリに統一
+- **フィールドをnullにクリアできない問題**: category_id/milestone_id/assignee_name等8フィールドのupdate_taskでmodel_fields_set検知に移行、フロントエンドもnull送信に修正
+- **子タスク削除が1階層のみ**: 再帰的_delete_task_tree()に置き換え、孫タスク以深も正しくカスケード削除
+- **Bulk update時にparent progressが再計算されない**: status変更時に影響parent_idを取得し_recalc_progress()を呼び出し
+- **AIチャットで作成されるタスクにproject_name/assignee_nameが設定されない**: 2箇所のINSERTとGeminiプロンプトを拡張
+- **議事録抽出タスクにsource_meeting_idが渡らない**: MeetingTaskExtractorからbulkCreateにmeeting_idとsource_typeを伝播
+- **filterProjectがサーバーサイドフィルタに含まれない**: fetchTasksの依存配列とAPI送信にfilterProject追加
+- **pending remindersのレースコンディション**: 個別UPDATEをIN句バッチ更新に統合
+- **Geminiプロンプト内の文字化け**: 「な\\u{FFFD}ればnull」→「なければnull」に修正
+- **依存関係dep_typeの入力値未検証**: FS/FF/SS/SFホワイトリストバリデーション追加
+
 ## [0.1.1.0] - 2026-04-05
 
 ### Fixed
