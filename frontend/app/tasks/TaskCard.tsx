@@ -55,7 +55,7 @@ export default function TaskCard({
         <span className={`flex-1 text-sm font-medium leading-snug line-clamp-2 ${task.status === 'done' ? 'line-through text-gray-400' : 'text-gray-900'}`}>
           {task.title}
         </span>
-        <span className={`text-xs px-1.5 py-0.5 rounded-md border flex-shrink-0 font-medium ${PRIORITY_COLOR[task.priority]}`}>
+        <span className={`text-xs px-2 py-0.5 rounded-full border flex-shrink-0 font-medium ${PRIORITY_COLOR[task.priority]}`}>
           {PRIORITY_LABEL[task.priority]}
         </span>
       </div>

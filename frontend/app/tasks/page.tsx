@@ -288,7 +288,7 @@ function TasksPageInner() {
                 <option value="low">低</option>
               </select>
               <button onClick={() => setShowCreateModal(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700">
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 text-white text-sm font-medium rounded-full hover:bg-gray-700">
                 <Plus className="w-4 h-4" /><span className="hidden sm:inline">タスク追加</span>
               </button>
             </div>
@@ -296,10 +296,10 @@ function TasksPageInner() {
 
           {/* View tabs + action buttons (hidden on mobile — use BottomNav) */}
           <div className="hidden md:flex items-center gap-3">
-            <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
+            <div className="flex items-center gap-0.5 bg-gray-100 rounded-full p-0.5">
               {VIEWS.map(({ key, icon: Icon, label }) => (
                 <button key={key} onClick={() => switchView(key)}
-                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${
                     viewMode === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
                   }`}>
                   <Icon className="w-3.5 h-3.5" />{label}
@@ -308,11 +308,11 @@ function TasksPageInner() {
             </div>
             <div className="flex gap-1.5 ml-auto">
               <button onClick={() => setShowReport(true)}
-                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200">
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-full hover:bg-gray-200">
                 <FileText className="w-3.5 h-3.5" />レポート
               </button>
               <button onClick={() => setShowExtractor(true)}
-                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200">
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-full hover:bg-gray-200">
                 <ClipboardList className="w-3.5 h-3.5" />議事録→タスク
               </button>
             </div>
@@ -326,10 +326,10 @@ function TasksPageInner() {
           <input type="text" value={quickInput} onChange={(e) => setQuickInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); handleQuickAdd(); } }}
             placeholder="タスクを追加... (Enter で即追加)"
-            className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm bg-gray-50"
+            className="flex-1 px-3 py-2 rounded-full border border-gray-200 text-sm bg-gray-50"
             disabled={quickAdding} />
           <button onClick={handleQuickAdd} disabled={!quickInput.trim() || quickAdding}
-            className="px-3 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-700 disabled:opacity-30 shrink-0">
+            className="px-3 py-2 bg-gray-900 text-white rounded-full hover:bg-gray-700 disabled:opacity-30 shrink-0">
             {quickAdding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
           </button>
         </div>
@@ -413,10 +413,10 @@ function TasksPageInner() {
             <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSubmit(); } }}
               placeholder="「明日の会議をリマインドして」「設計レビューのタスクを追加して」"
-              className="flex-1 px-3 py-2 rounded-md border border-gray-200 text-sm bg-white"
+              className="flex-1 px-3 py-2 rounded-full border border-gray-200 text-sm bg-white"
               disabled={chatLoading} />
             <button onClick={handleChatSubmit} disabled={!chatInput.trim() || chatLoading}
-              className="px-4 py-2 bg-gray-900 text-white rounded-md hover:bg-gray-700 disabled:opacity-50 flex-shrink-0">
+              className="px-4 py-2 bg-gray-900 text-white rounded-full hover:bg-gray-700 disabled:opacity-50 flex-shrink-0">
               {chatLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>

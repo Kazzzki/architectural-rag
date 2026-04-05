@@ -32,6 +32,12 @@ module.exports = {
                     900: '#1e3a8a',
                 },
             },
+            borderRadius: {
+                'sm': '6px',
+                'md': '10px',
+                'lg': '16px',
+                'full': '9999px',
+            },
             animation: {
                 'fade-in': 'fadeIn 0.3s ease-out',
                 'slide-up': 'slideUp 0.3s ease-out',

@@ -200,7 +200,7 @@ export default function TaskTable({
                   </td>
                   <td className="px-3 py-2 text-gray-600 text-xs">{task.assignee_name ?? '-'}</td>
                   <td className="px-3 py-2">
-                    <span className="text-xs px-1.5 py-0.5 rounded border border-gray-200">{PRIORITY_LABEL[task.priority]}</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full border border-gray-200">{PRIORITY_LABEL[task.priority]}</span>
                   </td>
                   <td className="px-3 py-2">
                     <span className="text-xs text-gray-600">{STATUS_LABEL[task.status]}</span>
