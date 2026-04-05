@@ -189,7 +189,7 @@ export default function TaskTable({
                     <div className="flex items-center gap-2">
                       <button onClick={(e) => { e.stopPropagation(); onToggleDone(task); }}
                         className={`w-6 h-6 rounded border-2 shrink-0 flex items-center justify-center ${
-                          task.status === 'done' ? 'bg-gray-900 border-gray-900 text-white' : 'border-gray-300'
+                          task.status === 'done' ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'
                         }`}>
                         {task.status === 'done' && <CheckSquare className="w-3 h-3" />}
                       </button>

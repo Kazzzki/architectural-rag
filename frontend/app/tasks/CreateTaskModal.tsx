@@ -139,7 +139,7 @@ export default function CreateTaskModal({
               <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white">
                 <option value="">なし</option>
-                {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
               </select>
             </div>
             <div>
@@ -155,7 +155,7 @@ export default function CreateTaskModal({
               <select value={milestoneId} onChange={(e) => setMilestoneId(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white">
                 <option value="">なし</option>
-                {milestones.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                {milestones.map((m) => <option key={m.id} value={String(m.id)}>{m.name}</option>)}
               </select>
             </div>
           )}

@@ -25,7 +25,8 @@ export default function PortfolioDashboard() {
       try {
         const result = await api.getPortfolio();
         setData(result ?? []);
-      } catch {
+      } catch (e) {
+        console.warn('portfolio load:', e);
         setData([]);
       } finally {
         setLoading(false);

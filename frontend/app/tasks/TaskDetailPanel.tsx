@@ -200,7 +200,7 @@ export default function TaskDetailPanel({
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <h3 className="text-sm font-semibold text-gray-700">タスク詳細</h3>
           <div className="flex gap-2">
-            <button onClick={handleDelete} className="p-2.5 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700" title="削除">
+            <button onClick={handleDelete} aria-label="このタスクを削除" className="p-2.5 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700" title="削除">
               <Trash2 className="w-4 h-4" />
             </button>
             <button onClick={onClose} className="p-2.5 rounded-lg text-gray-400 hover:bg-gray-100">
@@ -272,7 +272,7 @@ export default function TaskDetailPanel({
                 <select value={editCategory} onChange={(e) => setEditCategory(e.target.value)}
                   className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white">
                   <option value="">なし</option>
-                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
                 </select>
               </div>
               <div>
@@ -288,7 +288,7 @@ export default function TaskDetailPanel({
                 <select value={editMilestone} onChange={(e) => setEditMilestone(e.target.value)}
                   className="w-full px-2 py-1.5 rounded-lg border border-gray-200 text-sm bg-white">
                   <option value="">なし</option>
-                  {milestones.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  {milestones.map((m) => <option key={m.id} value={String(m.id)}>{m.name}</option>)}
                 </select>
               </div>
             )}
@@ -348,7 +348,7 @@ export default function TaskDetailPanel({
                     <li key={sub.id} className="flex items-center gap-2 py-1">
                       <button onClick={() => handleToggleSubtask(sub)}
                         className={`w-6 h-6 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${
-                          sub.status === 'done' ? 'bg-gray-900 border-gray-900 text-white' : 'border-gray-300 hover:border-gray-500'
+                          sub.status === 'done' ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 hover:border-gray-500'
                         }`}>
                         {sub.status === 'done' && <CheckSquare className="w-3 h-3" />}
                       </button>

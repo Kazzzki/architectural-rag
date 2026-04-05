@@ -26,7 +26,8 @@ export default function MeetingTaskExtractor({
       try {
         const data = await api.getMeetings();
         setMeetings(data ?? []);
-      } catch {
+      } catch (e) {
+        console.warn('meetings load:', e);
         setMeetings([]);
       } finally {
         setLoadingMeetings(false);

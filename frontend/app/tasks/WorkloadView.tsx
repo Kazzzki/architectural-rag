@@ -23,7 +23,8 @@ export default function WorkloadView() {
       try {
         const result = await api.getWorkload();
         setData(result ?? []);
-      } catch {
+      } catch (e) {
+        console.warn('workload load:', e);
         setData([]);
       } finally {
         setLoading(false);

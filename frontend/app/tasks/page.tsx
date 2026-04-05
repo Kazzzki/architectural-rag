@@ -7,7 +7,7 @@ import {
   PointerSensor, useSensor, useSensors,
 } from '@dnd-kit/core';
 import {
-  Plus, X, Send, Bell, Clock, Calendar, CheckSquare, Loader2, Bot,
+  Plus, X, Send, Clock, Calendar, CheckSquare, Loader2, Bot,
   LayoutGrid, GitBranch, List, Sun, FileText, ClipboardList,
 } from 'lucide-react';
 
@@ -145,7 +145,7 @@ function TasksPageInner() {
             new Notification(`リマインダー: ${r.task_title}`, { body: r.message ?? r.remind_at });
           }
         }
-      } catch { /* silent */ }
+      } catch (e) { console.warn('reminder poll:', e); }
     };
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
       Notification.requestPermission();

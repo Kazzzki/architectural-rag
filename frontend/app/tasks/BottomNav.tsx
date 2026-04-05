@@ -20,7 +20,7 @@ export default function BottomNav({
     { key: 'today', icon: Sun, label: '今日' },
     { key: 'projects', icon: FolderOpen, label: 'PJ' },
     { key: 'add', icon: Plus, label: '' },
-    { key: 'notifications', icon: Bell, label: '���知' },
+    { key: 'notifications', icon: Bell, label: '通知' },
     { key: 'more', icon: Menu, label: 'その他' },
   ];
 
@@ -30,7 +30,7 @@ export default function BottomNav({
         {tabs.map(({ key, icon: Icon, label }) => {
           if (key === 'add') {
             return (
-              <button key={key} onClick={onAdd}
+              <button key={key} onClick={onAdd} aria-label="タスクを追加"
                 className="flex flex-col items-center -mt-4">
                 <span className="w-12 h-12 rounded-full bg-gray-900 flex items-center justify-center shadow-lg">
                   <Plus className="w-6 h-6 text-white" />

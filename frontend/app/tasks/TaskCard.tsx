@@ -45,8 +45,9 @@ export default function TaskCard({
       <div className="flex items-start gap-2 mb-2">
         <button
           onClick={(e) => { e.stopPropagation(); onToggleDone?.(); }}
-          className={`mt-0.5 w-6 h-6 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${
-            task.status === 'done' ? 'bg-gray-900 border-gray-900 text-white' : 'border-gray-300 hover:border-gray-500'
+          aria-label={task.status === 'done' ? '未完了にする' : '完了にする'}
+          className={`mt-0.5 w-6 h-6 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${
+            task.status === 'done' ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 hover:border-gray-500'
           }`}
         >
           {task.status === 'done' && <CheckSquare className="w-3 h-3" />}
