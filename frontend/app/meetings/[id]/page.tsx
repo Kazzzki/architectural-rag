@@ -5,7 +5,8 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Clock, Users, RefreshCw, Loader2,
   Pencil, Save, X, ListChecks, CheckCircle2,
-  FolderOpen, ClipboardCopy, Check,
+  FolderOpen, ClipboardCopy, Check, CircleDot, ListTodo,
+  MessageSquare, Target, AlertTriangle,
 } from 'lucide-react';
 import { authFetch } from '@/lib/api';
 import { MeetingDetail, apiFetch, formatDate } from '../utils';
@@ -34,15 +35,21 @@ export default function MeetingDetailPage() {
   const [exported, setExported] = useState(false);
   const [pastDecisions, setPastDecisions] = useState<any[]>([]);
   const [showDecisions, setShowDecisions] = useState(false);
+  const [liveNotes, setLiveNotes] = useState<any[]>([]);
+  const [convertedNotes, setConvertedNotes] = useState<Record<number, string>>({});
 
   const fetchMeeting = useCallback(async () => {
     try {
-      const data = await apiFetch(`/api/meetings/${meetingId}`);
+      const [data, notes] = await Promise.all([
+        apiFetch(`/api/meetings/${meetingId}`),
+        apiFetch(`/api/meetings/${meetingId}/live-notes`).catch(() => []),
+      ]);
       if (data) {
         setMeeting(data);
         setEditSummary(data.summary || '');
         setEditTitle(data.title || '');
       }
+      setLiveNotes(notes || []);
     } catch (e) {
       console.error('Failed to fetch meeting:', e);
       router.push('/meetings');
@@ -50,6 +57,38 @@ export default function MeetingDetailPage() {
       setLoading(false);
     }
   }, [meetingId, router]);
+
+  const handleConvertNoteToIssue = async (note: any) => {
+    try {
+      const res = await authFetch('/api/issues', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: note.content, project_name: meeting?.project_name }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${data.id}` }));
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const handleConvertNoteToTask = async (note: any) => {
+    try {
+      const res = await authFetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: note.content, source_meeting_id: parseInt(meetingId),
+          source_type: 'meeting', project_name: meeting?.project_name,
+          priority: note.note_type === 'risk' ? 'high' : 'medium', status: 'todo',
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConvertedNotes(prev => ({ ...prev, [note.id]: `task:${data.id}` }));
+      }
+    } catch (e) { console.error(e); }
+  };
 
   useEffect(() => {
     fetchMeeting();
@@ -331,6 +370,50 @@ export default function MeetingDetailPage() {
             {meeting.notes && (
               <Section title="メモ">
                 <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{meeting.notes}</p>
+              </Section>
+            )}
+
+            {/* Live Notes with Convert Buttons */}
+            {liveNotes.length > 0 && (
+              <Section title="ライブメモ">
+                <div className="space-y-1.5">
+                  {liveNotes.map((note: any) => {
+                    const typeConfig: Record<string, { icon: typeof MessageSquare; label: string; color: string }> = {
+                      memo: { icon: MessageSquare, label: 'メモ', color: 'text-gray-500' },
+                      decision: { icon: CheckCircle2, label: '決定', color: 'text-green-600' },
+                      action: { icon: Target, label: 'アクション', color: 'text-blue-600' },
+                      risk: { icon: AlertTriangle, label: 'リスク', color: 'text-amber-600' },
+                    };
+                    const cfg = typeConfig[note.note_type] || typeConfig.memo;
+                    const Icon = cfg.icon;
+                    const ts = note.timestamp_sec != null
+                      ? `${String(Math.floor(note.timestamp_sec / 60)).padStart(2, '0')}:${String(note.timestamp_sec % 60).padStart(2, '0')}`
+                      : '';
+                    return (
+                      <div key={note.id} className="group flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-gray-50">
+                        <span className="text-xs font-mono text-blue-500 w-12 text-right shrink-0">{ts}</span>
+                        <Icon className={`w-3.5 h-3.5 shrink-0 ${cfg.color}`} />
+                        <span className="flex-1 text-sm text-gray-700">{note.content}</span>
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          {convertedNotes[note.id] ? (
+                            <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">
+                              {convertedNotes[note.id].startsWith('issue:') ? `課題 #${convertedNotes[note.id].split(':')[1]}` : `タスク #${convertedNotes[note.id].split(':')[1]}`}
+                            </span>
+                          ) : (
+                            <>
+                              <button onClick={() => handleConvertNoteToIssue(note)} title="課題に登録" className="p-1 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded">
+                                <CircleDot className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => handleConvertNoteToTask(note)} title="タスクに登録" className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded">
+                                <ListTodo className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </Section>
             )}
 
