@@ -20,6 +20,11 @@ import {
   AlertTriangle,
   ListChecks,
   CircleDot,
+  ClipboardCopy,
+  CheckCircle2,
+  ListTodo,
+  Target,
+  MessageSquare,
 } from 'lucide-react';
 import { authFetch } from '@/lib/api';
 import MeetingLiveNotes from '../components/meetings/MeetingLiveNotes';
@@ -57,6 +62,11 @@ function MeetingDetailModal({
   const [notesSaving, setNotesSaving] = useState(false);
   const [chunkNotes, setChunkNotes] = useState<Record<number, string>>({});
   const [toast, setToast] = useState<string | null>(null);
+  const [exported, setExported] = useState(false);
+  const [pastDecisions, setPastDecisions] = useState<any[]>([]);
+  const [showDecisions, setShowDecisions] = useState(false);
+  const [liveNotes, setLiveNotes] = useState<any[]>([]);
+  const [convertedNotes, setConvertedNotes] = useState<Record<number, string>>({});
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -70,10 +80,13 @@ function MeetingDetailModal({
   }, [toast]);
 
   useEffect(() => {
-    apiFetch(`/api/meetings/${sessionId}`)
-      .then((d) => {
+    Promise.all([
+      apiFetch(`/api/meetings/${sessionId}`),
+      apiFetch(`/api/meetings/${sessionId}/live-notes`).catch(() => []),
+    ]).then(([d, notes]) => {
         setDetail(d);
         setNotes(d?.notes ?? '');
+        setLiveNotes(notes || []);
         const cn: Record<number, string> = {};
         d?.chunks?.forEach((c: MeetingChunk) => { cn[c.id] = c.note ?? ''; });
         setChunkNotes(cn);
@@ -148,6 +161,52 @@ function MeetingDetailModal({
     window.open(`/api/meetings/${sessionId}/export`, '_blank');
   };
 
+  const handleCopyToClipboard = async () => {
+    try {
+      const res = await authFetch(`/api/meetings/${sessionId}/export`);
+      if (res.ok) {
+        const md = await res.text();
+        await navigator.clipboard.writeText(md);
+        setExported(true);
+        setToast('Markdownをクリップボードにコピーしました');
+        setTimeout(() => setExported(false), 3000);
+      }
+    } catch (e) { console.error('Export failed:', e); }
+  };
+
+  const handleShowDecisions = async () => {
+    if (showDecisions) { setShowDecisions(false); return; }
+    try {
+      const pn = detail?.project_name;
+      const url = pn ? `/api/meetings/decisions?project_name=${encodeURIComponent(pn)}` : '/api/meetings/decisions';
+      const res = await authFetch(url);
+      if (res.ok) { setPastDecisions(await res.json()); setShowDecisions(true); }
+    } catch (e) { console.error(e); }
+  };
+
+  const handleConvertToIssue = async (note: any) => {
+    try {
+      const res = await authFetch('/api/issues', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: note.content, project_name: detail?.project_name }),
+      });
+      if (res.ok) { const d = await res.json(); setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${d.id}` })); }
+    } catch (e) { console.error(e); }
+  };
+
+  const handleConvertToTask = async (note: any) => {
+    try {
+      const res = await authFetch('/api/tasks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: note.content, source_meeting_id: sessionId, source_type: 'meeting',
+          project_name: detail?.project_name, priority: note.note_type === 'risk' ? 'high' : 'medium', status: 'todo',
+        }),
+      });
+      if (res.ok) { const d = await res.json(); setConvertedNotes(prev => ({ ...prev, [note.id]: `task:${d.id}` })); }
+    } catch (e) { console.error(e); }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
@@ -162,17 +221,32 @@ function MeetingDetailModal({
           </div>
           <div className="flex items-center gap-2">
             {detail && (
-              <button
-                onClick={handleExport}
-                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                title="Markdownでエクスポート"
-              >
-                <Download className="w-4 h-4" />
-              </button>
+              <>
+                <button
+                  onClick={handleCopyToClipboard}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-full hover:bg-gray-200"
+                  title="Markdownをクリップボードにコピー（Notion貼り付け用）"
+                >
+                  {exported ? <><CheckCircle2 className="w-3.5 h-3.5 text-green-600" /> コピー済</> : <><ClipboardCopy className="w-3.5 h-3.5" /> Notionへ</>}
+                </button>
+                <button
+                  onClick={handleShowDecisions}
+                  className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-full ${showDecisions ? 'bg-blue-100 text-blue-700' : 'text-gray-600 bg-gray-100 hover:bg-gray-200'}`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" /> 過去決定
+                </button>
+                <button
+                  onClick={handleExport}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+                  title="MDダウンロード"
+                >
+                  <Download className="w-4 h-4" />
+                </button>
+              </>
             )}
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
+              className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-full transition-colors"
             >
               閉じる
             </button>
@@ -225,6 +299,62 @@ function MeetingDetailModal({
                 className="w-full min-h-[80px] px-3 py-2 rounded-lg border border-amber-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-transparent resize-y"
               />
             </div>
+
+            {/* 過去決定パネル */}
+            {showDecisions && (
+              <div className="bg-green-50 rounded-xl p-4">
+                <h3 className="text-sm font-semibold text-green-700 mb-2 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4" /> 過去の決定事項
+                  {detail.project_name && <span className="text-xs text-green-500 font-normal">({detail.project_name})</span>}
+                </h3>
+                {pastDecisions.length === 0 ? (
+                  <p className="text-sm text-green-500">過去の決定事項はありません</p>
+                ) : (
+                  <ul className="space-y-1.5 max-h-40 overflow-y-auto">
+                    {pastDecisions.map((d: any) => (
+                      <li key={d.id} className="flex items-start gap-2 text-sm">
+                        <span className="text-xs text-green-500 font-mono shrink-0 mt-0.5">{d.meeting_date?.slice(0, 10)}</span>
+                        <span className="text-gray-700">{d.content}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {/* ライブメモ + 変換ボタン */}
+            {liveNotes.length > 0 && (
+              <div className="bg-gray-50 rounded-xl p-4">
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">ライブメモ ({liveNotes.length}件)</h3>
+                <div className="space-y-1">
+                  {liveNotes.map((note: any) => {
+                    const icons: Record<string, typeof MessageSquare> = { memo: MessageSquare, decision: CheckCircle2, action: Target, risk: AlertTriangle };
+                    const colors: Record<string, string> = { memo: 'text-gray-500', decision: 'text-green-600', action: 'text-blue-600', risk: 'text-amber-600' };
+                    const Icon = icons[note.note_type] || MessageSquare;
+                    const ts = note.timestamp_sec != null ? `${String(Math.floor(note.timestamp_sec / 60)).padStart(2, '0')}:${String(note.timestamp_sec % 60).padStart(2, '0')}` : '';
+                    return (
+                      <div key={note.id} className="group flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-white">
+                        <span className="text-xs font-mono text-blue-500 w-10 text-right shrink-0">{ts}</span>
+                        <Icon className={`w-3.5 h-3.5 shrink-0 ${colors[note.note_type] || 'text-gray-500'}`} />
+                        <span className="flex-1 text-sm text-gray-700">{note.content}</span>
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          {convertedNotes[note.id] ? (
+                            <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">
+                              {convertedNotes[note.id].startsWith('issue:') ? `課題#${convertedNotes[note.id].split(':')[1]}` : `タスク#${convertedNotes[note.id].split(':')[1]}`}
+                            </span>
+                          ) : (
+                            <>
+                              <button onClick={() => handleConvertToIssue(note)} title="課題に登録" className="p-1 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded"><CircleDot className="w-3 h-3" /></button>
+                              <button onClick={() => handleConvertToTask(note)} title="タスクに登録" className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><ListTodo className="w-3 h-3" /></button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {detail.chunks.length > 0 ? (
               <div>
