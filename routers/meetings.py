@@ -88,6 +88,34 @@ def create_meeting(req: SessionCreate, db=Depends(get_db)) -> Dict[str, Any]:
     return _row_to_dict(row)
 
 
+@router.get("/api/meetings/decisions")
+def get_past_decisions(
+    project_name: Optional[str] = None,
+    limit: int = 50,
+    db=Depends(get_db),
+) -> List[Dict[str, Any]]:
+    """プロジェクト横断の過去決定事項一覧"""
+    where = ["n.note_type = 'decision'"]
+    params: Dict[str, Any] = {"limit": limit}
+    if project_name:
+        where.append("s.project_name = :project_name")
+        params["project_name"] = project_name
+    rows = db.execute(
+        text(f"""
+            SELECT n.id, n.content, n.timestamp_sec, n.created_at,
+                   s.id AS session_id, s.title AS meeting_title,
+                   s.project_name, s.created_at AS meeting_date
+            FROM meeting_live_notes n
+            JOIN meeting_sessions s ON n.session_id = s.id
+            WHERE {' AND '.join(where)}
+            ORDER BY n.created_at DESC
+            LIMIT :limit
+        """),
+        params,
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
 @router.get("/api/meetings/{session_id}")
 def get_meeting(session_id: int, db=Depends(get_db)) -> Dict[str, Any]:
     """セッション詳細 + 全チャンクの文字起こし"""
@@ -856,27 +884,12 @@ def export_meeting(session_id: int, db=Depends(get_db)):
                 lines.append(f"> メモ: {c['note']}")
                 lines.append("")
 
-    # ライブメモ
+    # ライブメモ取得（分類出力で使用）
     live_notes = db.execute(text("""
         SELECT timestamp_sec, content, note_type FROM meeting_live_notes
         WHERE session_id = :sid
         ORDER BY timestamp_sec ASC, id ASC
     """), {"sid": session_id}).fetchall()
-    if live_notes:
-        note_type_labels = {"decision": "決定", "action": "アクション", "risk": "リスク", "memo": "メモ"}
-        lines.append("## ライブメモ")
-        lines.append("")
-        for row in live_notes:
-            n = _row_to_dict(row)
-            ts = _format_offset(n.get("timestamp_sec"))
-            nt = n.get("note_type", "memo")
-            label = note_type_labels.get(nt, "メモ")
-            prefix = f"[{ts}]" if ts else ""
-            if nt != "memo":
-                lines.append(f"- {prefix} **{label}** {n['content']}")
-            else:
-                lines.append(f"- {prefix} {n['content']}")
-        lines.append("")
 
     # サマリーを先頭に（Notion貼り付け時にまず概要が見える）
     if s.get("summary"):
@@ -924,39 +937,17 @@ def export_meeting(session_id: int, db=Depends(get_db)):
             lines.append("")
 
     md = "\n".join(lines)
-    filename = f"{s.get('title', 'meeting')}_{session_id}.md"
+    # ファイル名にASCII外の文字がある場合はRFC 5987形式でエンコード
+    title_safe = s.get('title', 'meeting').encode('ascii', 'replace').decode('ascii')
+    filename = f"{title_safe}_{session_id}.md"
+    from urllib.parse import quote
+    filename_utf8 = f"{s.get('title', 'meeting')}_{session_id}.md"
     return PlainTextResponse(
         content=md,
         media_type="text/markdown",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quote(filename_utf8)}"},
     )
 
 
 # ===== 過去決定事項 =====
 
-@router.get("/api/meetings/decisions")
-def get_past_decisions(
-    project_name: Optional[str] = None,
-    limit: int = 50,
-    db=Depends(get_db),
-) -> List[Dict[str, Any]]:
-    """プロジェクト横断の過去決定事項一覧"""
-    where = ["n.note_type = 'decision'"]
-    params: Dict[str, Any] = {"limit": limit}
-    if project_name:
-        where.append("s.project_name = :project_name")
-        params["project_name"] = project_name
-    rows = db.execute(
-        text(f"""
-            SELECT n.id, n.content, n.timestamp_sec, n.created_at,
-                   s.id AS session_id, s.title AS meeting_title,
-                   s.project_name, s.created_at AS meeting_date
-            FROM meeting_live_notes n
-            JOIN meeting_sessions s ON n.session_id = s.id
-            WHERE {' AND '.join(where)}
-            ORDER BY n.created_at DESC
-            LIMIT :limit
-        """),
-        params,
-    ).fetchall()
-    return [_row_to_dict(r) for r in rows]
