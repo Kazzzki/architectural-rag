@@ -200,10 +200,10 @@ export default function TaskDetailPanel({
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <h3 className="text-sm font-semibold text-gray-700">タスク詳細</h3>
           <div className="flex gap-2">
-            <button onClick={handleDelete} className="p-1.5 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700" title="削除">
+            <button onClick={handleDelete} className="p-2.5 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700" title="削除">
               <Trash2 className="w-4 h-4" />
             </button>
-            <button onClick={onClose} className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100">
+            <button onClick={onClose} className="p-2.5 rounded-lg text-gray-400 hover:bg-gray-100">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -223,7 +223,7 @@ export default function TaskDetailPanel({
                 className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400" />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">プロジェクト</label>
                 <select value={editProject} onChange={(e) => setEditProject(e.target.value)}
@@ -245,7 +245,7 @@ export default function TaskDetailPanel({
                 className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm resize-none" />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">ステータス</label>
                 <select value={editStatus} onChange={(e) => setEditStatus(e.target.value as Task['status'])}
@@ -266,7 +266,7 @@ export default function TaskDetailPanel({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">カテゴリ</label>
                 <select value={editCategory} onChange={(e) => setEditCategory(e.target.value)}
@@ -293,7 +293,7 @@ export default function TaskDetailPanel({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">予想時間（分）</label>
                 <input type="number" value={editEstimated} onChange={(e) => setEditEstimated(e.target.value)} min="1"
@@ -347,7 +347,7 @@ export default function TaskDetailPanel({
                   {subtasks.map((sub) => (
                     <li key={sub.id} className="flex items-center gap-2 py-1">
                       <button onClick={() => handleToggleSubtask(sub)}
-                        className={`w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${
+                        className={`w-6 h-6 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${
                           sub.status === 'done' ? 'bg-gray-900 border-gray-900 text-white' : 'border-gray-300 hover:border-gray-500'
                         }`}>
                         {sub.status === 'done' && <CheckSquare className="w-3 h-3" />}

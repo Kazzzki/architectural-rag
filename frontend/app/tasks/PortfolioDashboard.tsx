@@ -50,7 +50,7 @@ export default function PortfolioDashboard() {
     <div className="max-w-5xl mx-auto">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {data.map((p) => (
-          <div key={p.project_name} className="bg-white rounded-md border border-gray-200 p-5">
+          <div key={p.project_name} className="bg-white rounded-md border border-gray-200 p-3 sm:p-5">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-900 truncate">{p.project_name}</h3>
               <span className="text-xs text-gray-500">{p.total}件</span>

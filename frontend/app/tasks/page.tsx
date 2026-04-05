@@ -26,6 +26,8 @@ import MeetingTaskExtractor from './MeetingTaskExtractor';
 import TodayView from './TodayView';
 import PortfolioDashboard from './PortfolioDashboard';
 import WorkloadView from './WorkloadView';
+import BottomNav from './BottomNav';
+import QuickAddSheet from './QuickAddSheet';
 
 const TaskMindMap = lazy(() => import('./TaskMindMap'));
 
@@ -56,6 +58,8 @@ function TasksPageInner() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [showExtractor, setShowExtractor] = useState(false);
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   // Filters from URL
   const [viewMode, setViewMode] = useState<ViewMode>((searchParams.get('view') as ViewMode) || 'today');
@@ -248,8 +252,8 @@ function TasksPageInner() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
-        <div className="max-w-7xl mx-auto space-y-2">
+      <header className="bg-white border-b border-gray-200 px-3 md:px-6 py-2 md:py-3 flex-shrink-0">
+        <div className="max-w-7xl mx-auto space-y-1 md:space-y-2">
           <div className="flex items-center gap-3">
             <CheckSquare className="w-5 h-5 text-gray-900 shrink-0" />
             <h1 className="text-lg font-bold text-gray-900 shrink-0">タスク管理</h1>
@@ -289,8 +293,8 @@ function TasksPageInner() {
             </div>
           </div>
 
-          {/* View tabs + action buttons */}
-          <div className="flex items-center gap-3">
+          {/* View tabs + action buttons (hidden on mobile — use BottomNav) */}
+          <div className="hidden md:flex items-center gap-3">
             <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
               {VIEWS.map(({ key, icon: Icon, label }) => (
                 <button key={key} onClick={() => switchView(key)}
@@ -315,8 +319,8 @@ function TasksPageInner() {
         </div>
       </header>
 
-      {/* Quick add */}
-      <div className="bg-white border-b border-gray-100 px-4 md:px-6 py-2">
+      {/* Quick add (hidden on mobile — use FAB) */}
+      <div className="hidden md:block bg-white border-b border-gray-100 px-4 md:px-6 py-2">
         <div className="max-w-7xl mx-auto flex gap-2 items-center">
           <input type="text" value={quickInput} onChange={(e) => setQuickInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); handleQuickAdd(); } }}
@@ -345,18 +349,16 @@ function TasksPageInner() {
           ) : viewMode === 'kanban' ? (
             <DndContext sensors={sensors} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
               <div className="md:hidden max-w-7xl mx-auto">
-                <div className="flex gap-1 mb-3 bg-gray-100 rounded-lg p-0.5 w-fit">
-                  {(['todo', 'in_progress', 'done'] as const).map((s, i) => (
-                    <button key={s} onClick={() => setMobileColumn(i)}
-                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${mobileColumn === i ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>
-                      {STATUS_LABEL[s]} <span className="text-gray-400 ml-0.5">{columnTasks(s).length}</span>
-                    </button>
+                {/* Snap-scroll kanban columns */}
+                <div className="flex overflow-x-auto snap-x snap-mandatory gap-3 -mx-3 px-3 pb-2"
+                  style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
+                  {(['todo', 'in_progress', 'done'] as const).map((status) => (
+                    <div key={status} className="snap-start shrink-0" style={{ width: '85vw' }}>
+                      <KanbanColumn status={status} tasks={columnTasks(status)}
+                        onTaskClick={(t) => setSelectedTaskId(t.id)} onToggleDone={handleToggleDone} />
+                    </div>
                   ))}
                 </div>
-                <KanbanColumn
-                  status={(['todo', 'in_progress', 'done'] as const)[mobileColumn]}
-                  tasks={columnTasks((['todo', 'in_progress', 'done'] as const)[mobileColumn])}
-                  onTaskClick={(t) => setSelectedTaskId(t.id)} onToggleDone={handleToggleDone} />
               </div>
               <div className="hidden md:flex flex-row gap-4 max-w-7xl mx-auto">
                 {(['todo', 'in_progress', 'done'] as const).map((status) => (
@@ -393,8 +395,8 @@ function TasksPageInner() {
         )}
       </div>
 
-      {/* AI Chat bar */}
-      <div className="bg-white border-t border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
+      {/* AI Chat bar (hidden on mobile — use BottomNav) */}
+      <div className="hidden md:block bg-white border-t border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
         <div className="max-w-7xl mx-auto">
           {chatMessages.length > 0 && (
             <div className="mb-2 max-h-32 overflow-y-auto space-y-1">
@@ -433,6 +435,52 @@ function TasksPageInner() {
           onClose={() => setShowExtractor(false)}
           onCreated={() => { setShowExtractor(false); fetchTasks(); }} />
       )}
+
+      {/* Mobile Quick Add Sheet (vaul) */}
+      <QuickAddSheet
+        open={showQuickAdd}
+        onOpenChange={setShowQuickAdd}
+        onCreated={(task) => { setTasks((prev) => [task, ...prev]); }}
+        defaultProject={filterProject}
+      />
+
+      {/* Mobile Bottom Nav */}
+      <BottomNav
+        activeTab={viewMode}
+        onTabChange={(tab) => switchView(tab as ViewMode)}
+        onAdd={() => setShowQuickAdd(true)}
+        onMoreOpen={() => setShowMoreMenu(!showMoreMenu)}
+      />
+
+      {/* Mobile More Menu */}
+      {showMoreMenu && (
+        <div className="fixed inset-0 z-40 md:hidden" onClick={() => setShowMoreMenu(false)}>
+          <div className="absolute bottom-16 right-4 bg-white rounded-lg shadow-xl border border-gray-200 py-2 min-w-[160px]"
+            onClick={(e) => e.stopPropagation()}>
+            {VIEWS.map(({ key, icon: Icon, label }) => (
+              <button key={key} onClick={() => { switchView(key); setShowMoreMenu(false); }}
+                className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm ${
+                  viewMode === key ? 'text-gray-900 font-medium bg-gray-50' : 'text-gray-600'
+                }`}>
+                <Icon className="w-4 h-4" />{label}
+              </button>
+            ))}
+            <div className="border-t border-gray-100 mt-1 pt-1">
+              <button onClick={() => { setShowReport(true); setShowMoreMenu(false); }}
+                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-600">
+                <FileText className="w-4 h-4" />レポート
+              </button>
+              <button onClick={() => { setShowExtractor(true); setShowMoreMenu(false); }}
+                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-600">
+                <ClipboardList className="w-4 h-4" />議事録→タスク
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile bottom padding for nav */}
+      <div className="h-16 md:hidden" />
     </div>
   );
 }

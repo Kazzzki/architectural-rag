@@ -71,7 +71,7 @@ export default function CreateTaskModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto">
+      <div className="bg-white shadow-lg w-full sm:max-w-md max-h-full sm:max-h-[90vh] sm:rounded-md overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white">
           <h2 className="text-lg font-semibold text-gray-900">新しいタスク</h2>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500">
@@ -95,7 +95,7 @@ export default function CreateTaskModal({
               className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent resize-none" />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">ステータス</label>
               <select value={status} onChange={(e) => setStatus(e.target.value as Task['status'])}
@@ -116,7 +116,7 @@ export default function CreateTaskModal({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">プロジェクト</label>
               <select value={projectName} onChange={(e) => setProjectName(e.target.value)}
@@ -133,7 +133,7 @@ export default function CreateTaskModal({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">カテゴリ</label>
               <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}

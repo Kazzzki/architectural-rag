@@ -36,7 +36,7 @@ export default function TaskCard({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`bg-white rounded-md px-4 py-3 border border-gray-100 cursor-pointer
+      className={`bg-white rounded-md px-3 py-2.5 sm:px-4 sm:py-3 border border-gray-100 cursor-pointer
         hover:border-gray-300 transition-colors select-none
         ${isDragging && !overlay ? 'opacity-30' : ''}
         ${overlay ? 'shadow-lg rotate-1 border-gray-300' : ''}
@@ -45,7 +45,7 @@ export default function TaskCard({
       <div className="flex items-start gap-2 mb-2">
         <button
           onClick={(e) => { e.stopPropagation(); onToggleDone?.(); }}
-          className={`mt-0.5 w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${
+          className={`mt-0.5 w-6 h-6 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${
             task.status === 'done' ? 'bg-gray-900 border-gray-900 text-white' : 'border-gray-300 hover:border-gray-500'
           }`}
         >
