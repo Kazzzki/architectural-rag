@@ -190,27 +190,39 @@ async def receive_chunk(
         logger.error(f"Gemini transcribe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"文字起こしエラー: {str(e)}")
 
-    # DB 保存
+    # DB 保存（リトライ時の重複防止: 既存チャンクがあれば更新）
     now = _now_iso()
-    result = db.execute(text("""
-        INSERT INTO meeting_chunks (session_id, chunk_index, transcript, start_offset_sec, created_at)
-        VALUES (:session_id, :chunk_index, :transcript, :start_offset_sec, :created_at)
-    """), {
-        "session_id": session_id,
-        "chunk_index": chunk_index,
-        "transcript": transcript,
-        "start_offset_sec": start_offset_sec,
-        "created_at": now,
-    })
+    existing = db.execute(text("""
+        SELECT id FROM meeting_chunks WHERE session_id = :sid AND chunk_index = :idx
+    """), {"sid": session_id, "idx": chunk_index}).fetchone()
+
+    if existing:
+        chunk_id = dict(existing._mapping)["id"]
+        db.execute(text("""
+            UPDATE meeting_chunks SET transcript = :transcript, start_offset_sec = :start_offset_sec
+            WHERE id = :id
+        """), {"transcript": transcript, "start_offset_sec": start_offset_sec, "id": chunk_id})
+    else:
+        result = db.execute(text("""
+            INSERT INTO meeting_chunks (session_id, chunk_index, transcript, start_offset_sec, created_at)
+            VALUES (:session_id, :chunk_index, :transcript, :start_offset_sec, :created_at)
+        """), {
+            "session_id": session_id,
+            "chunk_index": chunk_index,
+            "transcript": transcript,
+            "start_offset_sec": start_offset_sec,
+            "created_at": now,
+        })
     # セッションの updated_at を更新
     db.execute(text(
         "UPDATE meeting_sessions SET updated_at = :now WHERE id = :id"
     ), {"now": now, "id": session_id})
     db.commit()
 
+    row_id = chunk_id if existing else result.lastrowid
     chunk_row = db.execute(
         text("SELECT * FROM meeting_chunks WHERE id = :id"),
-        {"id": result.lastrowid}
+        {"id": row_id}
     ).fetchone()
     return {**_row_to_dict(chunk_row), "transcript": transcript}
 
@@ -637,6 +649,44 @@ def stream_audio(session_id: int, db=Depends(get_db)):
     )
 
 
+MAX_AUDIO_SIZE = 100 * 1024 * 1024  # 100MB
+
+
+@router.post("/api/meetings/{session_id}/upload-audio", status_code=200)
+async def upload_audio(
+    session_id: int,
+    file: UploadFile = File(...),
+    db=Depends(get_db),
+) -> Dict[str, Any]:
+    """録音した音声ファイルをアップロードして保存"""
+    session = db.execute(
+        text("SELECT id FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議セッションが見つかりません")
+
+    audio_bytes = await file.read()
+    if len(audio_bytes) > MAX_AUDIO_SIZE:
+        raise HTTPException(status_code=413, detail="音声ファイルが100MBを超えています")
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="音声データが空です")
+
+    audio_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "audio")
+    os.makedirs(audio_dir, exist_ok=True)
+    audio_path = os.path.join(audio_dir, f"{session_id}.webm")
+
+    with open(audio_path, "wb") as f:
+        f.write(audio_bytes)
+
+    db.execute(text(
+        "UPDATE meeting_sessions SET audio_file_path = :path, updated_at = :now WHERE id = :id"
+    ), {"path": audio_path, "now": _now_iso(), "id": session_id})
+    db.commit()
+
+    return {"session_id": session_id, "audio_file_path": audio_path, "size_bytes": len(audio_bytes)}
+
+
 # ===== P5: シリーズ名一覧 =====
 
 @router.get("/api/meetings/series")
@@ -806,11 +856,72 @@ def export_meeting(session_id: int, db=Depends(get_db)):
                 lines.append(f"> メモ: {c['note']}")
                 lines.append("")
 
+    # ライブメモ
+    live_notes = db.execute(text("""
+        SELECT timestamp_sec, content, note_type FROM meeting_live_notes
+        WHERE session_id = :sid
+        ORDER BY timestamp_sec ASC, id ASC
+    """), {"sid": session_id}).fetchall()
+    if live_notes:
+        note_type_labels = {"decision": "決定", "action": "アクション", "risk": "リスク", "memo": "メモ"}
+        lines.append("## ライブメモ")
+        lines.append("")
+        for row in live_notes:
+            n = _row_to_dict(row)
+            ts = _format_offset(n.get("timestamp_sec"))
+            nt = n.get("note_type", "memo")
+            label = note_type_labels.get(nt, "メモ")
+            prefix = f"[{ts}]" if ts else ""
+            if nt != "memo":
+                lines.append(f"- {prefix} **{label}** {n['content']}")
+            else:
+                lines.append(f"- {prefix} {n['content']}")
+        lines.append("")
+
+    # サマリーを先頭に（Notion貼り付け時にまず概要が見える）
     if s.get("summary"):
         lines.append("## AI サマリー")
         lines.append("")
         lines.append(s["summary"])
         lines.append("")
+
+    # ライブメモを分類して出力（決定/アクション/リスク/メモ）
+    if live_notes:
+        categorized: Dict[str, list] = {"decision": [], "action": [], "risk": [], "memo": []}
+        for row in live_notes:
+            n = _row_to_dict(row)
+            ts = _format_offset(n.get("timestamp_sec"))
+            prefix = f"[{ts}] " if ts else ""
+            nt = n.get("note_type", "memo")
+            categorized.setdefault(nt, []).append(f"{prefix}{n['content']}")
+
+        if categorized.get("decision"):
+            lines.append("## 決定事項")
+            lines.append("")
+            for item in categorized["decision"]:
+                lines.append(f"- {item}")
+            lines.append("")
+
+        if categorized.get("action"):
+            lines.append("## アクションアイテム")
+            lines.append("")
+            for item in categorized["action"]:
+                lines.append(f"- [ ] {item}")
+            lines.append("")
+
+        if categorized.get("risk"):
+            lines.append("## リスク・懸念")
+            lines.append("")
+            for item in categorized["risk"]:
+                lines.append(f"- ⚠ {item}")
+            lines.append("")
+
+        if categorized.get("memo"):
+            lines.append("## メモ")
+            lines.append("")
+            for item in categorized["memo"]:
+                lines.append(f"- {item}")
+            lines.append("")
 
     md = "\n".join(lines)
     filename = f"{s.get('title', 'meeting')}_{session_id}.md"
@@ -819,3 +930,33 @@ def export_meeting(session_id: int, db=Depends(get_db)):
         media_type="text/markdown",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ===== 過去決定事項 =====
+
+@router.get("/api/meetings/decisions")
+def get_past_decisions(
+    project_name: Optional[str] = None,
+    limit: int = 50,
+    db=Depends(get_db),
+) -> List[Dict[str, Any]]:
+    """プロジェクト横断の過去決定事項一覧"""
+    where = ["n.note_type = 'decision'"]
+    params: Dict[str, Any] = {"limit": limit}
+    if project_name:
+        where.append("s.project_name = :project_name")
+        params["project_name"] = project_name
+    rows = db.execute(
+        text(f"""
+            SELECT n.id, n.content, n.timestamp_sec, n.created_at,
+                   s.id AS session_id, s.title AS meeting_title,
+                   s.project_name, s.created_at AS meeting_date
+            FROM meeting_live_notes n
+            JOIN meeting_sessions s ON n.session_id = s.id
+            WHERE {' AND '.join(where)}
+            ORDER BY n.created_at DESC
+            LIMIT :limit
+        """),
+        params,
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]

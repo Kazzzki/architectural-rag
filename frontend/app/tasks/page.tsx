@@ -8,7 +8,7 @@ import {
 } from '@dnd-kit/core';
 import {
   Plus, X, Send, Clock, Calendar, CheckSquare, Loader2, Bot,
-  LayoutGrid, GitBranch, List, Sun, FileText, ClipboardList,
+  LayoutGrid, GitBranch, List, Sun, FileText, ClipboardList, ArrowLeft,
 } from 'lucide-react';
 
 import type { Task, Category, Label, Milestone, ChatMessage } from './types';
@@ -256,6 +256,9 @@ function TasksPageInner() {
       <header className="bg-white border-b border-gray-200 px-3 md:px-6 py-2 md:py-3 flex-shrink-0">
         <div className="max-w-7xl mx-auto space-y-1 md:space-y-2">
           <div className="flex items-center gap-3">
+            <button onClick={() => router.back()} className="p-1.5 rounded-full hover:bg-gray-100 text-gray-500 shrink-0" aria-label="戻る">
+              <ArrowLeft className="w-4 h-4" />
+            </button>
             <CheckSquare className="w-5 h-5 text-gray-900 shrink-0" />
             <h1 className="text-lg font-bold text-gray-900 shrink-0">タスク管理</h1>
             <div className="hidden md:flex flex-wrap gap-3 text-xs text-gray-500 ml-1">

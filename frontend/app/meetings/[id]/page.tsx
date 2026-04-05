@@ -4,8 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Clock, Users, RefreshCw, Loader2,
-  Pencil, Save, X, ClipboardList, ListChecks, CheckCircle2,
-  FolderOpen,
+  Pencil, Save, X, ListChecks, CheckCircle2,
+  FolderOpen, ClipboardCopy, Check,
 } from 'lucide-react';
 import { authFetch } from '@/lib/api';
 import { MeetingDetail, apiFetch, formatDate } from '../utils';
@@ -27,12 +27,13 @@ export default function MeetingDetailPage() {
   const [editing, setEditing] = useState(false);
   const [editSummary, setEditSummary] = useState('');
   const [editTitle, setEditTitle] = useState('');
-  const [extractingLinks, setExtractingLinks] = useState(false);
-  const [extractedLinks, setExtractedLinks] = useState<any[]>([]);
   const [extractingTasks, setExtractingTasks] = useState(false);
   const [createdTasks, setCreatedTasks] = useState<any[]>([]);
   const [audioSeekSec, setAudioSeekSec] = useState<number | undefined>(undefined);
   const [audioCurrentSec, setAudioCurrentSec] = useState(0);
+  const [exported, setExported] = useState(false);
+  const [pastDecisions, setPastDecisions] = useState<any[]>([]);
+  const [showDecisions, setShowDecisions] = useState(false);
 
   const fetchMeeting = useCallback(async () => {
     try {
@@ -85,22 +86,6 @@ export default function MeetingDetailPage() {
     }
   };
 
-  // BUG-4 fix: /extract-issues -> /extract-links
-  const handleExtractLinks = async () => {
-    setExtractingLinks(true);
-    try {
-      const data = await apiFetch(`/api/meetings/${meetingId}/extract-links`, {
-        method: 'POST',
-        signal: AbortSignal.timeout(60000),
-      });
-      setExtractedLinks(data?.links || []);
-    } catch (e) {
-      console.error('Failed to extract links:', e);
-    } finally {
-      setExtractingLinks(false);
-    }
-  };
-
   // BUG-5 fix: /api/tasks/extract-from-meeting -> /api/meetings/{id}/create-tasks
   const handleExtractTasks = async () => {
     setExtractingTasks(true);
@@ -114,6 +99,36 @@ export default function MeetingDetailPage() {
       console.error('Failed to extract tasks:', e);
     } finally {
       setExtractingTasks(false);
+    }
+  };
+
+  const handleExportToClipboard = async () => {
+    try {
+      const res = await authFetch(`/api/meetings/${meetingId}/export`);
+      if (res.ok) {
+        const md = await res.text();
+        await navigator.clipboard.writeText(md);
+        setExported(true);
+        setTimeout(() => setExported(false), 3000);
+      }
+    } catch (e) {
+      console.error('Export failed:', e);
+    }
+  };
+
+  const handleShowDecisions = async () => {
+    if (showDecisions) { setShowDecisions(false); return; }
+    try {
+      const pn = meeting?.project_name;
+      const url = pn ? `/api/meetings/decisions?project_name=${encodeURIComponent(pn)}` : '/api/meetings/decisions';
+      const res = await authFetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setPastDecisions(data);
+        setShowDecisions(true);
+      }
+    } catch (e) {
+      console.error('Failed to fetch decisions:', e);
     }
   };
 
@@ -194,9 +209,21 @@ export default function MeetingDetailPage() {
               </button>
             )}
             <button
+              onClick={handleExportToClipboard}
+              className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-full hover:bg-gray-200"
+            >
+              {exported ? <><Check className="w-4 h-4 text-green-600" /> コピー済み</> : <><ClipboardCopy className="w-4 h-4" /> Notionへ</>}
+            </button>
+            <button
+              onClick={handleShowDecisions}
+              className={`flex items-center gap-1 px-3 py-1.5 text-sm rounded-full ${showDecisions ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+            >
+              <CheckCircle2 className="w-4 h-4" /> 過去決定
+            </button>
+            <button
               onClick={handleRegenerate}
               disabled={regenerating}
-              className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 disabled:opacity-50"
+              className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-full hover:bg-gray-200 disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${regenerating ? 'animate-spin' : ''}`} /> 再生成
             </button>
@@ -210,6 +237,29 @@ export default function MeetingDetailPage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
+        {/* Past Decisions Panel */}
+        {showDecisions && (
+          <div className="mb-6 bg-white border border-gray-200 rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-green-600" />
+              過去の決定事項 {meeting.project_name && <span className="text-xs text-gray-400">({meeting.project_name})</span>}
+            </h3>
+            {pastDecisions.length === 0 ? (
+              <p className="text-sm text-gray-400">過去の決定事項はありません</p>
+            ) : (
+              <ul className="space-y-2 max-h-48 overflow-y-auto">
+                {pastDecisions.map((d: any) => (
+                  <li key={d.id} className="flex items-start gap-2 text-sm">
+                    <span className="text-xs text-gray-400 font-mono shrink-0 mt-0.5">{d.meeting_date?.slice(0, 10)}</span>
+                    <span className="text-gray-700">{d.content}</span>
+                    <span className="text-xs text-gray-400 shrink-0">({d.meeting_title})</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {/* Audio Player */}
         <div className="mb-6">
           <MeetingAudioPlayer
@@ -283,44 +333,6 @@ export default function MeetingDetailPage() {
                 <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{meeting.notes}</p>
               </Section>
             )}
-
-            {/* Extract Links */}
-            <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                  <ClipboardList className="w-4 h-4 text-indigo-600" />
-                  エンティティリンク抽出
-                </h3>
-                <button
-                  onClick={handleExtractLinks}
-                  disabled={extractingLinks}
-                  className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1"
-                >
-                  {extractingLinks ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                  リンクを抽出
-                </button>
-              </div>
-              {extractedLinks.length > 0 && (
-                <div className="space-y-2">
-                  {extractedLinks.map((link: any, i: number) => (
-                    <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-gray-50">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-gray-800 truncate">
-                          [{link.entity_type}] {link.entity_id}
-                        </p>
-                        <p className="text-xs text-gray-400">
-                          {link.mention_text}
-                          {link.confidence != null && ` (確信度: ${(link.confidence * 100).toFixed(0)}%)`}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {extractedLinks.length === 0 && !extractingLinks && (
-                <p className="text-xs text-gray-400">「リンクを抽出」ボタンで議事録からイシュー・過去会議への言及を検出します</p>
-              )}
-            </div>
 
             {/* Extract Tasks */}
             <div className="bg-white rounded-xl border border-gray-200 p-5">

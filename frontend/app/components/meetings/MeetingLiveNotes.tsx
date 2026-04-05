@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pencil, Trash2, X, Check, MessageSquare, CheckCircle2, Target, AlertTriangle } from 'lucide-react';
+import { Pencil, Trash2, X, Check, MessageSquare, CheckCircle2, Target, AlertTriangle, CircleDot, ListTodo } from 'lucide-react';
 import { authFetch } from '@/lib/api';
 
 interface LiveNote {
@@ -16,6 +16,7 @@ interface LiveNote {
 interface Props {
   sessionId: number;
   elapsedSec: number;
+  projectName?: string;
   /** 新しいノートが追加されたとき */
   onNoteAdded?: () => void;
 }
@@ -42,7 +43,43 @@ function parsePrefix(input: string): { noteType: string; content: string } {
   return { noteType: 'memo', content: input };
 }
 
-export default function MeetingLiveNotes({ sessionId, elapsedSec, onNoteAdded }: Props) {
+export default function MeetingLiveNotes({ sessionId, elapsedSec, projectName, onNoteAdded }: Props) {
+  const [convertedNotes, setConvertedNotes] = useState<Record<number, string>>({}); // noteId -> "issue:12" or "task:5"
+
+  const handleConvertToIssue = async (note: LiveNote) => {
+    try {
+      const res = await authFetch('/api/issues', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: note.content, project_name: projectName || undefined }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${data.id}` }));
+      }
+    } catch (e) { console.error('Failed to create issue:', e); }
+  };
+
+  const handleConvertToTask = async (note: LiveNote) => {
+    try {
+      const res = await authFetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: note.content,
+          source_meeting_id: sessionId,
+          source_type: 'meeting',
+          project_name: projectName || undefined,
+          priority: note.note_type === 'risk' ? 'high' : 'medium',
+          status: 'todo',
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConvertedNotes(prev => ({ ...prev, [note.id]: `task:${data.id}` }));
+      }
+    } catch (e) { console.error('Failed to create task:', e); }
+  };
   const [notes, setNotes] = useState<LiveNote[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -175,7 +212,7 @@ export default function MeetingLiveNotes({ sessionId, elapsedSec, onNoteAdded }:
       <div
         ref={listRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto max-h-64 p-4 space-y-2"
+        className="flex-1 overflow-y-auto p-4 space-y-2"
       >
         {notes.length === 0 ? (
           <div className="text-center py-8">
@@ -225,6 +262,28 @@ export default function MeetingLiveNotes({ sessionId, elapsedSec, onNoteAdded }:
                 </div>
                 {!isEditing && (
                   <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                    {convertedNotes[note.id] ? (
+                      <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">
+                        {convertedNotes[note.id].startsWith('issue:') ? `課題 #${convertedNotes[note.id].split(':')[1]}` : `タスク #${convertedNotes[note.id].split(':')[1]}`}
+                      </span>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => handleConvertToIssue(note)}
+                          title="課題に登録"
+                          className="p-1 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded"
+                        >
+                          <CircleDot className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => handleConvertToTask(note)}
+                          title="タスクに登録"
+                          className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
+                        >
+                          <ListTodo className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
                     <button
                       onClick={() => { setEditingId(note.id); setEditContent(note.content); }}
                       className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
