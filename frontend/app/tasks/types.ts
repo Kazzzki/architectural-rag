@@ -36,6 +36,16 @@ export interface Milestone {
   sort_order: number;
 }
 
+export interface TaskDependency {
+  id: number;
+  predecessor_id: number;
+  successor_id: number;
+  dep_type: string;
+  lag_days: number;
+  task_title?: string;
+  task_status?: string;
+}
+
 export interface Task {
   id: number;
   title: string;

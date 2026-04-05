@@ -99,13 +99,14 @@ function TasksPageInner() {
   // Data fetch
   const fetchTasks = useCallback(async () => {
     const filters: Record<string, string> = {};
+    if (filterProject) filters.project_name = filterProject;
     if (filterCategory) filters.category_id = filterCategory;
     if (filterPriority) filters.priority = filterPriority;
     if (filterAssignee) filters.assignee_name = filterAssignee;
     if (filterLabel) filters.label_id = filterLabel;
     const data = await api.getTasks(filters);
     setTasks(data ?? []);
-  }, [filterCategory, filterPriority, filterAssignee, filterLabel]);
+  }, [filterProject, filterCategory, filterPriority, filterAssignee, filterLabel]);
 
   useEffect(() => {
     const init = async () => {

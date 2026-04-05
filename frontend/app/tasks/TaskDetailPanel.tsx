@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Trash2, Bell, MessageSquare, Send, Loader2, Plus, CheckSquare, Repeat } from 'lucide-react';
-import type { Task, Category, Label, Milestone, Comment, Reminder } from './types';
+import { X, Trash2, Bell, MessageSquare, Send, Loader2, Plus, CheckSquare, Repeat, Link2 } from 'lucide-react';
+import type { Task, Category, Label, Milestone, Comment, Reminder, TaskDependency } from './types';
 import { api } from './taskApi';
 
 export default function TaskDetailPanel({
@@ -50,16 +50,21 @@ export default function TaskDetailPanel({
   const [addingSubtask, setAddingSubtask] = useState(false);
   const [recurrenceType, setRecurrenceType] = useState('');
   const [savingRecurrence, setSavingRecurrence] = useState(false);
+  const [dependencies, setDependencies] = useState<{ predecessors: TaskDependency[]; successors: TaskDependency[] }>({ predecessors: [], successors: [] });
+  const [newDepTaskId, setNewDepTaskId] = useState('');
+  const [addingDep, setAddingDep] = useState(false);
 
   const loadTask = useCallback(async () => {
     setLoading(true);
     try {
-      const [t, subs] = await Promise.all([
+      const [t, subs, deps] = await Promise.all([
         api.getTask(taskId),
         api.getSubtasks(taskId).catch(() => []),
+        api.getDependencies(taskId).catch(() => ({ predecessors: [], successors: [] })),
       ]);
       setTask(t);
       setSubtasks(subs ?? []);
+      setDependencies(deps);
       setEditTitle(t.title);
       setEditDesc(t.description ?? '');
       setEditStatus(t.status);
@@ -86,17 +91,17 @@ export default function TaskDetailPanel({
     try {
       const updated: Task = await api.updateTask(task.id, {
         title: editTitle,
-        description: editDesc || undefined,
+        description: editDesc || null,
         status: editStatus,
         priority: editPriority,
-        category_id: editCategory ? parseInt(editCategory) : undefined,
-        due_date: editDueDate || undefined,
-        estimated_minutes: editEstimated ? parseInt(editEstimated) : undefined,
-        actual_minutes: editActual ? parseInt(editActual) : undefined,
-        project_name: editProject || undefined,
-        assignee_name: editAssignee || undefined,
-        milestone_id: editMilestone ? parseInt(editMilestone) : undefined,
-      });
+        category_id: editCategory ? parseInt(editCategory) : null,
+        due_date: editDueDate || null,
+        estimated_minutes: editEstimated ? parseInt(editEstimated) : null,
+        actual_minutes: editActual ? parseInt(editActual) : null,
+        project_name: editProject || null,
+        assignee_name: editAssignee || null,
+        milestone_id: editMilestone ? parseInt(editMilestone) : null,
+      } as Partial<Task>);
       onUpdate(updated);
       // Preserve comments/reminders from local state (not in update response)
       setTask((prev) => ({ ...updated, comments: prev?.comments ?? [], reminders: prev?.reminders ?? [] }));
@@ -152,6 +157,34 @@ export default function TaskDetailPanel({
     const newStatus = sub.status === 'done' ? 'todo' : 'done';
     setSubtasks((prev) => prev.map((s) => s.id === sub.id ? { ...s, status: newStatus as Task['status'] } : s));
     await api.updateTask(sub.id, { status: newStatus });
+  };
+
+  const handleAddDependency = async () => {
+    if (!task || !newDepTaskId.trim()) return;
+    setAddingDep(true);
+    try {
+      await api.addDependency(task.id, { successor_id: parseInt(newDepTaskId) });
+      const deps = await api.getDependencies(task.id);
+      setDependencies(deps);
+      setNewDepTaskId('');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'エラー');
+    } finally {
+      setAddingDep(false);
+    }
+  };
+
+  const handleRemoveDependency = async (depId: number) => {
+    if (!task) return;
+    try {
+      await api.removeDependency(task.id, depId);
+      setDependencies((prev) => ({
+        predecessors: prev.predecessors.filter((d) => d.id !== depId),
+        successors: prev.successors.filter((d) => d.id !== depId),
+      }));
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleDelete = async () => {
@@ -366,6 +399,54 @@ export default function TaskDetailPanel({
                   className="flex-1 px-2 py-1.5 rounded-lg border border-gray-200 text-sm"
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); handleAddSubtask(); } }} />
                 <button onClick={handleAddSubtask} disabled={!newSubtaskTitle.trim() || addingSubtask}
+                  className="px-2 py-1.5 rounded-md bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50">
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Dependencies */}
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <Link2 className="w-4 h-4 text-gray-500" />
+                <span className="text-sm font-medium text-gray-700">依存関係</span>
+              </div>
+              {dependencies.predecessors.length > 0 && (
+                <div className="mb-2">
+                  <div className="text-xs text-gray-400 mb-1">先行タスク（これが終わらないと開始できない）</div>
+                  <ul className="space-y-1">
+                    {dependencies.predecessors.map((d) => (
+                      <li key={d.id} className="flex items-center justify-between text-xs bg-gray-50 rounded-md px-3 py-1.5">
+                        <span className="text-gray-700">#{d.predecessor_id} {d.task_title}</span>
+                        <button onClick={() => handleRemoveDependency(d.id)} className="text-gray-400 hover:text-red-500">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {dependencies.successors.length > 0 && (
+                <div className="mb-2">
+                  <div className="text-xs text-gray-400 mb-1">後続タスク（このタスクの完了を待っている）</div>
+                  <ul className="space-y-1">
+                    {dependencies.successors.map((d) => (
+                      <li key={d.id} className="flex items-center justify-between text-xs bg-gray-50 rounded-md px-3 py-1.5">
+                        <span className="text-gray-700">#{d.successor_id} {d.task_title}</span>
+                        <button onClick={() => handleRemoveDependency(d.id)} className="text-gray-400 hover:text-red-500">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <input type="number" value={newDepTaskId} onChange={(e) => setNewDepTaskId(e.target.value)}
+                  placeholder="後続タスクID..."
+                  className="flex-1 px-2 py-1.5 rounded-lg border border-gray-200 text-sm"
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddDependency(); } }} />
+                <button onClick={handleAddDependency} disabled={!newDepTaskId.trim() || addingDep}
                   className="px-2 py-1.5 rounded-md bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50">
                   <Plus className="w-4 h-4" />
                 </button>

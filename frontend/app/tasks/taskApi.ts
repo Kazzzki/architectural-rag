@@ -1,5 +1,5 @@
 import { authFetch } from '@/lib/api';
-import type { Task, Label, Milestone } from './types';
+import type { Task, Label, Milestone, TaskDependency } from './types';
 
 export async function apiFetch(path: string, opts?: RequestInit) {
   const res = await authFetch(path, {
@@ -94,6 +94,14 @@ export const api = {
     apiFetch(`/api/tasks/${taskId}/recurrence`, { method: 'POST', body: JSON.stringify(data) }),
   deleteRecurrence: (taskId: number) =>
     apiFetch(`/api/tasks/${taskId}/recurrence`, { method: 'DELETE' }),
+
+  // Dependencies
+  getDependencies: (taskId: number) =>
+    apiFetch(`/api/tasks/${taskId}/dependencies`) as Promise<{ predecessors: TaskDependency[]; successors: TaskDependency[] }>,
+  addDependency: (taskId: number, data: { successor_id: number; dep_type?: string; lag_days?: number }) =>
+    apiFetch(`/api/tasks/${taskId}/dependencies`, { method: 'POST', body: JSON.stringify(data) }),
+  removeDependency: (taskId: number, depId: number) =>
+    apiFetch(`/api/tasks/${taskId}/dependencies/${depId}`, { method: 'DELETE' }),
 
   // Meetings (for extraction)
   getMeetings: () => apiFetch('/api/meetings'),

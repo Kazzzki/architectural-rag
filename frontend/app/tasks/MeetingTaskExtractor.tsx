@@ -64,8 +64,9 @@ export default function MeetingTaskExtractor({
     const selected = extractedTasks.filter((_, i) => checked.has(i));
     if (selected.length === 0) return;
     setCreating(true);
+    const meetingId = parseInt(selectedMeeting);
     try {
-      await api.bulkCreate(selected);
+      await api.bulkCreate(selected.map((t) => ({ ...t, source_meeting_id: meetingId, source_type: 'meeting' } as Partial<Task>)));
       onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : '作成に失敗しました');

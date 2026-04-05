@@ -32,6 +32,36 @@ router = APIRouter(tags=["Tasks"])
 
 # ===== ヘルパー =====
 
+# 共通: タスク詳細SELECT（ラベル・マイルストーン・リマインダー情報含む）
+_TASK_DETAIL_SELECT = """
+    SELECT t.*, c.name AS category_name, c.color AS category_color,
+        m.name AS milestone_name,
+        (SELECT GROUP_CONCAT(tl.name, ',') FROM task_label_map tlm
+         JOIN task_labels tl ON tlm.label_id = tl.id
+         WHERE tlm.task_id = t.id) AS label_names,
+        (SELECT GROUP_CONCAT(tl.color, ',') FROM task_label_map tlm
+         JOIN task_labels tl ON tlm.label_id = tl.id
+         WHERE tlm.task_id = t.id) AS label_colors,
+        (SELECT GROUP_CONCAT(CAST(tl.id AS TEXT), ',') FROM task_label_map tlm
+         JOIN task_labels tl ON tlm.label_id = tl.id
+         WHERE tlm.task_id = t.id) AS label_ids,
+        CASE WHEN EXISTS (
+            SELECT 1 FROM task_reminders r
+            WHERE r.task_id = t.id AND r.is_sent = 0
+              AND r.remind_at >= :day_start AND r.remind_at < :day_end
+        ) THEN 1 ELSE 0 END AS has_today_reminder
+    FROM tasks t
+    LEFT JOIN task_categories c ON t.category_id = c.id
+    LEFT JOIN task_milestones m ON t.milestone_id = m.id
+"""
+
+
+def _today_params() -> Dict[str, str]:
+    """has_today_reminder 用の日付パラメータを返す"""
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return {"day_start": f"{today_str}T00:00:00+00:00", "day_end": f"{today_str}T23:59:59+00:00"}
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -105,6 +135,8 @@ class TaskCreate(BaseModel):
     parent_id: Optional[int] = None
     milestone_id: Optional[int] = None
     start_date: Optional[str] = None
+    source_meeting_id: Optional[int] = None
+    source_type: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
@@ -261,6 +293,7 @@ def create_category(req: CategoryCreate, db=Depends(get_db)) -> Dict[str, Any]:
 def get_pending_reminders(db=Depends(get_db)) -> List[Dict[str, Any]]:
     """未送信リマインダーを取得し、同時に is_sent=1 にマーク"""
     now = _now_iso()
+    # SELECT と UPDATE を同一トランザクション内で実行（SQLiteはシリアライズされるため安全）
     rows = db.execute(
         text("""
             SELECT r.*, t.title AS task_title
@@ -272,11 +305,13 @@ def get_pending_reminders(db=Depends(get_db)) -> List[Dict[str, Any]]:
     ).fetchall()
     result = [_row_to_dict(r) for r in rows]
     if result:
-        for item in result:
-            db.execute(
-                text("UPDATE task_reminders SET is_sent = 1 WHERE id = :id"),
-                {"id": item["id"]},
-            )
+        ids = [item["id"] for item in result]
+        id_params = {f"id_{i}": rid for i, rid in enumerate(ids)}
+        id_placeholders = ", ".join(f":id_{i}" for i in range(len(ids)))
+        db.execute(
+            text(f"UPDATE task_reminders SET is_sent = 1 WHERE id IN ({id_placeholders})"),
+            id_params,
+        )
         db.commit()
     return result
 
@@ -324,13 +359,13 @@ def task_chat(req: TaskChatRequest, db=Depends(get_db)) -> Dict[str, Any]:
 【アクション選択ルール（以下の3種類から選択）】
 
 1. タスク作成のみ:
-{{"action": "create_task", "title": "タスクタイトル", "description": "説明（省略可、なければnull）", "priority": "low|medium|high", "category_id": null, "due_date": "YYYY-MM-DD または null", "estimated_minutes": null}}
+{{"action": "create_task", "title": "タスクタイトル", "description": "説明（省略可、なければnull）", "priority": "low|medium|high", "category_id": null, "due_date": "YYYY-MM-DD または null", "estimated_minutes": null, "project_name": "プロジェクト名（言及があればセット、なければnull）", "assignee_name": "担当者名（言及があればセット、なければnull）"}}
 
 2. リマインダー設定のみ（既存タスクへ）:
 {{"action": "create_reminder", "task_title": "対象タスクのタイトル", "remind_at": "YYYY-MM-DDTHH:MM:SS+00:00", "message": "リマインダーメッセージ"}}
 
 3. タスク作成＋リマインダー設定（「〇〇して、△時にリマインドして」など両方の意図がある場合）:
-{{"action": "create_task_with_reminder", "title": "タスクタイトル", "description": null, "priority": "medium", "category_id": null, "due_date": "YYYY-MM-DD または null", "estimated_minutes": null, "remind_at": "YYYY-MM-DDTHH:MM:SS+00:00", "message": "リマインダーメッセージ"}}
+{{"action": "create_task_with_reminder", "title": "タスクタイトル", "description": null, "priority": "medium", "category_id": null, "due_date": "YYYY-MM-DD または null", "estimated_minutes": null, "project_name": null, "assignee_name": null, "remind_at": "YYYY-MM-DDTHH:MM:SS+00:00", "message": "リマインダーメッセージ"}}
 
 判断が難しい場合はタスク作成（action: "create_task"）を選択してください。JSONのみ返してください。"""
 
@@ -357,8 +392,10 @@ def task_chat(req: TaskChatRequest, db=Depends(get_db)) -> Dict[str, Any]:
     if action == "create_task":
         result = db.execute(
             text("""
-                INSERT INTO tasks (title, description, status, priority, category_id, due_date, estimated_minutes, created_at, updated_at)
-                VALUES (:title, :description, 'todo', :priority, :category_id, :due_date, :estimated_minutes, :created_at, :updated_at)
+                INSERT INTO tasks (title, description, status, priority, category_id, due_date,
+                                   estimated_minutes, project_name, assignee_name, created_at, updated_at)
+                VALUES (:title, :description, 'todo', :priority, :category_id, :due_date,
+                        :estimated_minutes, :project_name, :assignee_name, :created_at, :updated_at)
             """),
             {
                 "title": parsed.get("title", req.message[:50]),
@@ -367,18 +404,16 @@ def task_chat(req: TaskChatRequest, db=Depends(get_db)) -> Dict[str, Any]:
                 "category_id": parsed.get("category_id"),
                 "due_date": parsed.get("due_date"),
                 "estimated_minutes": parsed.get("estimated_minutes"),
+                "project_name": parsed.get("project_name"),
+                "assignee_name": parsed.get("assignee_name"),
                 "created_at": now_iso,
                 "updated_at": now_iso,
             },
         )
         db.commit()
         task_row = db.execute(
-            text("""
-                SELECT t.*, c.name AS category_name, c.color AS category_color
-                FROM tasks t LEFT JOIN task_categories c ON t.category_id = c.id
-                WHERE t.id = :id
-            """),
-            {"id": result.lastrowid},
+            text(_TASK_DETAIL_SELECT + " WHERE t.id = :id"),
+            {"id": result.lastrowid, **_today_params()},
         ).fetchone()
         title = parsed.get("title", "")
         return {"action": "create_task", "task": _row_to_dict(task_row), "message": f"タスク「{title}」を作成しました"}
@@ -386,8 +421,10 @@ def task_chat(req: TaskChatRequest, db=Depends(get_db)) -> Dict[str, Any]:
     elif action == "create_task_with_reminder":
         task_result = db.execute(
             text("""
-                INSERT INTO tasks (title, description, status, priority, category_id, due_date, estimated_minutes, created_at, updated_at)
-                VALUES (:title, :description, 'todo', :priority, :category_id, :due_date, :estimated_minutes, :created_at, :updated_at)
+                INSERT INTO tasks (title, description, status, priority, category_id, due_date,
+                                   estimated_minutes, project_name, assignee_name, created_at, updated_at)
+                VALUES (:title, :description, 'todo', :priority, :category_id, :due_date,
+                        :estimated_minutes, :project_name, :assignee_name, :created_at, :updated_at)
             """),
             {
                 "title": parsed.get("title", req.message[:50]),
@@ -396,6 +433,8 @@ def task_chat(req: TaskChatRequest, db=Depends(get_db)) -> Dict[str, Any]:
                 "category_id": parsed.get("category_id"),
                 "due_date": parsed.get("due_date"),
                 "estimated_minutes": parsed.get("estimated_minutes"),
+                "project_name": parsed.get("project_name"),
+                "assignee_name": parsed.get("assignee_name"),
                 "created_at": now_iso,
                 "updated_at": now_iso,
             },
@@ -607,6 +646,16 @@ def bulk_update_tasks(req: BulkUpdateRequest, db=Depends(get_db)) -> Dict[str, A
     params = {**updates, **id_params}
     db.execute(text(f"UPDATE tasks SET {set_clause} WHERE id IN ({id_placeholders})"), params)
     db.commit()
+
+    # status 変更時は親タスクの progress を再計算
+    if req.status is not None:
+        parent_rows = db.execute(
+            text(f"SELECT DISTINCT parent_id FROM tasks WHERE id IN ({id_placeholders}) AND parent_id IS NOT NULL"),
+            id_params,
+        ).fetchall()
+        for pr in parent_rows:
+            _recalc_progress(pr[0], db)
+
     return {"updated": len(req.task_ids)}
 
 
@@ -622,10 +671,12 @@ def bulk_create_tasks(req: BulkCreateRequest, db=Depends(get_db)) -> List[Dict[s
                 INSERT INTO tasks (title, description, status, priority, category_id, due_date,
                                    estimated_minutes, actual_minutes, project_name,
                                    assignee_id, assignee_name, parent_id, milestone_id, start_date,
+                                   source_meeting_id, source_type,
                                    created_at, updated_at)
                 VALUES (:title, :description, :status, :priority, :category_id, :due_date,
                         :estimated_minutes, :actual_minutes, :project_name,
                         :assignee_id, :assignee_name, :parent_id, :milestone_id, :start_date,
+                        :source_meeting_id, :source_type,
                         :created_at, :updated_at)
             """),
             {
@@ -635,6 +686,7 @@ def bulk_create_tasks(req: BulkCreateRequest, db=Depends(get_db)) -> List[Dict[s
                 "project_name": t.project_name,
                 "assignee_id": t.assignee_id, "assignee_name": t.assignee_name,
                 "parent_id": t.parent_id, "milestone_id": t.milestone_id, "start_date": t.start_date,
+                "source_meeting_id": t.source_meeting_id, "source_type": t.source_type or "manual",
                 "created_at": now, "updated_at": now,
             },
         )
@@ -644,12 +696,8 @@ def bulk_create_tasks(req: BulkCreateRequest, db=Depends(get_db)) -> List[Dict[s
     id_params = {f"id_{i}": tid for i, tid in enumerate(created)}
     id_placeholders = ", ".join(f":id_{i}" for i in range(len(created)))
     rows = db.execute(
-        text(f"""
-            SELECT t.*, c.name AS category_name, c.color AS category_color
-            FROM tasks t LEFT JOIN task_categories c ON t.category_id = c.id
-            WHERE t.id IN ({id_placeholders})
-        """),
-        id_params,
+        text(_TASK_DETAIL_SELECT + f" WHERE t.id IN ({id_placeholders})"),
+        {**id_params, **_today_params()},
     ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
@@ -981,10 +1029,12 @@ def create_task(req: TaskCreate, db=Depends(get_db)) -> Dict[str, Any]:
             INSERT INTO tasks (title, description, status, priority, category_id, due_date,
                                estimated_minutes, actual_minutes, project_name,
                                assignee_id, assignee_name, parent_id, milestone_id, start_date,
+                               source_meeting_id, source_type,
                                created_at, updated_at)
             VALUES (:title, :description, :status, :priority, :category_id, :due_date,
                     :estimated_minutes, :actual_minutes, :project_name,
                     :assignee_id, :assignee_name, :parent_id, :milestone_id, :start_date,
+                    :source_meeting_id, :source_type,
                     :created_at, :updated_at)
         """),
         {
@@ -1002,6 +1052,8 @@ def create_task(req: TaskCreate, db=Depends(get_db)) -> Dict[str, Any]:
             "parent_id": req.parent_id,
             "milestone_id": req.milestone_id,
             "start_date": req.start_date,
+            "source_meeting_id": req.source_meeting_id,
+            "source_type": req.source_type or "manual",
             "created_at": now,
             "updated_at": now,
         },
@@ -1016,12 +1068,8 @@ def create_task(req: TaskCreate, db=Depends(get_db)) -> Dict[str, Any]:
         _upsert_auto_reminder(result.lastrowid, req.title, req.due_date, db)
         db.commit()
     row = db.execute(
-        text("""
-            SELECT t.*, c.name AS category_name, c.color AS category_color
-            FROM tasks t LEFT JOIN task_categories c ON t.category_id = c.id
-            WHERE t.id = :id
-        """),
-        {"id": result.lastrowid},
+        text(_TASK_DETAIL_SELECT + " WHERE t.id = :id"),
+        {"id": result.lastrowid, **_today_params()},
     ).fetchone()
     return _row_to_dict(row)
 
@@ -1029,12 +1077,8 @@ def create_task(req: TaskCreate, db=Depends(get_db)) -> Dict[str, Any]:
 @router.get("/api/tasks/{task_id}")
 def get_task(task_id: int, db=Depends(get_db)) -> Dict[str, Any]:
     row = db.execute(
-        text("""
-            SELECT t.*, c.name AS category_name, c.color AS category_color
-            FROM tasks t LEFT JOIN task_categories c ON t.category_id = c.id
-            WHERE t.id = :id
-        """),
-        {"id": task_id},
+        text(_TASK_DETAIL_SELECT + " WHERE t.id = :id"),
+        {"id": task_id, **_today_params()},
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="タスクが見つかりません")
@@ -1073,26 +1117,27 @@ def update_task(task_id: int, req: TaskUpdate, db=Depends(get_db)) -> Dict[str, 
         updates["status"] = req.status
     if req.priority is not None:
         updates["priority"] = req.priority
-    if req.category_id is not None:
+    if "category_id" in req.model_fields_set:
         updates["category_id"] = req.category_id
     if "due_date" in req.model_fields_set:
         updates["due_date"] = req.due_date  # None（クリア）も含めてセット
-    if req.estimated_minutes is not None:
+    if "estimated_minutes" in req.model_fields_set:
         updates["estimated_minutes"] = req.estimated_minutes
-    if req.actual_minutes is not None:
+    if "actual_minutes" in req.model_fields_set:
         updates["actual_minutes"] = req.actual_minutes
     if "project_name" in req.model_fields_set:
         updates["project_name"] = req.project_name
-    if req.assignee_id is not None:
+    if "assignee_id" in req.model_fields_set:
         updates["assignee_id"] = req.assignee_id
-    if req.assignee_name is not None:
+    if "assignee_name" in req.model_fields_set:
         updates["assignee_name"] = req.assignee_name
-    if req.parent_id is not None:
-        _check_parent_depth(req.parent_id, db)
+    if "parent_id" in req.model_fields_set:
+        if req.parent_id is not None:
+            _check_parent_depth(req.parent_id, db)
         updates["parent_id"] = req.parent_id
-    if req.milestone_id is not None:
+    if "milestone_id" in req.model_fields_set:
         updates["milestone_id"] = req.milestone_id
-    if req.start_date is not None:
+    if "start_date" in req.model_fields_set:
         updates["start_date"] = req.start_date
 
     if updates:
@@ -1122,14 +1167,25 @@ def update_task(task_id: int, req: TaskUpdate, db=Depends(get_db)) -> Dict[str, 
         db.commit()
 
     row = db.execute(
-        text("""
-            SELECT t.*, c.name AS category_name, c.color AS category_color
-            FROM tasks t LEFT JOIN task_categories c ON t.category_id = c.id
-            WHERE t.id = :id
-        """),
-        {"id": task_id},
+        text(_TASK_DETAIL_SELECT + " WHERE t.id = :id"),
+        {"id": task_id, **_today_params()},
     ).fetchone()
     return _row_to_dict(row)
+
+
+def _delete_task_tree(task_id: int, db) -> None:
+    """再帰的にタスクと全子孫の関連データを削除"""
+    children = db.execute(
+        text("SELECT id FROM tasks WHERE parent_id = :id"), {"id": task_id}
+    ).fetchall()
+    for child in children:
+        _delete_task_tree(child[0], db)
+    db.execute(text("DELETE FROM task_comments WHERE task_id = :id"), {"id": task_id})
+    db.execute(text("DELETE FROM task_reminders WHERE task_id = :id"), {"id": task_id})
+    db.execute(text("DELETE FROM task_label_map WHERE task_id = :id"), {"id": task_id})
+    db.execute(text("DELETE FROM task_recurrence_rules WHERE source_task_id = :id"), {"id": task_id})
+    db.execute(text("DELETE FROM task_dependencies WHERE predecessor_id = :id OR successor_id = :id"), {"id": task_id})
+    db.execute(text("DELETE FROM tasks WHERE id = :id"), {"id": task_id})
 
 
 @router.delete("/api/tasks/{task_id}", status_code=204)
@@ -1139,24 +1195,7 @@ def delete_task(task_id: int, db=Depends(get_db)) -> None:
     ).fetchone()
     if not existing:
         raise HTTPException(status_code=404, detail="タスクが見つかりません")
-    # Cascade: delete subtasks first (recursive children)
-    child_ids = db.execute(
-        text("SELECT id FROM tasks WHERE parent_id = :id"), {"id": task_id}
-    ).fetchall()
-    for child in child_ids:
-        cid = child[0]
-        db.execute(text("DELETE FROM task_comments WHERE task_id = :id"), {"id": cid})
-        db.execute(text("DELETE FROM task_reminders WHERE task_id = :id"), {"id": cid})
-        db.execute(text("DELETE FROM task_label_map WHERE task_id = :id"), {"id": cid})
-        db.execute(text("DELETE FROM task_recurrence_rules WHERE source_task_id = :id"), {"id": cid})
-        db.execute(text("DELETE FROM tasks WHERE id = :id"), {"id": cid})
-    # Delete own related data
-    db.execute(text("DELETE FROM task_comments WHERE task_id = :id"), {"id": task_id})
-    db.execute(text("DELETE FROM task_reminders WHERE task_id = :id"), {"id": task_id})
-    db.execute(text("DELETE FROM task_label_map WHERE task_id = :id"), {"id": task_id})
-    db.execute(text("DELETE FROM task_recurrence_rules WHERE source_task_id = :id"), {"id": task_id})
-    db.execute(text("DELETE FROM task_dependencies WHERE predecessor_id = :id OR successor_id = :id"), {"id": task_id})
-    db.execute(text("DELETE FROM tasks WHERE id = :id"), {"id": task_id})
+    _delete_task_tree(task_id, db)
     db.commit()
 
 
@@ -1238,14 +1277,8 @@ def detach_label(task_id: int, label_id: int, db=Depends(get_db)) -> Dict[str, A
 @router.get("/api/tasks/{task_id}/subtasks")
 def get_subtasks(task_id: int, db=Depends(get_db)) -> List[Dict[str, Any]]:
     rows = db.execute(
-        text("""
-            SELECT t.*, c.name AS category_name, c.color AS category_color
-            FROM tasks t
-            LEFT JOIN task_categories c ON t.category_id = c.id
-            WHERE t.parent_id = :pid
-            ORDER BY t.sort_order, t.created_at
-        """),
-        {"pid": task_id},
+        text(_TASK_DETAIL_SELECT + " WHERE t.parent_id = :pid ORDER BY t.sort_order, t.created_at"),
+        {"pid": task_id, **_today_params()},
     ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
@@ -1312,3 +1345,217 @@ def delete_recurrence(task_id: int, db=Depends(get_db)) -> Dict[str, Any]:
     )
     db.commit()
     return {"task_id": task_id, "recurrence": "deleted"}
+
+
+# ===== 繰り返しタスク生成処理 =====
+
+def _calc_next_generate(rrule_type: str, interval_value: int, from_date: datetime) -> str:
+    """次回生成日を計算"""
+    if rrule_type == "daily":
+        delta = timedelta(days=interval_value)
+    elif rrule_type == "weekly":
+        delta = timedelta(weeks=interval_value)
+    elif rrule_type == "biweekly":
+        delta = timedelta(weeks=2)
+    elif rrule_type == "monthly":
+        delta = timedelta(days=30 * interval_value)
+    elif rrule_type == "quarterly":
+        delta = timedelta(days=90)
+    else:
+        delta = timedelta(weeks=1)
+    return (from_date + delta).strftime("%Y-%m-%d")
+
+
+def process_recurrences(db) -> int:
+    """next_generate が今日以前の繰り返しルールを処理し、新タスクを生成する。生成数を返す。"""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now_iso = _now_iso()
+
+    rules = db.execute(
+        text("""
+            SELECT r.*, t.title, t.description, t.priority, t.category_id,
+                   t.project_name, t.assignee_id, t.assignee_name,
+                   t.estimated_minutes, t.milestone_id
+            FROM task_recurrence_rules r
+            JOIN tasks t ON r.source_task_id = t.id
+            WHERE r.is_active = 1 AND r.next_generate <= :today
+        """),
+        {"today": today},
+    ).fetchall()
+
+    created = 0
+    for rule in rules:
+        r = _row_to_dict(rule)
+        # ソースタスクをコピーして新タスク作成
+        new_due = r["next_generate"]  # 次回生成日を期限に設定
+        result = db.execute(
+            text("""
+                INSERT INTO tasks (title, description, status, priority, category_id,
+                                   due_date, estimated_minutes, project_name,
+                                   assignee_id, assignee_name, milestone_id,
+                                   source_type, created_at, updated_at)
+                VALUES (:title, :description, 'todo', :priority, :category_id,
+                        :due_date, :estimated_minutes, :project_name,
+                        :assignee_id, :assignee_name, :milestone_id,
+                        'recurrence', :created_at, :updated_at)
+            """),
+            {
+                "title": r["title"],
+                "description": r.get("description"),
+                "priority": r.get("priority", "medium"),
+                "category_id": r.get("category_id"),
+                "due_date": new_due,
+                "estimated_minutes": r.get("estimated_minutes"),
+                "project_name": r.get("project_name"),
+                "assignee_id": r.get("assignee_id"),
+                "assignee_name": r.get("assignee_name"),
+                "milestone_id": r.get("milestone_id"),
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            },
+        )
+        new_task_id = result.lastrowid
+
+        # 自動リマインダー
+        if new_due:
+            _upsert_auto_reminder(new_task_id, r["title"], new_due, db)
+
+        # next_generate を次回に更新
+        next_gen = _calc_next_generate(
+            r["rrule_type"], r.get("interval_value", 1),
+            datetime.strptime(r["next_generate"], "%Y-%m-%d"),
+        )
+        db.execute(
+            text("UPDATE task_recurrence_rules SET next_generate = :next_gen WHERE id = :id"),
+            {"next_gen": next_gen, "id": r["id"]},
+        )
+        created += 1
+
+    if created:
+        db.commit()
+    return created
+
+
+@router.post("/api/tasks/recurrence/process")
+def trigger_recurrence_processing(db=Depends(get_db)) -> Dict[str, Any]:
+    """繰り返しタスクの手動トリガー"""
+    count = process_recurrences(db)
+    return {"created": count}
+
+
+# ===== 依存関係 CRUD =====
+
+_VALID_DEP_TYPES = {"FS", "FF", "SS", "SF"}
+
+
+class DependencyCreate(BaseModel):
+    successor_id: int
+    dep_type: str = "FS"
+    lag_days: int = 0
+
+
+def _check_circular_dependency(task_id: int, successor_id: int, db) -> bool:
+    """successor_id から辿って task_id に到達するなら循環あり"""
+    visited = set()
+    queue = [successor_id]
+    while queue:
+        current = queue.pop(0)
+        if current == task_id:
+            return True
+        if current in visited:
+            continue
+        visited.add(current)
+        rows = db.execute(
+            text("SELECT successor_id FROM task_dependencies WHERE predecessor_id = :id"),
+            {"id": current},
+        ).fetchall()
+        queue.extend(r[0] for r in rows)
+    return False
+
+
+@router.get("/api/tasks/{task_id}/dependencies")
+def get_dependencies(task_id: int, db=Depends(get_db)) -> Dict[str, Any]:
+    """タスクの先行・後続依存関係を取得"""
+    predecessors = db.execute(
+        text("""
+            SELECT d.*, t.title AS task_title, t.status AS task_status
+            FROM task_dependencies d
+            JOIN tasks t ON d.predecessor_id = t.id
+            WHERE d.successor_id = :tid
+        """),
+        {"tid": task_id},
+    ).fetchall()
+    successors = db.execute(
+        text("""
+            SELECT d.*, t.title AS task_title, t.status AS task_status
+            FROM task_dependencies d
+            JOIN tasks t ON d.successor_id = t.id
+            WHERE d.predecessor_id = :tid
+        """),
+        {"tid": task_id},
+    ).fetchall()
+    return {
+        "predecessors": [_row_to_dict(r) for r in predecessors],
+        "successors": [_row_to_dict(r) for r in successors],
+    }
+
+
+@router.post("/api/tasks/{task_id}/dependencies", status_code=201)
+def create_dependency(task_id: int, req: DependencyCreate, db=Depends(get_db)) -> Dict[str, Any]:
+    """依存関係を作成（task_id が先行、req.successor_id が後続）"""
+    if req.dep_type not in _VALID_DEP_TYPES:
+        raise HTTPException(status_code=400, detail=f"dep_type は {_VALID_DEP_TYPES} のいずれかです")
+    if task_id == req.successor_id:
+        raise HTTPException(status_code=400, detail="自分自身への依存は作成できません")
+
+    # 両方のタスクが存在するか確認
+    for tid in (task_id, req.successor_id):
+        row = db.execute(text("SELECT id FROM tasks WHERE id = :id"), {"id": tid}).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"タスク {tid} が見つかりません")
+
+    # 重複チェック
+    existing = db.execute(
+        text("SELECT id FROM task_dependencies WHERE predecessor_id = :pid AND successor_id = :sid"),
+        {"pid": task_id, "sid": req.successor_id},
+    ).fetchone()
+    if existing:
+        raise HTTPException(status_code=409, detail="この依存関係は既に存在します")
+
+    # 循環チェック
+    if _check_circular_dependency(task_id, req.successor_id, db):
+        raise HTTPException(status_code=400, detail="循環依存が検出されました")
+
+    now = _now_iso()
+    result = db.execute(
+        text("""
+            INSERT INTO task_dependencies (predecessor_id, successor_id, dep_type, lag_days, created_at)
+            VALUES (:pid, :sid, :dep_type, :lag_days, :created_at)
+        """),
+        {
+            "pid": task_id,
+            "sid": req.successor_id,
+            "dep_type": req.dep_type,
+            "lag_days": req.lag_days,
+            "created_at": now,
+        },
+    )
+    db.commit()
+    row = db.execute(
+        text("SELECT * FROM task_dependencies WHERE id = :id"), {"id": result.lastrowid}
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+@router.delete("/api/tasks/{task_id}/dependencies/{dep_id}", status_code=200)
+def delete_dependency(task_id: int, dep_id: int, db=Depends(get_db)) -> Dict[str, Any]:
+    """依存関係を削除"""
+    existing = db.execute(
+        text("SELECT id FROM task_dependencies WHERE id = :id AND (predecessor_id = :tid OR successor_id = :tid)"),
+        {"id": dep_id, "tid": task_id},
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="依存関係が見つかりません")
+    db.execute(text("DELETE FROM task_dependencies WHERE id = :id"), {"id": dep_id})
+    db.commit()
+    return {"deleted": dep_id}
