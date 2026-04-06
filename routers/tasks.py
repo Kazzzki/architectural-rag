@@ -908,6 +908,7 @@ def get_portfolio(db=Depends(get_db)) -> List[Dict[str, Any]]:
                 MIN(t.due_date) AS earliest_due,
                 MAX(t.due_date) AS latest_due
             FROM tasks t
+            WHERE t.parent_id IS NULL
             GROUP BY COALESCE(t.project_name, '未分類')
             ORDER BY project_name
         """)
@@ -919,6 +920,33 @@ def get_portfolio(db=Depends(get_db)) -> List[Dict[str, Any]]:
         done = d.get("done", 0)
         d["completion_rate"] = int((done / total) * 100) if total > 0 else 0
         results.append(d)
+
+    # 優先度別集計を追加
+    prio_rows = db.execute(
+        text("""
+            SELECT
+                COALESCE(t.project_name, '未分類') AS project_name,
+                t.priority,
+                COUNT(*) AS cnt
+            FROM tasks t
+            WHERE t.parent_id IS NULL AND t.status != 'done'
+            GROUP BY COALESCE(t.project_name, '未分類'), t.priority
+        """)
+    ).fetchall()
+    prio_map: Dict[str, Dict[str, int]] = {}
+    for pr in prio_rows:
+        pd = _row_to_dict(pr)
+        pn = pd["project_name"]
+        if pn not in prio_map:
+            prio_map[pn] = {"high": 0, "medium": 0, "low": 0}
+        prio_map[pn][pd.get("priority", "medium")] = pd.get("cnt", 0)
+
+    for r in results:
+        pn = r["project_name"]
+        r["priority_high"] = prio_map.get(pn, {}).get("high", 0)
+        r["priority_medium"] = prio_map.get(pn, {}).get("medium", 0)
+        r["priority_low"] = prio_map.get(pn, {}).get("low", 0)
+
     return results
 
 

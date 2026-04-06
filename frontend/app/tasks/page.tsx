@@ -28,6 +28,7 @@ import PortfolioDashboard from './PortfolioDashboard';
 import WorkloadView from './WorkloadView';
 import BottomNav from './BottomNav';
 import QuickAddSheet from './QuickAddSheet';
+import ProjectStatsBar from './ProjectStatsBar';
 
 const TaskMindMap = lazy(() => import('./TaskMindMap'));
 
@@ -337,6 +338,9 @@ function TasksPageInner() {
           </button>
         </div>
       </div>
+
+      {/* Project stats bar (when filtering by project) */}
+      {filterProject && <ProjectStatsBar tasks={tasks} projectName={filterProject} />}
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
