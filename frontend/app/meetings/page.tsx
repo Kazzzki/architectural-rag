@@ -186,11 +186,11 @@ function MeetingDetailModal({
 
   const handleConvertToIssue = async (note: any) => {
     try {
-      const res = await authFetch('/api/issues', {
+      const res = await authFetch('/api/issues/capture', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: note.content, project_name: detail?.project_name }),
+        body: JSON.stringify({ raw_input: note.content, project_name: detail?.project_name || 'default', skip_ai: true }),
       });
-      if (res.ok) { const d = await res.json(); setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${d.id}` })); }
+      if (res.ok) { const d = await res.json(); setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${d.issue?.id || d.id}` })); }
     } catch (e) { console.error(e); }
   };
 

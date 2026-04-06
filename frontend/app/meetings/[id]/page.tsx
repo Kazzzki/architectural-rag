@@ -60,14 +60,14 @@ export default function MeetingDetailPage() {
 
   const handleConvertNoteToIssue = async (note: any) => {
     try {
-      const res = await authFetch('/api/issues', {
+      const res = await authFetch('/api/issues/capture', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: note.content, project_name: meeting?.project_name }),
+        body: JSON.stringify({ raw_input: note.content, project_name: meeting?.project_name || 'default', skip_ai: true }),
       });
       if (res.ok) {
         const data = await res.json();
-        setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${data.id}` }));
+        setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${data.issue?.id || data.id}` }));
       }
     } catch (e) { console.error(e); }
   };

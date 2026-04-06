@@ -37,30 +37,43 @@ function formatTimestamp(sec: number): string {
 }
 
 function parsePrefix(input: string): { noteType: string; content: string } {
-  if (input.startsWith('/d ')) return { noteType: 'decision', content: input.slice(3) };
-  if (input.startsWith('/a ')) return { noteType: 'action', content: input.slice(3) };
-  if (input.startsWith('/r ')) return { noteType: 'risk', content: input.slice(3) };
+  const firstLine = input.split('\n')[0];
+  if (firstLine.startsWith('/d ')) return { noteType: 'decision', content: input.slice(3) };
+  if (firstLine.startsWith('/a ')) return { noteType: 'action', content: input.slice(3) };
+  if (firstLine.startsWith('/r ')) return { noteType: 'risk', content: input.slice(3) };
   return { noteType: 'memo', content: input };
 }
 
+function autoResize(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+}
+
 export default function MeetingLiveNotes({ sessionId, elapsedSec, projectName, onNoteAdded }: Props) {
-  const [convertedNotes, setConvertedNotes] = useState<Record<number, string>>({}); // noteId -> "issue:12" or "task:5"
+  const [convertedNotes, setConvertedNotes] = useState<Record<number, string>>({});
+  const [convertingNotes, setConvertingNotes] = useState<Set<number>>(new Set());
 
   const handleConvertToIssue = async (note: LiveNote) => {
+    if (convertingNotes.has(note.id)) return;
+    setConvertingNotes(prev => new Set(prev).add(note.id));
     try {
-      const res = await authFetch('/api/issues', {
+      const res = await authFetch('/api/issues/capture', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: note.content, project_name: projectName || undefined }),
+        body: JSON.stringify({ raw_input: note.content, project_name: projectName || 'default', skip_ai: true }),
       });
       if (res.ok) {
         const data = await res.json();
-        setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${data.id}` }));
+        setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${data.issue?.id || data.id}` }));
       }
     } catch (e) { console.error('Failed to create issue:', e); }
+    finally { setConvertingNotes(prev => { const s = new Set(prev); s.delete(note.id); return s; }); }
   };
 
   const handleConvertToTask = async (note: LiveNote) => {
+    if (convertingNotes.has(note.id)) return;
+    setConvertingNotes(prev => new Set(prev).add(note.id));
     try {
       const res = await authFetch('/api/tasks', {
         method: 'POST',
@@ -79,7 +92,9 @@ export default function MeetingLiveNotes({ sessionId, elapsedSec, projectName, o
         setConvertedNotes(prev => ({ ...prev, [note.id]: `task:${data.id}` }));
       }
     } catch (e) { console.error('Failed to create task:', e); }
+    finally { setConvertingNotes(prev => { const s = new Set(prev); s.delete(note.id); return s; }); }
   };
+
   const [notes, setNotes] = useState<LiveNote[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -87,7 +102,7 @@ export default function MeetingLiveNotes({ sessionId, elapsedSec, projectName, o
   const [editContent, setEditContent] = useState('');
   const [userScrolled, setUserScrolled] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // 初回読み込み
   useEffect(() => {
@@ -135,6 +150,8 @@ export default function MeetingLiveNotes({ sessionId, elapsedSec, projectName, o
         setInput('');
         setUserScrolled(false);
         onNoteAdded?.();
+        // リセット後にtextareaの高さを戻す
+        requestAnimationFrame(() => autoResize(inputRef.current));
       }
     } catch (e) {
       console.error('Failed to create live note:', e);
@@ -144,11 +161,16 @@ export default function MeetingLiveNotes({ sessionId, elapsedSec, projectName, o
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit();
     }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    autoResize(e.target);
   };
 
   const handleEdit = async (noteId: number) => {
@@ -185,23 +207,26 @@ export default function MeetingLiveNotes({ sessionId, elapsedSec, projectName, o
   const currentConfig = NOTE_TYPE_CONFIG[currentType] || NOTE_TYPE_CONFIG.memo;
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 flex flex-col">
+    <div className="bg-white rounded-2xl border border-gray-200 flex flex-col h-full">
       {/* Sticky入力エリア（常に上部に表示） */}
       <div className="sticky top-0 z-10 bg-white border-b border-gray-100 p-4 rounded-t-2xl">
-        <div className="flex items-center gap-2">
-          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${currentConfig.bgColor} ${currentConfig.color}`}>
+        <div className="flex items-start gap-2">
+          <span className={`mt-2 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${currentConfig.bgColor} ${currentConfig.color}`}>
             {currentConfig.label}
           </span>
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="メモを入力... [Enter送信]"
-            disabled={sending}
-            className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 focus:border-transparent disabled:opacity-50"
-          />
+          <div className="flex-1 relative">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder="メモを入力... (Enter送信 / Shift+Enter改行)"
+              disabled={sending}
+              rows={1}
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 focus:border-transparent disabled:opacity-50 resize-none leading-relaxed"
+              style={{ minHeight: '38px', maxHeight: '160px' }}
+            />
+          </div>
         </div>
         <p className="text-xs text-gray-400 mt-1.5 ml-1">
           /d=決定 /a=アクション /r=リスク
@@ -237,27 +262,32 @@ export default function MeetingLiveNotes({ sessionId, elapsedSec, projectName, o
                 <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${config.color}`} />
                 <div className="flex-1 min-w-0">
                   {isEditing ? (
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="text"
+                    <div className="flex flex-col gap-1">
+                      <textarea
                         value={editContent}
-                        onChange={e => setEditContent(e.target.value)}
+                        onChange={e => { setEditContent(e.target.value); autoResize(e.target); }}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') handleEdit(note.id);
-                          if (e.key === 'Escape') setEditingId(null);
+                          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleEdit(note.id); }
+                          if (e.key === 'Escape' && !e.nativeEvent.isComposing) setEditingId(null);
                         }}
                         autoFocus
-                        className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-300"
+                        rows={1}
+                        ref={el => { if (el) autoResize(el); }}
+                        className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-300 resize-none leading-relaxed"
+                        style={{ minHeight: '32px', maxHeight: '120px' }}
                       />
-                      <button onClick={() => handleEdit(note.id)} className="p-1 text-green-600 hover:bg-green-50 rounded">
-                        <Check className="w-3.5 h-3.5" />
-                      </button>
-                      <button onClick={() => setEditingId(null)} className="p-1 text-gray-400 hover:bg-gray-100 rounded">
-                        <X className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => handleEdit(note.id)} className="p-1 text-green-600 hover:bg-green-50 rounded">
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => setEditingId(null)} className="p-1 text-gray-400 hover:bg-gray-100 rounded">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="text-[10px] text-gray-400 ml-1">Enter保存 / Shift+Enter改行</span>
+                      </div>
                     </div>
                   ) : (
-                    <p className="text-sm text-gray-700">{note.content}</p>
+                    <p className="text-sm text-gray-700 whitespace-pre-wrap">{note.content}</p>
                   )}
                 </div>
                 {!isEditing && (
@@ -270,15 +300,17 @@ export default function MeetingLiveNotes({ sessionId, elapsedSec, projectName, o
                       <>
                         <button
                           onClick={() => handleConvertToIssue(note)}
+                          disabled={convertingNotes.has(note.id)}
                           title="課題に登録"
-                          className="p-1 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded"
+                          className="p-1 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded disabled:opacity-30 disabled:pointer-events-none"
                         >
                           <CircleDot className="w-3 h-3" />
                         </button>
                         <button
                           onClick={() => handleConvertToTask(note)}
+                          disabled={convertingNotes.has(note.id)}
                           title="タスクに登録"
-                          className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
+                          className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded disabled:opacity-30 disabled:pointer-events-none"
                         >
                           <ListTodo className="w-3 h-3" />
                         </button>
