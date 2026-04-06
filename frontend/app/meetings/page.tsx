@@ -788,10 +788,9 @@ export default function MeetingsPage() {
       recorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
           audioChunksRef.current.push(e.data);
-          sendChunk(e.data, session.id);
         }
       };
-      recorder.start(5 * 60 * 1000);
+      recorder.start(5 * 60 * 1000); // チャンク収集のみ（録音停止後に一括送信）
 
       timerRef.current = setInterval(() => {
         setElapsed(prev => prev + 1);
@@ -894,10 +893,8 @@ export default function MeetingsPage() {
     if (sessionId) {
       setFinalizing(true);
       setPhase('done');
-      // Wait for any pending chunk sends to complete before finalizing
-      await chunkQueueRef.current;
       try {
-        // メタデータを先に保存（upload失敗でもデータは安全）
+        // 1. メタデータを先に保存
         await apiFetch(`/api/meetings/${sessionId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -910,26 +907,44 @@ export default function MeetingsPage() {
           }),
         });
 
-        // 音声ファイルをアップロード（失敗してもfinalizeは続行）
+        // 2. 全音声を一括でGemini文字起こし
         if (audioChunksRef.current.length > 0) {
-          try {
-            const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-            if (audioBlob.size <= 100 * 1024 * 1024) {
-              const fd = new FormData();
-              fd.append('file', audioBlob, `meeting_${sessionId}.webm`);
-              await authFetch(`/api/meetings/${sessionId}/upload-audio`, {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          if (audioBlob.size > 0 && audioBlob.size <= 100 * 1024 * 1024) {
+            const fd = new FormData();
+            fd.append('file', audioBlob, `meeting_${sessionId}.webm`);
+            try {
+              const transcribeResult = await authFetch(`/api/meetings/${sessionId}/transcribe-full`, {
                 method: 'POST',
                 body: fd,
+                signal: AbortSignal.timeout(300000), // 5分タイムアウト（長い録音対応）
+              });
+              if (transcribeResult.ok) {
+                const data = await transcribeResult.json();
+                if (data.transcript) {
+                  setTranscripts([data.transcript]);
+                }
+              }
+            } catch (transcribeErr) {
+              console.error('Transcription failed:', transcribeErr);
+            }
+
+            // 音声ファイルもアップロード（バックアップ、非ブロッキング）
+            try {
+              const uploadFd = new FormData();
+              uploadFd.append('file', audioBlob, `meeting_${sessionId}.webm`);
+              await authFetch(`/api/meetings/${sessionId}/upload-audio`, {
+                method: 'POST',
+                body: uploadFd,
                 signal: AbortSignal.timeout(60000),
               });
-            } else {
-              console.warn('Audio file too large for upload:', audioBlob.size);
+            } catch (audioErr) {
+              console.error('Audio upload failed (non-blocking):', audioErr);
             }
-          } catch (audioErr) {
-            console.error('Audio upload failed (non-blocking):', audioErr);
           }
         }
 
+        // 3. サマリー生成 + AI抽出
         const result = await apiFetch(`/api/meetings/${sessionId}/finalize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1146,6 +1161,7 @@ export default function MeetingsPage() {
                     transcripts={transcripts}
                     sendingChunk={sendingChunk}
                     chunkIndex={chunkIndex}
+                    isRecording={phase === 'recording'}
                   />
                 </div>
 
