@@ -13,8 +13,12 @@ routers/meetings.py — 会議文字起こし API
   GET    /api/meetings/{id}/entity-links   エンティティリンク一覧
 """
 import logging
+import os
+import subprocess
+import tempfile
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from google.genai import types
@@ -39,6 +43,115 @@ def _row_to_dict(row: Any) -> Dict[str, Any]:
     if row is None:
         return {}
     return dict(row._mapping)
+
+
+# 文字起こしプロンプト（ハルシネーション防止付き）
+TRANSCRIPTION_PROMPT = (
+    "この音声を日本語でそのまま文字起こしてください。"
+    "句読点をつけて自然な日本語にしてください。"
+    "会議・ミーティングの音声です。"
+    "余計な説明・補足・翻訳は不要です。文字起こし結果のテキストのみ返してください。"
+    "音声が無音・聞き取れない・不明瞭な場合は空文字を返してください。内容を推測・創作しないでください。"
+    "実際に聞こえた発話のみを書き起こしてください。"
+)
+
+
+def _get_dict_hint(session_id: int, db) -> str:
+    """セッションに紐づくカスタム辞書をプロンプト用ヒントとして取得"""
+    try:
+        sess = db.execute(
+            text("SELECT project_id FROM meeting_sessions WHERE id = :id"),
+            {"id": session_id}
+        ).fetchone()
+        pid = dict(sess._mapping).get("project_id") if sess else None
+        if pid:
+            dict_rows = db.execute(text("""
+                SELECT term, reading, category FROM custom_dictionary
+                WHERE project_id = :pid OR project_id IS NULL LIMIT 30
+            """), {"pid": pid}).fetchall()
+        else:
+            dict_rows = db.execute(text("""
+                SELECT term, reading, category FROM custom_dictionary
+                WHERE project_id IS NULL LIMIT 20
+            """)).fetchall()
+        if dict_rows:
+            terms = []
+            for r in dict_rows:
+                d = dict(r._mapping)
+                t = d["term"]
+                if d.get("reading"):
+                    t += f"（{d['reading']}）"
+                terms.append(f"- {t}")
+            return "\n以下の専門用語が使われる可能性があります:\n" + "\n".join(terms) + "\n"
+    except Exception:
+        pass
+    return ""
+
+
+def _transcribe_segment(audio_bytes: bytes, mime_type: str, dict_hint: str = "") -> str:
+    """音声バイト列をGeminiで文字起こし（temperature=0, ハルシネーション防止）"""
+    client = get_client()
+    response = client.models.generate_content(
+        model=config.GEMINI_MODEL_TRANSCRIPTION,
+        contents=[
+            types.Part(inline_data=types.Blob(mime_type=mime_type, data=audio_bytes)),
+            types.Part(text=TRANSCRIPTION_PROMPT + dict_hint),
+        ],
+        config=types.GenerateContentConfig(temperature=0.0),
+    )
+    return (response.text or "").strip()
+
+
+def _split_audio(audio_bytes: bytes, segment_sec: int = 600) -> List[Tuple[bytes, str]]:
+    """ffmpegで音声をセグメント分割（Gemini 20MB制限対応）"""
+    segments: List[Tuple[bytes, str]] = []
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as src:
+        src.write(audio_bytes)
+        src_path = src.name
+
+    try:
+        # ffprobeで長さ取得
+        duration = segment_sec  # フォールバック
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", src_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            if probe.returncode == 0:
+                import json
+                info = json.loads(probe.stdout)
+                duration = float(info.get("format", {}).get("duration", segment_sec))
+        except Exception:
+            pass
+
+        start = 0.0
+        idx = 0
+        while start < duration:
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+                tmp_path = tmp.name
+            try:
+                result = subprocess.run(
+                    ["ffmpeg", "-y", "-i", src_path,
+                     "-ss", str(start), "-t", str(segment_sec),
+                     "-c", "copy", tmp_path],
+                    capture_output=True, timeout=120,
+                )
+                if result.returncode == 0:
+                    seg_bytes = Path(tmp_path).read_bytes()
+                    if seg_bytes:
+                        segments.append((seg_bytes, "audio/webm"))
+            except Exception as e:
+                logger.error(f"ffmpeg segment split error at {start}s: {e}")
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            start += segment_sec
+            idx += 1
+    finally:
+        if os.path.exists(src_path):
+            os.unlink(src_path)
+
+    return segments if segments else [(audio_bytes, "audio/webm")]
 
 
 # ===== Pydantic モデル =====
@@ -162,55 +275,11 @@ async def receive_chunk(
         raise HTTPException(status_code=400, detail="音声データが空です")
 
     mime_type = file.content_type or "audio/webm"
+    dict_hint = _get_dict_hint(session_id, db)
 
-    # M4: カスタム辞書をプロンプトに注入
-    dict_hint = ""
+    # Gemini 文字起こし（temperature=0, ハルシネーション防止プロンプト）
     try:
-        # セッションのプロジェクトから辞書を取得
-        sess = db.execute(
-            text("SELECT project_id FROM meeting_sessions WHERE id = :id"),
-            {"id": session_id}
-        ).fetchone()
-        pid = dict(sess._mapping).get("project_id") if sess else None
-        if pid:
-            dict_rows = db.execute(text("""
-                SELECT term, reading, category FROM custom_dictionary
-                WHERE project_id = :pid OR project_id IS NULL LIMIT 30
-            """), {"pid": pid}).fetchall()
-        else:
-            dict_rows = db.execute(text("""
-                SELECT term, reading, category FROM custom_dictionary
-                WHERE project_id IS NULL LIMIT 20
-            """)).fetchall()
-        if dict_rows:
-            terms = []
-            for r in dict_rows:
-                d = dict(r._mapping)
-                t = d["term"]
-                if d.get("reading"):
-                    t += f"（{d['reading']}）"
-                terms.append(f"- {t}")
-            dict_hint = "\n以下の専門用語が使われる可能性があります:\n" + "\n".join(terms) + "\n"
-    except Exception:
-        pass
-
-    # Gemini 文字起こし（既存 transcribe.py と同パターン）
-    try:
-        client = get_client()
-        response = client.models.generate_content(
-            model=config.GEMINI_MODEL_TRANSCRIPTION,
-            contents=[
-                types.Part(inline_data=types.Blob(mime_type=mime_type, data=audio_bytes)),
-                types.Part(text=(
-                    "この音声を日本語でそのまま文字起こしてください。"
-                    "句読点をつけて自然な日本語にしてください。"
-                    "会議・ミーティングの音声です。"
-                    "余計な説明・補足・翻訳は不要です。文字起こし結果のテキストのみ返してください。"
-                    + dict_hint
-                )),
-            ],
-        )
-        transcript = (response.text or "").strip()
+        transcript = _transcribe_segment(audio_bytes, mime_type, dict_hint)
         if not transcript:
             logger.warning(f"Gemini returned empty transcript for session {session_id} chunk {chunk_index}")
             transcript = "[音声を認識できませんでした]"
@@ -253,6 +322,69 @@ async def receive_chunk(
         {"id": row_id}
     ).fetchone()
     return {**_row_to_dict(chunk_row), "transcript": transcript}
+
+
+@router.post("/api/meetings/{session_id}/transcribe-full")
+async def transcribe_full_audio(
+    session_id: int,
+    file: UploadFile = File(...),
+    db=Depends(get_db),
+) -> Dict[str, Any]:
+    """録音停止後に全音声を一括でGemini文字起こし（チャンク分割はバックエンドで実行）"""
+    session = db.execute(
+        text("SELECT id FROM meeting_sessions WHERE id = :id"),
+        {"id": session_id}
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="会議セッションが見つかりません")
+
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="音声データが空です")
+
+    mime_type = file.content_type or "audio/webm"
+    dict_hint = _get_dict_hint(session_id, db)
+
+    # 20MB超の場合はffmpegでセグメント分割
+    if len(audio_bytes) > 20 * 1024 * 1024:
+        segments = _split_audio(audio_bytes, segment_sec=600)
+    else:
+        segments = [(audio_bytes, mime_type)]
+
+    # 既存チャンクを削除（再実行対応）
+    db.execute(text("DELETE FROM meeting_chunks WHERE session_id = :sid"), {"sid": session_id})
+
+    now = _now_iso()
+    transcripts: List[str] = []
+    for i, (seg_bytes, seg_mime) in enumerate(segments):
+        try:
+            transcript = _transcribe_segment(seg_bytes, seg_mime, dict_hint)
+        except Exception as e:
+            logger.error(f"Gemini transcribe error for segment {i}: {e}", exc_info=True)
+            transcript = "[文字起こしエラー]"
+
+        if not transcript:
+            transcript = "[音声を認識できませんでした]"
+
+        transcripts.append(transcript)
+        db.execute(text("""
+            INSERT INTO meeting_chunks (session_id, chunk_index, transcript, start_offset_sec, created_at)
+            VALUES (:session_id, :chunk_index, :transcript, :start_offset_sec, :created_at)
+        """), {
+            "session_id": session_id,
+            "chunk_index": i,
+            "transcript": transcript,
+            "start_offset_sec": i * 600,
+            "created_at": now,
+        })
+
+    db.execute(text(
+        "UPDATE meeting_sessions SET updated_at = :now WHERE id = :id"
+    ), {"now": now, "id": session_id})
+    db.commit()
+
+    full_text = "\n\n".join(t for t in transcripts if t and not t.startswith("["))
+    return {"session_id": session_id, "transcript": full_text, "chunk_count": len(transcripts)}
 
 
 class SessionUpdate(BaseModel):
@@ -329,6 +461,7 @@ def finalize_meeting(session_id: int, db=Depends(get_db)) -> Dict[str, Any]:
             response = client.models.generate_content(
                 model=config.GEMINI_MODEL_RAG,
                 contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.2),
             )
             summary = (response.text or "").strip()
         except Exception as e:

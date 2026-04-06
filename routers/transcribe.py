@@ -38,9 +38,12 @@ async def transcribe_audio(file: UploadFile = File(...)):
                         "この音声を日本語でそのまま文字起こしてください。"
                         "句読点をつけて自然な日本語にしてください。"
                         "余計な説明・補足・翻訳は不要です。文字起こし結果のテキストのみ返してください。"
+                        "音声が無音・聞き取れない・不明瞭な場合は空文字を返してください。内容を推測・創作しないでください。"
+                        "実際に聞こえた発話のみを書き起こしてください。"
                     )
                 ),
             ],
+            config=types.GenerateContentConfig(temperature=0.0),
         )
         text = (response.text or "").strip()
         return {"text": text}
