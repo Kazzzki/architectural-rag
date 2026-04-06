@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5.0] - 2026-04-05
+
+### Changed
+- **文字起こしアーキテクチャ刷新**: 録音中のGeminiチャンク送信を廃止。録音中はWeb Speech APIのみでリアルタイム表示し、録音停止後に全音声を一括でGemini文字起こし。ハルシネーション（架空の会議内容を生成する問題）を根本解決
+- **Geminiプロンプトにハルシネーション防止指示を追加**: 「無音時は空文字を返す、内容を創作しない」を明示。temperature=0.0で創造的出力を抑制
+- **長時間録音のffmpegセグメント分割**: 20MB超の音声ファイルはffmpegで10分ごとに自動分割してからGeminiに送信
+
+### Added
+- **全音声一括文字起こしAPI**: `POST /api/meetings/{id}/transcribe-full` — 録音停止後に全音声を受け取り、必要に応じてセグメント分割してGemini文字起こし
+
 ## [0.1.4.0] - 2026-04-05
 
 ### Fixed
