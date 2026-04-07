@@ -387,6 +387,90 @@ async def transcribe_full_audio(
     return {"session_id": session_id, "transcript": full_text, "chunk_count": len(transcripts)}
 
 
+@router.post("/api/meetings/transcribe", status_code=201)
+async def transcribe_and_create_session(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    project_name: Optional[str] = Form(None),
+    db=Depends(get_db),
+) -> Dict[str, Any]:
+    """音声ファイルからセッション作成→文字起こし→DB保存を一気通貫で実行。
+
+    MeetingRecorder / MeetingUploader が呼ぶワンショットエンドポイント。
+    返り値: {"id": session_id, "transcript": full_text, "chunk_count": N}
+    """
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="音声データが空です")
+
+    mime_type = file.content_type or "audio/webm"
+    now = _now_iso()
+
+    # ファイル名からタイトルを生成（フォールバック）
+    session_title = title or (file.filename or "").replace(".webm", "").replace("_", " ") or f"会議録音 {now[:10]}"
+
+    # 1. セッション作成
+    result = db.execute(text("""
+        INSERT INTO meeting_sessions (project_name, title, participants, created_at, updated_at)
+        VALUES (:project_name, :title, :participants, :created_at, :updated_at)
+    """), {
+        "project_name": project_name,
+        "title": session_title,
+        "participants": None,
+        "created_at": now,
+        "updated_at": now,
+    })
+    db.commit()
+    session_id = result.lastrowid
+
+    # 2. 音声ファイルを保存
+    audio_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "audio")
+    os.makedirs(audio_dir, exist_ok=True)
+    audio_path = os.path.join(audio_dir, f"{session_id}.webm")
+    with open(audio_path, "wb") as f:
+        f.write(audio_bytes)
+    db.execute(text(
+        "UPDATE meeting_sessions SET audio_file_path = :path WHERE id = :id"
+    ), {"path": audio_path, "id": session_id})
+
+    # 3. 文字起こし（大きいファイルはセグメント分割）
+    dict_hint = _get_dict_hint(session_id, db)
+    if len(audio_bytes) > 20 * 1024 * 1024:
+        segments = _split_audio(audio_bytes, segment_sec=600)
+    else:
+        segments = [(audio_bytes, mime_type)]
+
+    transcripts: List[str] = []
+    for i, (seg_bytes, seg_mime) in enumerate(segments):
+        try:
+            transcript = _transcribe_segment(seg_bytes, seg_mime, dict_hint)
+        except Exception as e:
+            logger.error(f"Gemini transcribe error for segment {i}: {e}", exc_info=True)
+            transcript = "[文字起こしエラー]"
+        if not transcript:
+            transcript = "[音声を認識できませんでした]"
+
+        transcripts.append(transcript)
+        db.execute(text("""
+            INSERT INTO meeting_chunks (session_id, chunk_index, transcript, start_offset_sec, created_at)
+            VALUES (:session_id, :chunk_index, :transcript, :start_offset_sec, :created_at)
+        """), {
+            "session_id": session_id,
+            "chunk_index": i,
+            "transcript": transcript,
+            "start_offset_sec": i * 600,
+            "created_at": now,
+        })
+
+    db.execute(text(
+        "UPDATE meeting_sessions SET updated_at = :now WHERE id = :id"
+    ), {"now": _now_iso(), "id": session_id})
+    db.commit()
+
+    full_text = "\n\n".join(t for t in transcripts if t and not t.startswith("["))
+    return {"id": session_id, "transcript": full_text, "chunk_count": len(transcripts)}
+
+
 class SessionUpdate(BaseModel):
     title: Optional[str] = None
     project_name: Optional[str] = None
