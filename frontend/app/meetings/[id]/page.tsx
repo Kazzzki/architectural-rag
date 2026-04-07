@@ -2,42 +2,19 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
 import {
-  ArrowLeft, FileAudio, Clock, Users, CheckCircle2,
-  AlertTriangle, ListChecks, CircleDot, RefreshCw, Loader2,
-  Pencil, Save, X, ClipboardList,
+  ArrowLeft, Clock, Users, RefreshCw, Loader2,
+  Pencil, Save, X, ListChecks, CheckCircle2,
+  FolderOpen, ClipboardCopy, Check, CircleDot, ListTodo,
+  MessageSquare, Target, AlertTriangle,
 } from 'lucide-react';
 import { authFetch } from '@/lib/api';
+import { MeetingDetail, apiFetch, formatDate } from '../utils';
+import MeetingTimeline from '../../components/meetings/MeetingTimeline';
+import EntityLinksPanel from '../../components/meetings/EntityLinksPanel';
+import MeetingAudioPlayer from '../../components/meetings/MeetingAudioPlayer';
 
-interface MeetingDetail {
-  id: string;
-  title: string;
-  meeting_date: string | null;
-  duration_sec: number | null;
-  participants: string[];
-  original_filename: string;
-  full_transcript: string;
-  summary: string | null;
-  agenda_items: { topic: string; summary: string; details: string }[];
-  decisions: { content: string; by: string }[];
-  action_items: { task: string; assignee: string; deadline: string }[];
-  open_issues: { content: string; context: string }[];
-  status: string;
-  error_message: string | null;
-  project_name: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-type TabId = 'minutes' | 'transcript';
-
-function formatDuration(sec: number | null): string {
-  if (!sec) return '-';
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return m > 0 ? `${m}分${s > 0 ? s + '秒' : ''}` : `${s}秒`;
-}
+type TabId = 'summary' | 'timeline' | 'transcript';
 
 export default function MeetingDetailPage() {
   const params = useParams();
@@ -46,51 +23,86 @@ export default function MeetingDetailPage() {
 
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<TabId>('minutes');
+  const [activeTab, setActiveTab] = useState<TabId>('summary');
   const [regenerating, setRegenerating] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editSummary, setEditSummary] = useState('');
   const [editTitle, setEditTitle] = useState('');
-  const [issueCandidates, setIssueCandidates] = useState<any[]>([]);
-  const [extracting, setExtracting] = useState(false);
-  const [createdIssues, setCreatedIssues] = useState<Set<number>>(new Set());
+  const [extractingTasks, setExtractingTasks] = useState(false);
+  const [createdTasks, setCreatedTasks] = useState<any[]>([]);
+  const [audioSeekSec, setAudioSeekSec] = useState<number | undefined>(undefined);
+  const [audioCurrentSec, setAudioCurrentSec] = useState(0);
+  const [exported, setExported] = useState(false);
+  const [pastDecisions, setPastDecisions] = useState<any[]>([]);
+  const [showDecisions, setShowDecisions] = useState(false);
+  const [liveNotes, setLiveNotes] = useState<any[]>([]);
+  const [convertedNotes, setConvertedNotes] = useState<Record<number, string>>({});
 
   const fetchMeeting = useCallback(async () => {
     try {
-      const res = await authFetch(`/api/meetings/${meetingId}`);
-      if (res.ok) {
-        const data = await res.json();
+      const [data, notes] = await Promise.all([
+        apiFetch(`/api/meetings/${meetingId}`),
+        apiFetch(`/api/meetings/${meetingId}/live-notes`).catch(() => []),
+      ]);
+      if (data) {
         setMeeting(data);
         setEditSummary(data.summary || '');
         setEditTitle(data.title || '');
-      } else if (res.status === 404) {
-        router.push('/meetings');
       }
+      setLiveNotes(notes || []);
     } catch (e) {
       console.error('Failed to fetch meeting:', e);
+      router.push('/meetings');
     } finally {
       setLoading(false);
     }
   }, [meetingId, router]);
 
+  const handleConvertNoteToIssue = async (note: any) => {
+    try {
+      const res = await authFetch('/api/issues/capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw_input: note.content, project_name: meeting?.project_name || 'default', skip_ai: true }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConvertedNotes(prev => ({ ...prev, [note.id]: `issue:${data.issue?.id || data.id}` }));
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const handleConvertNoteToTask = async (note: any) => {
+    try {
+      const res = await authFetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: note.content, source_meeting_id: parseInt(meetingId),
+          source_type: 'meeting', project_name: meeting?.project_name,
+          priority: note.note_type === 'risk' ? 'high' : 'medium', status: 'todo',
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConvertedNotes(prev => ({ ...prev, [note.id]: `task:${data.id}` }));
+      }
+    } catch (e) { console.error(e); }
+  };
+
   useEffect(() => {
     fetchMeeting();
   }, [fetchMeeting]);
 
-  // ポーリング（処理中の場合）
-  useEffect(() => {
-    if (!meeting || (meeting.status !== 'transcribing' && meeting.status !== 'generating')) return;
-    const timer = setInterval(fetchMeeting, 3000);
-    return () => clearInterval(timer);
-  }, [meeting, fetchMeeting]);
-
+  // BUG-3 fix: /regenerate -> /finalize
   const handleRegenerate = async () => {
     setRegenerating(true);
     try {
-      const res = await authFetch(`/api/meetings/${meetingId}/regenerate`, { method: 'POST' });
-      if (res.ok) {
-        fetchMeeting();
-      }
+      await apiFetch(`/api/meetings/${meetingId}/finalize`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(120000),
+      });
+      fetchMeeting();
     } catch (e) {
       console.error('Failed to regenerate:', e);
     } finally {
@@ -98,56 +110,64 @@ export default function MeetingDetailPage() {
     }
   };
 
+  // BUG-2 fix: PUT -> PATCH
   const handleSaveEdit = async () => {
     try {
-      const res = await authFetch(`/api/meetings/${meetingId}`, {
-        method: 'PUT',
+      await apiFetch(`/api/meetings/${meetingId}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: editTitle, summary: editSummary }),
       });
-      if (res.ok) {
-        setEditing(false);
-        fetchMeeting();
-      }
+      setEditing(false);
+      fetchMeeting();
     } catch (e) {
       console.error('Failed to save:', e);
     }
   };
 
-  const handleExtractIssues = async () => {
-    setExtracting(true);
+  // BUG-5 fix: /api/tasks/extract-from-meeting -> /api/meetings/{id}/create-tasks
+  const handleExtractTasks = async () => {
+    setExtractingTasks(true);
     try {
-      const res = await authFetch(`/api/meetings/${meetingId}/extract-issues`, { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setIssueCandidates(data.candidates || []);
-      }
+      const data = await apiFetch(`/api/meetings/${meetingId}/create-tasks`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(60000),
+      });
+      setCreatedTasks(data?.tasks_created || []);
     } catch (e) {
-      console.error('Failed to extract issues:', e);
+      console.error('Failed to extract tasks:', e);
     } finally {
-      setExtracting(false);
+      setExtractingTasks(false);
     }
   };
 
-  const handleCreateIssue = async (idx: number) => {
-    const c = issueCandidates[idx];
-    if (!c) return;
-    const projectName = meeting?.project_name || prompt('プロジェクト名を入力:');
-    if (!projectName) return;
+  const handleExportToClipboard = async () => {
     try {
-      const res = await authFetch('/api/issues/capture', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          raw_input: c.raw_input,
-          project_name: projectName,
-        }),
-      });
+      const res = await authFetch(`/api/meetings/${meetingId}/export`);
       if (res.ok) {
-        setCreatedIssues(prev => new Set([...prev, idx]));
+        const md = await res.text();
+        await navigator.clipboard.writeText(md);
+        setExported(true);
+        setTimeout(() => setExported(false), 3000);
       }
     } catch (e) {
-      console.error('Failed to create issue:', e);
+      console.error('Export failed:', e);
+    }
+  };
+
+  const handleShowDecisions = async () => {
+    if (showDecisions) { setShowDecisions(false); return; }
+    try {
+      const pn = meeting?.project_name;
+      const url = pn ? `/api/meetings/decisions?project_name=${encodeURIComponent(pn)}` : '/api/meetings/decisions';
+      const res = await authFetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setPastDecisions(data);
+        setShowDecisions(true);
+      }
+    } catch (e) {
+      console.error('Failed to fetch decisions:', e);
     }
   };
 
@@ -161,20 +181,18 @@ export default function MeetingDetailPage() {
 
   if (!meeting) return null;
 
-  const isProcessing = meeting.status === 'transcribing' || meeting.status === 'generating';
-
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link
-              href="/meetings"
+            <button
+              onClick={() => router.back()}
               className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors"
             >
               <ArrowLeft className="w-5 h-5" />
-            </Link>
+            </button>
             <div>
               {editing ? (
                 <input
@@ -186,268 +204,278 @@ export default function MeetingDetailPage() {
                 <h1 className="text-xl font-bold text-gray-900">{meeting.title}</h1>
               )}
               <div className="flex items-center gap-4 text-sm text-gray-500 mt-1">
-                {meeting.meeting_date && <span>{meeting.meeting_date}</span>}
                 <span className="flex items-center gap-1">
                   <Clock className="w-3.5 h-3.5" />
-                  {formatDuration(meeting.duration_sec)}
+                  {formatDate(meeting.created_at)}
                 </span>
-                {meeting.participants.length > 0 && (
+                {meeting.project_name && (
+                  <span className="flex items-center gap-1">
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    {meeting.project_name}
+                  </span>
+                )}
+                {meeting.participants && (
                   <span className="flex items-center gap-1">
                     <Users className="w-3.5 h-3.5" />
-                    {meeting.participants.join(', ')}
+                    {meeting.participants}
                   </span>
                 )}
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {!isProcessing && meeting.status === 'completed' && (
+            {editing ? (
               <>
-                {editing ? (
-                  <>
-                    <button
-                      onClick={handleSaveEdit}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
-                    >
-                      <Save className="w-4 h-4" /> 保存
-                    </button>
-                    <button
-                      onClick={() => setEditing(false)}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300"
-                    >
-                      <X className="w-4 h-4" /> 取消
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={() => setEditing(true)}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200"
-                  >
-                    <Pencil className="w-4 h-4" /> 編集
-                  </button>
-                )}
                 <button
-                  onClick={handleRegenerate}
-                  disabled={regenerating}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 disabled:opacity-50"
+                  onClick={handleSaveEdit}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
                 >
-                  <RefreshCw className={`w-4 h-4 ${regenerating ? 'animate-spin' : ''}`} /> 再生成
+                  <Save className="w-4 h-4" /> 保存
+                </button>
+                <button
+                  onClick={() => setEditing(false)}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300"
+                >
+                  <X className="w-4 h-4" /> 取消
                 </button>
               </>
+            ) : (
+              <button
+                onClick={() => setEditing(true)}
+                className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200"
+              >
+                <Pencil className="w-4 h-4" /> 編集
+              </button>
             )}
-            <StatusBadge status={meeting.status} />
+            <button
+              onClick={handleExportToClipboard}
+              className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-full hover:bg-gray-200"
+            >
+              {exported ? <><Check className="w-4 h-4 text-green-600" /> コピー済み</> : <><ClipboardCopy className="w-4 h-4" /> Notionへ</>}
+            </button>
+            <button
+              onClick={handleShowDecisions}
+              className={`flex items-center gap-1 px-3 py-1.5 text-sm rounded-full ${showDecisions ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+            >
+              <CheckCircle2 className="w-4 h-4" /> 過去決定
+            </button>
+            <button
+              onClick={handleRegenerate}
+              disabled={regenerating}
+              className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-full hover:bg-gray-200 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${regenerating ? 'animate-spin' : ''}`} /> 再生成
+            </button>
+            {meeting.chunks.length > 0 && (
+              <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                {meeting.chunks.length} チャンク
+              </span>
+            )}
           </div>
         </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
-        {/* Processing State */}
-        {isProcessing && (
-          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-6 mb-6 flex items-center gap-4">
-            <Loader2 className="w-6 h-6 text-indigo-500 animate-spin flex-shrink-0" />
-            <div>
-              <p className="font-medium text-indigo-800">
-                {meeting.status === 'transcribing' ? '音声を文字起こし中...' : '議事録を生成中...'}
-              </p>
-              <p className="text-sm text-indigo-600 mt-1">
-                完了まで少々お待ちください。このページは自動更新されます。
-              </p>
-            </div>
+        {/* Past Decisions Panel */}
+        {showDecisions && (
+          <div className="mb-6 bg-white border border-gray-200 rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-green-600" />
+              過去の決定事項 {meeting.project_name && <span className="text-xs text-gray-400">({meeting.project_name})</span>}
+            </h3>
+            {pastDecisions.length === 0 ? (
+              <p className="text-sm text-gray-400">過去の決定事項はありません</p>
+            ) : (
+              <ul className="space-y-2 max-h-48 overflow-y-auto">
+                {pastDecisions.map((d: any) => (
+                  <li key={d.id} className="flex items-start gap-2 text-sm">
+                    <span className="text-xs text-gray-400 font-mono shrink-0 mt-0.5">{d.meeting_date?.slice(0, 10)}</span>
+                    <span className="text-gray-700">{d.content}</span>
+                    <span className="text-xs text-gray-400 shrink-0">({d.meeting_title})</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 
-        {/* Error State */}
-        {meeting.status === 'error' && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-6 mb-6">
-            <div className="flex items-center gap-2 text-red-700 font-medium">
-              <AlertTriangle className="w-5 h-5" />
-              エラーが発生しました
-            </div>
-            <p className="text-sm text-red-600 mt-2">{meeting.error_message}</p>
-          </div>
-        )}
+        {/* Audio Player */}
+        <div className="mb-6">
+          <MeetingAudioPlayer
+            sessionId={parseInt(meetingId)}
+            seekToSec={audioSeekSec}
+            onTimeUpdate={setAudioCurrentSec}
+          />
+        </div>
 
         {/* Tabs */}
-        {meeting.status === 'completed' && (
-          <>
-            <div className="flex gap-1 mb-6 bg-gray-100 rounded-lg p-1 w-fit">
-              <button
-                onClick={() => setActiveTab('minutes')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                  activeTab === 'minutes'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                議事録
-              </button>
-              <button
-                onClick={() => setActiveTab('transcript')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                  activeTab === 'transcript'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                全文文字起こし
-              </button>
-            </div>
+        <div className="flex gap-1 mb-6 bg-gray-100 rounded-lg p-1 w-fit">
+          <button
+            onClick={() => setActiveTab('summary')}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              activeTab === 'summary'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            サマリー
+          </button>
+          <button
+            onClick={() => setActiveTab('timeline')}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              activeTab === 'timeline'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            タイムライン
+          </button>
+          <button
+            onClick={() => setActiveTab('transcript')}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              activeTab === 'transcript'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            全文文字起こし
+          </button>
+        </div>
 
-            {activeTab === 'minutes' ? (
-              <div className="space-y-6">
-                {/* Summary */}
-                {meeting.summary && (
-                  <Section title="概要">
-                    {editing ? (
-                      <textarea
-                        value={editSummary}
-                        onChange={e => setEditSummary(e.target.value)}
-                        rows={4}
-                        className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
-                      />
-                    ) : (
-                      <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{meeting.summary}</p>
-                    )}
-                  </Section>
+        {activeTab === 'summary' ? (
+          <div className="space-y-6">
+            {/* AI Summary */}
+            {meeting.summary ? (
+              <Section title="AI サマリー">
+                {editing ? (
+                  <textarea
+                    value={editSummary}
+                    onChange={e => setEditSummary(e.target.value)}
+                    rows={8}
+                    className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
+                  />
+                ) : (
+                  <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{meeting.summary}</p>
                 )}
+              </Section>
+            ) : (
+              <Section title="AI サマリー">
+                <p className="text-gray-400 text-sm">
+                  サマリーがありません。「再生成」ボタンでサマリーを生成できます。
+                </p>
+              </Section>
+            )}
 
-                {/* Agenda Items */}
-                {meeting.agenda_items.length > 0 && (
-                  <Section title="議題">
-                    <div className="space-y-4">
-                      {meeting.agenda_items.map((item, i) => (
-                        <div key={i} className="border-l-2 border-indigo-300 pl-4">
-                          <h4 className="font-medium text-gray-800">{item.topic}</h4>
-                          <p className="text-sm text-gray-600 mt-1">{item.summary}</p>
-                          {item.details && (
-                            <p className="text-sm text-gray-500 mt-1">{item.details}</p>
+            {/* Notes */}
+            {meeting.notes && (
+              <Section title="メモ">
+                <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{meeting.notes}</p>
+              </Section>
+            )}
+
+            {/* Live Notes with Convert Buttons */}
+            {liveNotes.length > 0 && (
+              <Section title="ライブメモ">
+                <div className="space-y-1.5">
+                  {liveNotes.map((note: any) => {
+                    const typeConfig: Record<string, { icon: typeof MessageSquare; label: string; color: string }> = {
+                      memo: { icon: MessageSquare, label: 'メモ', color: 'text-gray-500' },
+                      decision: { icon: CheckCircle2, label: '決定', color: 'text-green-600' },
+                      action: { icon: Target, label: 'アクション', color: 'text-blue-600' },
+                      risk: { icon: AlertTriangle, label: 'リスク', color: 'text-amber-600' },
+                    };
+                    const cfg = typeConfig[note.note_type] || typeConfig.memo;
+                    const Icon = cfg.icon;
+                    const ts = note.timestamp_sec != null
+                      ? `${String(Math.floor(note.timestamp_sec / 60)).padStart(2, '0')}:${String(note.timestamp_sec % 60).padStart(2, '0')}`
+                      : '';
+                    return (
+                      <div key={note.id} className="group flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-gray-50">
+                        <span className="text-xs font-mono text-blue-500 w-12 text-right shrink-0">{ts}</span>
+                        <Icon className={`w-3.5 h-3.5 shrink-0 ${cfg.color}`} />
+                        <span className="flex-1 text-sm text-gray-700">{note.content}</span>
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          {convertedNotes[note.id] ? (
+                            <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">
+                              {convertedNotes[note.id].startsWith('issue:') ? `課題 #${convertedNotes[note.id].split(':')[1]}` : `タスク #${convertedNotes[note.id].split(':')[1]}`}
+                            </span>
+                          ) : (
+                            <>
+                              <button onClick={() => handleConvertNoteToIssue(note)} title="課題に登録" className="p-1 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded">
+                                <CircleDot className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => handleConvertNoteToTask(note)} title="タスクに登録" className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded">
+                                <ListTodo className="w-3.5 h-3.5" />
+                              </button>
+                            </>
                           )}
                         </div>
-                      ))}
-                    </div>
-                  </Section>
-                )}
-
-                {/* Decisions */}
-                {meeting.decisions.length > 0 && (
-                  <Section title="決定事項" icon={<CheckCircle2 className="w-5 h-5 text-green-600" />}>
-                    <ul className="space-y-2">
-                      {meeting.decisions.map((d, i) => (
-                        <li key={i} className="flex items-start gap-2">
-                          <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                          <div>
-                            <span className="text-gray-700">{d.content}</span>
-                            {d.by && <span className="text-sm text-gray-500 ml-2">({d.by})</span>}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </Section>
-                )}
-
-                {/* Action Items */}
-                {meeting.action_items.length > 0 && (
-                  <Section title="アクションアイテム" icon={<ListChecks className="w-5 h-5 text-blue-600" />}>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="text-left text-gray-500 border-b">
-                            <th className="pb-2 pr-4">タスク</th>
-                            <th className="pb-2 pr-4">担当者</th>
-                            <th className="pb-2">期限</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {meeting.action_items.map((a, i) => (
-                            <tr key={i} className="border-b border-gray-100">
-                              <td className="py-2 pr-4 text-gray-700">{a.task}</td>
-                              <td className="py-2 pr-4 text-gray-600">{a.assignee || '-'}</td>
-                              <td className="py-2 text-gray-600">{a.deadline || '-'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </Section>
-                )}
-
-                {/* Open Issues */}
-                {meeting.open_issues.length > 0 && (
-                  <Section title="未解決事項" icon={<CircleDot className="w-5 h-5 text-amber-600" />}>
-                    <ul className="space-y-2">
-                      {meeting.open_issues.map((o, i) => (
-                        <li key={i} className="flex items-start gap-2">
-                          <CircleDot className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
-                          <div>
-                            <span className="text-gray-700">{o.content}</span>
-                            {o.context && (
-                              <p className="text-sm text-gray-500 mt-0.5">{o.context}</p>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </Section>
-                )}
-                {/* 課題に変換 */}
-                {(meeting.action_items.length > 0 || meeting.open_issues.length > 0) && (
-                  <div className="bg-white rounded-xl border border-gray-200 p-5">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                        <ClipboardList className="w-4 h-4 text-indigo-600" />
-                        課題因果グラフに追加
-                      </h3>
-                      <button
-                        onClick={handleExtractIssues}
-                        disabled={extracting}
-                        className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1"
-                      >
-                        {extracting ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                        候補を抽出
-                      </button>
-                    </div>
-                    {issueCandidates.length > 0 && (
-                      <div className="space-y-2">
-                        {issueCandidates.map((c, i) => (
-                          <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-gray-50">
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm text-gray-800 truncate">{c.title}</p>
-                              <p className="text-xs text-gray-400">
-                                {c.source === 'action_item' ? 'アクションアイテム' : '未解決事項'}
-                                {c.assignee ? ` / ${c.assignee}` : ''}
-                              </p>
-                            </div>
-                            {createdIssues.has(i) ? (
-                              <span className="text-xs text-green-600 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> 追加済み
-                              </span>
-                            ) : (
-                              <button
-                                onClick={() => handleCreateIssue(i)}
-                                className="text-xs px-2 py-1 border border-indigo-300 text-indigo-600 rounded-lg hover:bg-indigo-50"
-                              >
-                                追加
-                              </button>
-                            )}
-                          </div>
-                        ))}
                       </div>
-                    )}
-                    {issueCandidates.length === 0 && !extracting && (
-                      <p className="text-xs text-gray-400">「候補を抽出」ボタンで議事録から課題候補を取り出せます</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : (
-              /* Transcript Tab */
-              <div className="bg-white rounded-xl border border-gray-200 p-6">
-                <p className="text-gray-700 leading-relaxed whitespace-pre-wrap text-sm">
-                  {meeting.full_transcript}
-                </p>
-              </div>
+                    );
+                  })}
+                </div>
+              </Section>
             )}
-          </>
+
+            {/* Extract Tasks */}
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                  <ListChecks className="w-4 h-4 text-gray-600" />
+                  タスク自動作成
+                </h3>
+                <button
+                  onClick={handleExtractTasks}
+                  disabled={extractingTasks}
+                  className="text-xs px-3 py-1.5 bg-gray-800 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 flex items-center gap-1"
+                >
+                  {extractingTasks ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                  タスクを作成
+                </button>
+              </div>
+              {createdTasks.length > 0 && (
+                <div className="space-y-2">
+                  {createdTasks.map((t: any, i: number) => (
+                    <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-gray-50">
+                      <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-800 truncate">{t.title}</p>
+                        <p className="text-xs text-gray-400">
+                          {t.assignee ? `担当: ${t.assignee}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {createdTasks.length === 0 && !extractingTasks && (
+                <p className="text-xs text-gray-400">「タスクを作成」ボタンでサマリーからアクションアイテムを自動抽出してタスク登録します</p>
+              )}
+            </div>
+
+            {/* Entity Links + Tags (Phase 1B) */}
+            <EntityLinksPanel sessionId={parseInt(meetingId)} />
+          </div>
+        ) : activeTab === 'timeline' ? (
+          /* Timeline Tab */
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <MeetingTimeline
+              sessionId={parseInt(meetingId)}
+              currentTimeSec={audioCurrentSec}
+              onSeek={(sec) => setAudioSeekSec(sec)}
+            />
+          </div>
+        ) : (
+          /* Transcript Tab */
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            {meeting.full_transcript ? (
+              <p className="text-gray-700 leading-relaxed whitespace-pre-wrap text-sm">
+                {meeting.full_transcript}
+              </p>
+            ) : (
+              <p className="text-gray-400 text-sm">文字起こしデータがありません</p>
+            )}
+          </div>
         )}
       </main>
     </div>
@@ -463,20 +491,5 @@ function Section({ title, icon, children }: { title: string; icon?: React.ReactN
       </h3>
       {children}
     </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const config: Record<string, { label: string; color: string }> = {
-    transcribing: { label: '文字起こし中', color: 'bg-blue-100 text-blue-700' },
-    generating: { label: '議事録生成中', color: 'bg-indigo-100 text-indigo-700' },
-    completed: { label: '完了', color: 'bg-green-100 text-green-700' },
-    error: { label: 'エラー', color: 'bg-red-100 text-red-700' },
-  };
-  const c = config[status] || { label: status, color: 'bg-gray-100 text-gray-700' };
-  return (
-    <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${c.color}`}>
-      {c.label}
-    </span>
   );
 }

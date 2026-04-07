@@ -4,6 +4,7 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+from config import CONTEXTUAL_CHUNKING_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,12 @@ _HEADER_SPLIT_RE = re.compile(r'(?m)(?=^(?:#{1,3}\s+|\[\[PAGE_\d+\]\]))', )
 
 # [[PAGE_N]] マーカーからページ番号を抽出する正規表現
 _PAGE_MARKER_RE = re.compile(r'\[\[PAGE_(\d+)\]\]')
+
+# Markdown テーブルパターン（ヘッダー行 + 区切り行 + データ行群）
+_TABLE_PATTERN = re.compile(
+    r'(\|[^\n]+\|\n\|[-:| ]+\|\n(?:\|[^\n]+\|\n?)*)',
+    re.MULTILINE
+)
 
 
 class ChunkBuilder:
@@ -129,19 +136,30 @@ class ChunkBuilder:
                 if len(clean_leaf) < 50:
                     continue
 
+                # Contextual header: メタデータから文脈ヘッダーを生成
+                if CONTEXTUAL_CHUNKING_ENABLED:
+                    contextual_content = self._build_contextual_content(
+                        clean_leaf, source_file, section_title, leaf_page,
+                        source_metadata.get("doc_type", ""),
+                        source_metadata.get("category", ""),
+                    )
+                else:
+                    contextual_content = clean_leaf
+
                 # 決定論的ID
                 leaf_id = f"leaf_{version_id}_{i}_{j}"
                 leaf_chunk = {
                     "id": leaf_id,
                     "version_id": version_id,
                     "chunk_type": "leaf",
-                    "content": clean_leaf,
+                    "content": contextual_content,
                     "metadata": {
                         "section_id": chunk_id,
                         "section_title": section_title,
                         "leaf_index": j,
                         "page_number": leaf_page,
                         "source_file": source_file,
+                        "has_contextual_header": True,
                         **source_metadata
                     }
                 }
@@ -196,6 +214,48 @@ class ChunkBuilder:
                 break
         return resolved
 
+    @staticmethod
+    def _build_contextual_content(
+        chunk_text: str,
+        source_file: str,
+        section_title: str,
+        page_number: Optional[int],
+        doc_type: str,
+        category: str,
+    ) -> str:
+        """チャンクにメタデータ由来の文脈ヘッダーを付加する (Contextual Chunking)。
+
+        Anthropic方式: 各チャンクの先頭に「このチャンクが何の文書のどの部分か」を
+        短いテキストで付加し、検索時の文脈情報を補う。検索精度49%改善 (Anthropic検証)。
+
+        API呼び出しなし。メタデータから決定論的に生成するため高速・無コスト。
+        """
+        # doc_type の日本語ラベル
+        type_labels = {
+            "law": "法規・基準",
+            "drawing": "図面",
+            "spec": "仕様書",
+            "catalog": "カタログ",
+        }
+        type_label = type_labels.get(doc_type, "文書")
+
+        # ファイル名から拡張子を除去して表示名に
+        doc_name = Path(source_file).stem if source_file else "不明"
+
+        # ヘッダー構築
+        parts = [f"[{type_label}]"]
+        if doc_name:
+            parts.append(doc_name)
+        if category:
+            parts.append(f"({category})")
+        if section_title:
+            parts.append(f"- {section_title}")
+        if page_number:
+            parts.append(f"p.{page_number}")
+
+        header = " ".join(parts)
+        return f"{header}\n{chunk_text}"
+
     def _split_by_headers(self, text: str) -> List[str]:
         """
         Markdownの見出しでテキストを分割。
@@ -215,8 +275,50 @@ class ChunkBuilder:
     def _split_into_leaves(self, text: str, size: int, overlap: int) -> List[str]:
         """
         テキストを日本語文末（句点・感嘆符・疑問符・改行）境界を優先して分割。
+        Markdownテーブルは分割せず独立チャンクとして保持する。
         境界が見つからない場合は固定サイズでフォールバック。
         """
+        if not text:
+            return []
+
+        # テーブルを検出し、テーブル部分と非テーブル部分に分離
+        segments = self._split_preserving_tables(text)
+        chunks = []
+        for segment_text, is_table in segments:
+            if is_table:
+                # テーブルは分割せずそのまま1チャンクとして追加
+                stripped = segment_text.strip()
+                if stripped:
+                    chunks.append(stripped)
+            else:
+                # 非テーブル部分は従来通り分割
+                chunks.extend(self._split_text_into_leaves(segment_text, size, overlap))
+        return chunks
+
+    @staticmethod
+    def _split_preserving_tables(text: str) -> List[Tuple[str, bool]]:
+        """テキストをテーブル部分と非テーブル部分に分離する。
+        戻り値: [(テキスト, is_table), ...]
+        """
+        segments: List[Tuple[str, bool]] = []
+        last_end = 0
+        for m in _TABLE_PATTERN.finditer(text):
+            # テーブル前の非テーブル部分
+            if m.start() > last_end:
+                segments.append((text[last_end:m.start()], False))
+            # テーブル部分
+            segments.append((m.group(0), True))
+            last_end = m.end()
+        # テーブル後の残り
+        if last_end < len(text):
+            segments.append((text[last_end:], False))
+        if not segments:
+            segments.append((text, False))
+        return segments
+
+    @staticmethod
+    def _split_text_into_leaves(text: str, size: int, overlap: int) -> List[str]:
+        """テキストを日本語文末境界優先で分割する（テーブル非含有テキスト用）。"""
         if not text:
             return []
         chunks = []

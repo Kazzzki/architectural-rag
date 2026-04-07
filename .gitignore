@@ -41,3 +41,4 @@ antigravity.db
 app.log*
 *.db
 research_vault/
+.gstack/

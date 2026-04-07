@@ -6,8 +6,8 @@ import logging
 import json
 import concurrent.futures
 from datetime import datetime, timezone
-from retriever import search, build_context, get_source_files
-from generator import generate_answer, generate_answer_stream, generate_answer_direct, generate_answer_stream_direct
+from retriever import search, build_context, build_context_with_evidence, get_source_files, resolve_evidence_source_ids
+from generator import generate_answer, generate_answer_stream, generate_answer_direct, generate_answer_stream_direct, verify_groundedness
 from database import get_db, ChatSession, ChatMessage
 from sqlalchemy.orm import Session
 from backend.conversation_scope import ConversationScope
@@ -72,6 +72,8 @@ class ChatResponse(BaseModel):
     answer: str
     sources: List[dict]
     web_sources: Optional[List[dict]] = None
+    evidence_trail: Optional[List[dict]] = None
+    confidence: Optional[dict] = None
 
 class SessionResponse(BaseModel):
     id: str
@@ -219,6 +221,7 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
     answer = ""
     source_files = []
     web_sources = None
+    evidence_trail = []
     
     try:
         if request.use_rag or request.use_web_search:
@@ -238,13 +241,14 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
                     use_rerank=use_advanced,
                 )
                 logger.info(f"Query: {request.question}, Results: {len(search_results.get('documents', []))}")
-                context = build_context(search_results)
+                context, evidence_trail = build_context_with_evidence(search_results)
                 source_files = get_source_files(search_results)
             else:
                 # ウェブ検索のみ（RAGなし）
                 logger.info(f"Web search only query: {request.question}")
                 context = ""
                 source_files = []
+                evidence_trail = []
 
             result = generate_answer(
                 request.question, context, source_files,
@@ -265,6 +269,7 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
             # --- RAGなし かつ ウェブ検索なし（LLM直接回答） ---
             logger.info(f"Direct query (no RAG, no Web Search): {request.question}")
             source_files = []
+            evidence_trail = []
             result = generate_answer_direct(
                 request.question,
                 history=request.history,
@@ -303,7 +308,16 @@ def chat(request: ChatRequest, background_tasks: BackgroundTasks, session_id: Op
                 project_id=request.project_id
             )
         
-        return ChatResponse(answer=answer, sources=source_files, web_sources=web_sources)
+        # evidence_trail の source_id を source_files と一致させる
+        if evidence_trail and source_files:
+            evidence_trail = resolve_evidence_source_ids(evidence_trail, source_files)
+
+        return ChatResponse(
+            answer=answer,
+            sources=source_files,
+            web_sources=web_sources,
+            evidence_trail=evidence_trail if evidence_trail else None,
+        )
 
     except RuntimeError as e:
         logger.error(f"Gemini API完全失敗: {e}", exc_info=True)
@@ -339,18 +353,20 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                     use_hyde=use_advanced,
                     use_rerank=use_advanced,
                 )
-                context = build_context(search_results)
+                context, evidence_trail = build_context_with_evidence(search_results)
                 source_files = get_source_files(search_results)
             else:
                 # ウェブ検索のみ（RAGなし）
                 logger.info(f"Web search direct stream query: {request.question}")
                 context = ""
                 source_files = []
+                evidence_trail = []
         else:
             # --- RAGなし かつ ウェブ検索なし（LLM直接回答） ---
             logger.info(f"Direct stream query (no RAG, no Web Search): {request.question}")
             context = ""
             source_files = []
+            evidence_trail = []
 
         history = request.history
 
@@ -360,9 +376,14 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
             web_sources_collected = []
             done_sent = False
             error_sent = False
-            
+
             # 初期情報の送出
             yield f"data: {json.dumps({'type': 'sources', 'data': source_files}, ensure_ascii=False)}\n\n"
+            # Evidence Trail を初期送出（source_id を source_files と一致させてから）
+            if evidence_trail:
+                if source_files:
+                    resolve_evidence_source_ids(evidence_trail, source_files)
+                yield f"data: {json.dumps({'type': 'evidence_trail', 'data': evidence_trail}, ensure_ascii=False)}\n\n"
 
             # 課題キャプチャをメインストリームと並列で開始（ラグ解消）
             capture_future = None
@@ -436,6 +457,15 @@ def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks, session
                         assistant_response=full_answer,
                         project_id=request.project_id
                     )
+
+                # Groundedness Check（非同期: ストリーム末尾で送信）
+                if full_answer.strip() and evidence_trail:
+                    try:
+                        confidence = verify_groundedness(full_answer, evidence_trail)
+                        if confidence:
+                            yield f"data: {json.dumps({'type': 'confidence_update', 'data': confidence}, ensure_ascii=False)}\n\n"
+                    except Exception as e:
+                        logger.warning(f"Groundedness check failed (non-critical): {e}")
 
             except Exception as e:
                 # キャプチャ未完了なら中断

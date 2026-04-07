@@ -18,9 +18,31 @@ export interface WebSource {
     url: string;
 }
 
+export interface EvidenceEntry {
+    source_id: string;
+    document_id: string;
+    pdf_path: string;
+    pdf_hash: string;
+    page: number | null;
+    excerpt: string;
+    doc_type: string;
+    category: string;
+    standard_ref: string;
+    rel_path: string;
+}
+
+export interface ConfidenceData {
+    overall: 'high' | 'medium' | 'low';
+    ungrounded_claims: string[];
+    verified_count: number;
+    total_count: number;
+}
+
 export type StreamUpdate =
     | { type: 'sources'; data: SourceFile[] }
     | { type: 'web_sources'; data: WebSource[] }
+    | { type: 'evidence_trail'; data: EvidenceEntry[] }
+    | { type: 'confidence_update'; data: ConfidenceData }
     | { type: 'answer'; data: string }
     | { type: 'error'; data: string }
     | { type: 'truncation_warning'; data: string }

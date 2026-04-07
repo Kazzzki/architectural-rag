@@ -31,7 +31,7 @@ router = APIRouter(tags=["Issues"])
 UPDATABLE_FIELDS = {
     "status", "priority", "action_next", "is_collapsed",
     "pos_x", "pos_y", "project_name", "title", "description",
-    "assignee", "context_memo",
+    "assignee", "context_memo", "evidence_status",
 }
 
 
@@ -86,6 +86,7 @@ class IssueUpdateRequest(BaseModel):
     description: Optional[str] = None
     assignee: Optional[str] = None
     context_memo: Optional[str] = None
+    evidence_status: Optional[Literal['recorded', 'partial', 'unrecorded']] = None
 
 
 class MemberCreateRequest(BaseModel):
@@ -157,6 +158,12 @@ def _render_issue_markdown(issue: dict, edges: list, db) -> str:
         "## メモ (Context Memo)",
         issue.get("context_memo") or "（未入力）",
         "",
+        "## 法的リスクレベル (Legal Risk)",
+        issue.get("legal_risk_level") or "（未評価）",
+        "",
+        "## エビデンス状態 (Evidence Status)",
+        issue.get("evidence_status") or "（未設定）",
+        "",
         "## 関連課題 (Related Issues)",
         "### この課題の原因となっている課題（←）",
         causing_lines,
@@ -197,10 +204,43 @@ def _save_issue_markdown(issue_id: str, db) -> None:
         logger.error(f"[IssueMemo] ChromaDB index failed for {issue_id}: {e}")
 
 
+# ---------- RAG / Gemini 共通ヘルパー ----------
+
+def _get_rag_context(query: str, file_type: str, use_rerank: bool = True,
+                     use_query_expansion: bool = True, use_hyde: bool = True) -> tuple:
+    """RAG検索してコンテキスト文字列+ソースリストを構築。"""
+    try:
+        from retriever import search as rag_search, build_context
+        results = rag_search(
+            query, filter_file_type=file_type,
+            use_rerank=use_rerank,
+            use_query_expansion=use_query_expansion,
+            use_hyde=use_hyde,
+        )
+        context = build_context(results)
+        sources = [
+            {"title": h.get("title", ""), "rel_path": h.get("rel_path", "")}
+            for h in results.get("hits", [])[:5]
+        ]
+        return context, sources
+    except Exception as e:
+        logger.warning(f"[RAGContext] search failed: {e}")
+        return "", []
+
+
+def _parse_gemini_json(raw: str) -> dict:
+    """Gemini応答からJSON部分を抽出・パース。"""
+    import re as _re
+    cleaned = _re.sub(r'^```(?:json)?\s*', '', raw.strip())
+    cleaned = _re.sub(r'\s*```$', '', cleaned)
+    return json.loads(cleaned)
+
+
 ISSUE_SELECT_COLS = (
     "id, project_name, title, raw_input, category, priority, status, "
     "description, cause, impact, action_next, is_collapsed, pos_x, pos_y, "
-    "template_id, created_at, updated_at, assignee, context_memo"
+    "template_id, created_at, updated_at, assignee, context_memo, "
+    "legal_risk_level, evidence_status"
 )
 ISSUE_KEYS = [c.strip() for c in ISSUE_SELECT_COLS.split(",")]
 
@@ -210,7 +250,13 @@ EDGE_EXT_KEYS = ["id", "from_id", "to_id", "confirmed", "created_at", "label", "
 
 def _issue_row_to_dict(row) -> dict:
     """明示的カラム名ベースの変換。SELECT * ではなく ISSUE_SELECT_COLS を使うこと。"""
-    return dict(zip(ISSUE_KEYS[:len(row)], row))
+    d = dict(zip(ISSUE_KEYS[:len(row)], row))
+    # evidence_gap: 法的リスクが中以上でエビデンス未記録なら True
+    d["evidence_gap"] = (
+        d.get("legal_risk_level") in ("high", "medium")
+        and d.get("evidence_status") != "recorded"
+    )
+    return d
 
 
 def _edge_row_to_dict(row) -> dict:
@@ -267,7 +313,7 @@ def _call_gemini_capture(raw_input: str, existing_issues: list) -> dict:
         pass
 
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
+        model="gemini-3-flash-preview",
         contents=prompt,
         config=config,
     )
@@ -420,7 +466,7 @@ def _generate_triage_questions(project_name: str, template_id: str, db) -> dict:
         temperature=0.1,
     )
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
+        model="gemini-3-flash-preview",
         contents=prompt,
         config=config,
     )
@@ -640,7 +686,7 @@ async def capture_issue_from_photo(
             temperature=0.1,
         )
         vision_response = client.models.generate_content(
-            model="gemini-3.1-flash-lite",
+            model="gemini-3-flash-preview",
             contents=[image_part, vision_prompt],
             config=config,
         )
@@ -1222,7 +1268,7 @@ def related_memos(issue_id: str, top_k: int = 5, db=Depends(get_db)):
 # --- AI深掘り調査 ---
 
 class AIInvestigateRequest(BaseModel):
-    type: Literal['rca', 'impact', 'countermeasure']
+    type: Literal['rca', 'impact', 'countermeasure', 'technical', 'legal']
 
 
 def _traverse_causal_chain(issue_id: str, db, max_depth: int = 3, max_nodes: int = 100) -> list[dict]:
@@ -1254,7 +1300,7 @@ def _traverse_causal_chain(issue_id: str, db, max_depth: int = 3, max_nodes: int
 
 @router.post("/api/issues/{issue_id}/ai-investigate")
 def ai_investigate(issue_id: str, req: AIInvestigateRequest, db=Depends(get_db)):
-    """ノード単位のAI深掘り調査（RCA/影響分析/対策提案）"""
+    """ノード単位のAI深掘り調査（RCA/影響/対策/技術解説/法的リスク）"""
     import concurrent.futures
     from gemini_client import get_client
     from google.genai import types
@@ -1270,38 +1316,332 @@ def ai_investigate(issue_id: str, req: AIInvestigateRequest, db=Depends(get_db))
         for iss in chain
     )
 
+    # Input quality warning for technical/legal modes
+    input_warning = ""
+    if req.type in ("technical", "legal"):
+        if not target.get("description") and not target.get("cause"):
+            input_warning = "⚠️ 説明・原因が未入力のため、分析精度が低い可能性があります。\n\n"
+
+    # --- RAG context for technical/legal modes ---
+    rag_context = ""
+    sources = []
+    if req.type == "legal":
+        query = f"{target['title']} {target.get('description') or ''} {target.get('cause') or ''}"
+        rag_context, sources = _get_rag_context(query, "law")
+    elif req.type == "technical":
+        query = f"{target['title']} {target.get('description') or ''} 技術基準 仕様"
+        rag_context, sources = _get_rag_context(query, "spec")
+
+    rag_section = f"\n\n関連コンテキスト:\n{rag_context}" if rag_context else ""
+
     prompts = {
         "rca": f"以下の課題の根本原因を「なぜなぜ分析」で特定してください。\n\n対象課題: {target['title']}\n説明: {target.get('description') or '未入力'}\n推定原因: {target.get('cause') or '未入力'}\n\n因果チェーン上の関連課題:\n{chain_str}\n\n5つの「なぜ」を使い、根本原因を特定し、具体的な対策を提案してください。日本語で200字以内。",
         "impact": f"以下の課題が解決されない場合の波及影響を分析してください。\n\n対象課題: {target['title']}\n説明: {target.get('description') or '未入力'}\n影響: {target.get('impact') or '未入力'}\n\n因果チェーン上の関連課題:\n{chain_str}\n\n下流への波及影響を具体的に列挙してください。日本語で200字以内。",
         "countermeasure": f"以下の課題に対する具体的な対策を提案してください。\n\n対象課題: {target['title']}\n説明: {target.get('description') or '未入力'}\n原因: {target.get('cause') or '未入力'}\n\n因果チェーン上の関連課題:\n{chain_str}\n\n即効性のある対策と根本対策をそれぞれ提案してください。日本語で200字以内。",
+        "technical": f"以下の建設課題の技術コンテキストを解説してください。\n\n対象課題: {target['title']}\n説明: {target.get('description') or '未入力'}\n原因: {target.get('cause') or '未入力'}\n\n因果チェーン上の関連課題:\n{chain_str}{rag_section}\n\n以下を提供:\n1. 平易な説明（発注者報告用、専門用語を避ける）\n2. 技術的リスク重大度（高/中/低）と根拠\n3. 関連する技術基準・仕様書の参照（条文番号付き）\n4. 一般的な是正アプローチ\n日本語で300字以内。",
+        "legal": f"以下の建設課題の法的リスクを評価してください。\n\n対象課題: {target['title']}\n説明: {target.get('description') or '未入力'}\n原因: {target.get('cause') or '未入力'}\n影響: {target.get('impact') or '未入力'}\n\n因果チェーン上の関連課題:\n{chain_str}{rag_section}\n\n分析観点:\n1. 契約リスク（設計変更手続き不備、口頭指示の文書化漏れ、契約不適合責任）\n2. 法規制リスク（建築基準法・消防法・労安法の違反可能性）\n3. クレームリスク（工期遅延LD、追加費用請求の根拠）\n4. エビデンス保全（記録すべき証拠の推奨）\n\nJSON形式で返答: {{\"analysis\": \"分析結果300字以内\", \"legal_risk_level\": \"high|medium|low\", \"evidence_recommendations\": [\"推奨エビデンス\"]}}",
+    }
+
+    # Model selection: higher quality for legal (high stakes)
+    model_map = {
+        "rca": "gemini-3-flash-preview",
+        "impact": "gemini-3-flash-preview",
+        "countermeasure": "gemini-3-flash-preview",
+        "technical": "gemini-3-flash-preview",
+        "legal": "gemini-3-flash-preview",
+    }
+    system_map = {
+        "rca": "建設PM/CMの課題分析アシスタント。簡潔かつ具体的に日本語で回答せよ。",
+        "impact": "建設PM/CMの課題分析アシスタント。簡潔かつ具体的に日本語で回答せよ。",
+        "countermeasure": "建設PM/CMの課題分析アシスタント。簡潔かつ具体的に日本語で回答せよ。",
+        "technical": "建設PM/CMの技術アドバイザー。専門用語を平易に解説し、関連技術基準を正確に参照せよ。",
+        "legal": "建設PM/CMの法的リスク分析アシスタント。契約・法規制・クレームリスクを評価しJSON形式で返答せよ。",
     }
 
     try:
         client = get_client()
         config = types.GenerateContentConfig(
-            system_instruction="建設PM/CMの課題分析アシスタント。簡潔かつ具体的に日本語で回答せよ。",
-            temperature=0.3,
+            system_instruction=system_map[req.type],
+            temperature=0.2 if req.type == "legal" else 0.3,
         )
 
         def call_gemini():
             return client.models.generate_content(
-                model="gemini-3.1-flash-lite", contents=prompts[req.type], config=config,
+                model=model_map[req.type], contents=prompts[req.type], config=config,
             )
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(call_gemini)
             response = future.result(timeout=30)
 
-        return {
+        raw_text = response.text.strip()
+        result_data = {
             "type": req.type,
-            "result": response.text.strip(),
+            "result": input_warning + raw_text,
             "related_issue_ids": [iss["id"] for iss in chain if iss["id"] != issue_id],
         }
+
+        # Legal mode: parse JSON response and add structured fields
+        if req.type == "legal":
+            try:
+                parsed = _parse_gemini_json(raw_text)
+                result_data["result"] = input_warning + parsed.get("analysis", raw_text)
+                result_data["suggested_level"] = parsed.get("legal_risk_level", "medium")
+                result_data["evidence_recommendations"] = parsed.get("evidence_recommendations", [])
+            except (json.JSONDecodeError, Exception):
+                # Gemini returned plain text instead of JSON; use raw text
+                result_data["suggested_level"] = "medium"
+                result_data["evidence_recommendations"] = []
+
+        # Add RAG sources for technical/legal
+        if req.type in ("technical", "legal") and sources:
+            result_data["sources"] = sources
+
+        return result_data
     except concurrent.futures.TimeoutError:
         raise HTTPException(status_code=504, detail="AI分析がタイムアウトしました（30秒）。後でお試しください。")
     except Exception as e:
         logger.error(f"[AIInvestigate] failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"AI分析エラー: {str(e)}")
+
+
+# --- 法的リスク確認 (D2) ---
+
+class ConfirmLegalRiskRequest(BaseModel):
+    legal_risk_level: Literal['high', 'medium', 'low']
+
+
+@router.post("/api/issues/{issue_id}/confirm-legal-risk")
+def confirm_legal_risk(issue_id: str, req: ConfirmLegalRiskRequest, db=Depends(get_db)):
+    """ユーザー確認後に法的リスクレベルをDBに保存し、監査ノートを記録"""
+    row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    now = _now_iso()
+    db.execute(
+        text("UPDATE issues SET legal_risk_level = :lvl, updated_at = :now WHERE id = :id"),
+        {"lvl": req.legal_risk_level, "now": now, "id": issue_id},
+    )
+
+    # 監査証跡: issue_noteに法的リスク評価を記録
+    note_id = str(uuid.uuid4())
+    db.execute(
+        text("INSERT INTO issue_notes (id, issue_id, author, content, created_at) VALUES (:id, :iid, :author, :content, :now)"),
+        {
+            "id": note_id,
+            "iid": issue_id,
+            "author": "AI法的リスク評価",
+            "content": f"法的リスクレベルを「{req.legal_risk_level}」に設定しました。",
+            "now": now,
+        },
+    )
+    db.commit()
+
+    # メモ再インデックス
+    _save_issue_markdown(issue_id, db)
+
+    updated = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    return _issue_row_to_dict(updated)
+
+
+# --- エビデンス推奨 (D4) ---
+
+EVIDENCE_MAP = {
+    '品質': ["写真記録", "検査報告書", "是正指示書"],
+    'コスト': ["見積書", "変更指示書", "承認記録"],
+    '工程': ["工程表更新履歴", "遅延通知書", "打合せ議事録"],
+    '安全': ["KY記録", "安全パトロール記録", "災害報告書"],
+}
+
+EVIDENCE_HIGH_RISK_EXTRA = {
+    '品質': ["品質試験結果", "第三者検査記録"],
+    'コスト': ["契約変更書", "精算根拠資料"],
+    '工程': ["遅延分析レポート", "書面通知記録"],
+    '安全': ["労基署届出", "安全管理計画書"],
+}
+
+
+@router.get("/api/issues/{issue_id}/evidence-recommendations")
+def evidence_recommendations(issue_id: str, db=Depends(get_db)):
+    """カテゴリと法的リスクレベルに基づくエビデンス推奨（ルールベース）"""
+    row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    issue = _issue_row_to_dict(row)
+
+    category = issue.get("category", "")
+    risk_level = issue.get("legal_risk_level")
+
+    base = EVIDENCE_MAP.get(category, ["打合せ議事録", "写真記録"])
+    extra = []
+    if risk_level in ("high", "medium"):
+        extra = EVIDENCE_HIGH_RISK_EXTRA.get(category, ["書面通知記録"])
+
+    # Attachment count for auto-suggestion
+    att_count = db.execute(
+        text("SELECT COUNT(*) FROM issue_attachments WHERE issue_id = :id"), {"id": issue_id}
+    ).scalar() or 0
+
+    suggested_status = None
+    if att_count > 0 and not issue.get("evidence_status"):
+        suggested_status = "partial"
+
+    return {
+        "recommendations": base + extra,
+        "attachment_count": att_count,
+        "suggested_status": suggested_status,
+    }
+
+
+# --- チェーン横断リスク分析 (D3) ---
+
+@router.post("/api/issues/{issue_id}/chain-risk-scan")
+def chain_risk_scan(issue_id: str, db=Depends(get_db)):
+    """因果チェーン全体を横断分析し、技術・法的リスク、エビデンスギャップ、推奨アクションを返す"""
+    import concurrent.futures
+    from gemini_client import get_client
+    from google.genai import types
+
+    row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    chain = _traverse_causal_chain(issue_id, db, max_depth=5, max_nodes=30)
+    if len(chain) < 2:
+        return {
+            "technical_risks": [], "legal_risks": [],
+            "evidence_gaps": [], "recommended_actions": [],
+            "scanned_issue_ids": [c["id"] for c in chain],
+        }
+
+    chain_detail = "\n".join(
+        f"- [{iss['id'][:8]}] {iss['title']}（{iss['category']}/{iss['priority']}/{iss['status']}）"
+        f"\n  説明: {(iss.get('description') or '')[:100]}"
+        f"\n  原因: {(iss.get('cause') or '')[:80]}"
+        f"\n  法的リスク: {iss.get('legal_risk_level') or '未評価'}"
+        f"\n  エビデンス: {iss.get('evidence_status') or '未設定'}"
+        for iss in chain
+    )[:4000]
+
+    # RAG context (lightweight: no expansion/HyDE/rerank to save API calls)
+    keywords = " ".join(iss["title"] for iss in chain[:5])
+    law_ctx, _ = _get_rag_context(keywords, "law", use_rerank=False, use_query_expansion=False, use_hyde=False)
+    spec_ctx, _ = _get_rag_context(keywords, "spec", use_rerank=False, use_query_expansion=False, use_hyde=False)
+    rag_context = f"{law_ctx}\n{spec_ctx}".strip()[:2000]
+
+    prompt = f"""PM/CMアドバイザーとして、以下の因果チェーン全体を横断分析してください。
+
+因果チェーン:
+{chain_detail}
+
+関連法規・技術基準コンテキスト:
+{rag_context or '（なし）'}
+
+以下のJSON形式で分析結果を返答:
+{{
+  "technical_risks": [{{"issue_id": "ID8文字", "risk": "リスク内容", "severity": "high|medium|low"}}],
+  "legal_risks": [{{"issue_id": "ID8文字", "risk": "法的リスク内容", "law_reference": "関連法規"}}],
+  "evidence_gaps": [{{"issue_id": "ID8文字", "gap": "不足エビデンス", "urgency": "high|medium|low"}}],
+  "recommended_actions": [{{"action": "推奨アクション", "priority": "high|medium|low", "target_issue_ids": ["ID8文字"]}}]
+}}"""
+
+    try:
+        client = get_client()
+        config = types.GenerateContentConfig(
+            system_instruction="建設PM/CMのリスク分析アドバイザー。因果チェーン全体を横断分析し、技術・法的リスクを特定せよ。JSON形式で返答。",
+            temperature=0.2,
+        )
+
+        def call_gemini():
+            return client.models.generate_content(
+                model="gemini-3-flash-preview", contents=prompt, config=config,
+            )
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(call_gemini)
+            response = future.result(timeout=45)
+
+        parsed = _parse_gemini_json(response.text.strip())
+        # Whitelist expected keys to prevent LLM output injection
+        return {
+            "technical_risks": parsed.get("technical_risks", [])[:10],
+            "legal_risks": parsed.get("legal_risks", [])[:10],
+            "evidence_gaps": parsed.get("evidence_gaps", [])[:10],
+            "recommended_actions": parsed.get("recommended_actions", [])[:10],
+            "scanned_issue_ids": [c["id"] for c in chain],
+        }
+    except concurrent.futures.TimeoutError:
+        # Partial results on timeout
+        return {
+            "technical_risks": [], "legal_risks": [],
+            "evidence_gaps": [], "recommended_actions": [],
+            "scanned_issue_ids": [c["id"] for c in chain],
+            "warning": "分析がタイムアウトしました（45秒）。チェーンが大きすぎる可能性があります。",
+        }
+    except Exception as e:
+        logger.error(f"[ChainRiskScan] failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"チェーンリスク分析エラー: {str(e)}")
+
+
+# --- 技術基準クイックリファレンス (D5) ---
+
+@router.get("/api/issues/{issue_id}/related-standards")
+def related_standards(issue_id: str, db=Depends(get_db)):
+    """課題に関連する技術基準・法規のカード形式リファレンスを返す"""
+    import concurrent.futures
+    from gemini_client import get_client
+    from google.genai import types
+
+    row = db.execute(text(f"SELECT {ISSUE_SELECT_COLS} FROM issues WHERE id = :id"), {"id": issue_id}).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    issue = _issue_row_to_dict(row)
+
+    query = f"{issue['title']} {issue.get('description') or ''} {issue.get('cause') or ''}"
+    spec_context, spec_sources = _get_rag_context(query.strip(), "spec")
+    law_context, law_sources = _get_rag_context(query.strip(), "law")
+    rag_context = f"{spec_context}\n\n{law_context}".strip()
+
+    if not rag_context:
+        return {"standards": [], "sources": []}
+
+    prompt = f"""以下のRAG検索結果から、課題「{issue['title']}」に関連する技術基準・法規のカードを生成してください。
+
+RAGコンテキスト:
+{rag_context[:3000]}
+
+JSON配列で返答（最大5件）:
+[{{"standard_name":"基準名","clause":"条文番号","key_values":"主要数値・基準値","relevance":"この課題との関連性（20字以内）"}}]"""
+
+    try:
+        client = get_client()
+        config = types.GenerateContentConfig(
+            system_instruction="建築技術基準の参照アシスタント。正確な条文番号と数値を引用し、JSON形式で返答せよ。",
+            temperature=0.1,
+        )
+
+        def call_gemini():
+            return client.models.generate_content(
+                model="gemini-3-flash-preview", contents=prompt, config=config,
+            )
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(call_gemini)
+            response = future.result(timeout=30)
+
+        standards = _parse_gemini_json(response.text.strip())
+        if isinstance(standards, list):
+            standards = standards[:5]
+        else:
+            standards = []
+
+        return {"standards": standards, "sources": spec_sources + law_sources}
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(status_code=504, detail="技術基準検索がタイムアウトしました")
+    except Exception as e:
+        logger.error(f"[RelatedStandards] failed: {e}", exc_info=True)
+        return {"standards": [], "sources": []}
 
 
 # --- AI因果推定 ---
@@ -1366,7 +1706,7 @@ def ai_infer_causation(req: AIInferCausationRequest, db=Depends(get_db)):
 
         def call_gemini():
             return client.models.generate_content(
-                model="gemini-3.1-flash-lite", contents=prompt, config=config,
+                model="gemini-3-flash-preview", contents=prompt, config=config,
             )
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -1474,7 +1814,7 @@ def health_check(project_name: str, db=Depends(get_db)):
                 system_instruction="建設PM/CMの因果分析アシスタント。JSON形式のみで返答。", temperature=0.2,
             )
             def call_gemini():
-                return client.models.generate_content(model="gemini-3.1-flash-lite", contents=prompt, config=config)
+                return client.models.generate_content(model="gemini-3-flash-preview", contents=prompt, config=config)
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(call_gemini)
                 response = future.result(timeout=30)

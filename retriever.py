@@ -21,7 +21,7 @@ from config import (
     RERANK_THRESHOLD,
     RERANK_CANDIDATE_COUNT,
 )
-from indexer import GeminiEmbeddingFunction, get_query_embedding, load_parent_chunk
+from indexer import get_query_embedding, load_parent_chunk
 from dense_indexer import get_chroma_client
 from lexical_indexer import LexicalIndexer
 from gemini_client import get_client
@@ -31,12 +31,10 @@ from google.genai import types
 
 # ─── Collection ────────────────────────────────────────────────────────────────
 def get_collection():
-    """ChromaDB コレクションを取得"""
+    """ChromaDB コレクションを取得（検索用: embedding は query_embeddings で直接渡すため embedding_function 不要）"""
     client = get_chroma_client()
-    embedding_function = GeminiEmbeddingFunction()
     return client.get_or_create_collection(
         name=COLLECTION_NAME,
-        embedding_function=embedding_function,
     )
 
 
@@ -415,17 +413,35 @@ def _is_similar(text_a: str, text_b: str, threshold: float = 0.8) -> bool:
 # ─── コンテキスト構築 ──────────────────────────────────────────────────────────
 def build_context(search_results: Dict[str, Any]) -> str:
     """
-    検索結果からコンテキスト文字列を構築。
-    v4: ドキュメント単位でグルーピング、ページ順ソート、重複除去。
+    検索結果からコンテキスト文字列を構築。後方互換ラッパー。
+    evidence_trail も必要な場合は build_context_with_evidence() を使用。
+    """
+    context, _ = build_context_with_evidence(search_results)
+    return context
+
+
+def build_context_with_evidence(search_results: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    検索結果からコンテキスト文字列 + evidence_trail を構築。
+    v5: Evidence Trail 対応。ドキュメント単位グルーピング、
+        Lost-in-the-Middle サンドイッチ配置、重複除去。
+
+    Returns:
+        (context_str, evidence_trail)
+        evidence_trail: [{
+            source_id, document_id, pdf_path, pdf_hash,
+            page, excerpt, doc_type, standard_ref
+        }]
     """
     hits = search_results.get("hits", [])
+    evidence_trail: List[Dict[str, Any]] = []
 
     if not hits:
         # 後方互換: hits がない場合は従来の documents / metadatas を使う
         documents = search_results.get("documents", [])
         metadatas = search_results.get("metadatas", [])
         if not documents:
-            return ""
+            return "", []
         context_parts = []
         for doc, meta in zip(documents, metadatas):
             meta = meta or {}
@@ -434,7 +450,7 @@ def build_context(search_results: Dict[str, Any]) -> str:
             page_info = f" (p.{page})" if page else ""
             cat = meta.get("category", "")
             context_parts.append(f"=== 出典: {source}{page_info}（{cat}）===\n{doc}")
-        return "\n\n".join(context_parts)
+        return "\n\n".join(context_parts), []
 
     # 1. ドキュメント単位でグルーピング
     doc_groups: Dict[str, List[Dict[str, Any]]] = {}
@@ -452,8 +468,8 @@ def build_context(search_results: Dict[str, Any]) -> str:
         except (ValueError, TypeError):
             return 0
 
-    # 2. 各グループ内でページ順ソート + 重複除去 + 結合
-    context_parts = []
+    # 2. 各グループ内でページ順ソート + 重複除去
+    processed_groups: List[Tuple[str, List[Dict[str, Any]], float]] = []
     for source_key, group_hits in doc_groups.items():
         group_hits.sort(key=_page_sort_key)
 
@@ -469,7 +485,33 @@ def build_context(search_results: Dict[str, Any]) -> str:
         if not unique_hits:
             continue
 
-        # ヘッダー
+        # グループの最高リランクスコア（サンドイッチ配置用）
+        group_score = max(
+            h.get("rerank_score", h.get("score", 0.0)) for h in unique_hits
+        )
+        processed_groups.append((source_key, unique_hits, group_score))
+
+    # 3. Lost-in-the-Middle サンドイッチ配置（グループ単位）
+    #    スコア順にソート後、奇数番目を先頭から、偶数番目を末尾から配置
+    processed_groups.sort(key=lambda g: g[2], reverse=True)
+    if len(processed_groups) > 2:
+        ordered = []
+        tail = []
+        for i, group in enumerate(processed_groups):
+            if i % 2 == 0:
+                ordered.append(group)
+            else:
+                tail.append(group)
+        tail.reverse()
+        ordered.extend(tail)
+        processed_groups = ordered
+
+    # 4. コンテキスト文字列 + evidence_trail 構築
+    # 注意: source_id は get_source_files() が割り当てる番号と一致させる必要がある。
+    # ここでは rel_path をキーとして保持し、source_id は後からマッピングする。
+    context_parts = []
+
+    for source_key, unique_hits, _ in processed_groups:
         meta0 = unique_hits[0].get("metadata") or {}
         source_name = meta0.get("source_pdf_name") or meta0.get("filename", "不明")
         doc_type = meta0.get("doc_type", "")
@@ -477,7 +519,7 @@ def build_context(search_results: Dict[str, Any]) -> str:
 
         header = f"━━━ 出典: {source_name}（{category}/{doc_type}）━━━"
 
-        # 各チャンクをページ単位で結合
+        # 各チャンクをページ単位で結合 + evidence_trail エントリ生成
         chunk_texts = []
         for hit in unique_hits:
             m = hit.get("metadata") or {}
@@ -486,9 +528,52 @@ def build_context(search_results: Dict[str, Any]) -> str:
             page_label = f"[p.{page}]" if page else ""
             chunk_texts.append(f"{page_label} {text}")
 
+            # evidence_trail エントリ（source_id は未割当 — 呼び出し元で解決）
+            page_int = None
+            if page:
+                try:
+                    page_int = int(page)
+                except (ValueError, TypeError):
+                    pass
+
+            excerpt = text[:200].strip() if text else ""
+            evidence_trail.append({
+                "source_id": "",  # resolve_evidence_source_ids() で後から設定
+                "document_id": m.get("version_id", ""),
+                "pdf_path": m.get("source_pdf", "") or m.get("source_pdf_name", ""),
+                "pdf_hash": m.get("source_pdf_hash", ""),
+                "page": page_int,
+                "excerpt": excerpt,
+                "doc_type": doc_type,
+                "category": category,
+                "standard_ref": m.get("standard_ref", ""),
+                "rel_path": m.get("rel_path", ""),
+            })
+
         context_parts.append(f"{header}\n" + "\n---\n".join(chunk_texts))
 
-    return "\n\n".join(context_parts)
+    return "\n\n".join(context_parts), evidence_trail
+
+
+def resolve_evidence_source_ids(
+    evidence_trail: List[Dict[str, Any]],
+    source_files: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """evidence_trail の source_id を get_source_files() の結果と一致させる。
+    LLMが生成する [S1:p.XX] と evidence_trail の source_id が一致することを保証する。
+    """
+    # rel_path → source_id マッピング構築
+    path_to_sid: Dict[str, str] = {}
+    for sf in source_files:
+        rp = sf.get("rel_path", "")
+        if rp:
+            path_to_sid[rp] = sf.get("source_id", "")
+
+    for ev in evidence_trail:
+        rp = ev.get("rel_path", "")
+        ev["source_id"] = path_to_sid.get(rp, "")
+
+    return evidence_trail
 
 
 # ─── ソースファイル一覧 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -22,6 +22,8 @@ import ReactMarkdown from 'react-markdown';
 import {
     SourceFile,
     StreamUpdate,
+    EvidenceEntry,
+    ConfidenceData,
     fetchSessions as apiFetchSessions,
     fetchModels as apiFetchModels,
     createSession as apiCreateSession,
@@ -41,8 +43,8 @@ import SecondaryPanel from './components/SecondaryPanel';
 import LibraryPanel from './components/LibraryPanel';
 import MindmapPanel from './components/MindmapPanel';
 
-// --- Citation Logic ---
-const CITATION_PATTERN = /\[S(\d+):p\.(\d+)\]/g;
+// --- Citation Logic (寛容版: スペース揺れ等に対応) ---
+const CITATION_PATTERN = /\[S\s*(\d+)\s*:\s*p\s*\.\s*(\d+)\s*\]/g;
 
 function CitationBadge({
     sourceId,
@@ -70,7 +72,7 @@ function CitationBadge({
     return (
         <button
             onClick={() => onPageClick(url, page)}
-            className="inline-flex items-center text-[11px] px-1.5 py-0.5 mx-0.5 rounded bg-blue-100 text-blue-700 border border-blue-200 hover:bg-blue-200 transition-colors cursor-pointer font-mono"
+            className="inline-flex items-center text-xs min-h-[32px] min-w-[48px] px-2 py-1 mx-0.5 rounded bg-blue-100 text-blue-700 border border-blue-200 hover:bg-blue-200 active:bg-blue-300 transition-colors cursor-pointer font-mono touch-manipulation"
             title={`${src.source_pdf_name || src.filename} p.${page} を開く`}
         >
             {sourceId} p.{page}
@@ -116,6 +118,8 @@ interface Message {
     sources?: SourceFile[];
     webSources?: { title: string; url: string }[];
     issueCaptureData?: IssueCaptureData;
+    evidenceTrail?: EvidenceEntry[];
+    confidence?: ConfidenceData;
 }
 
 interface Session {
@@ -354,6 +358,24 @@ export default function Home() {
                         }
                         return next;
                     });
+                } else if (update.type === 'evidence_trail') {
+                    setMessages(prev => {
+                        const next = [...prev];
+                        const last = next[next.length - 1];
+                        if (last && last.role === 'assistant') {
+                            last.evidenceTrail = update.data;
+                        }
+                        return next;
+                    });
+                } else if (update.type === 'confidence_update') {
+                    setMessages(prev => {
+                        const next = [...prev];
+                        const last = next[next.length - 1];
+                        if (last && last.role === 'assistant') {
+                            last.confidence = update.data;
+                        }
+                        return next;
+                    });
                 } else if (update.type === 'issue_capture') {
                     setMessages(prev => {
                         const next = [...prev];
@@ -542,26 +564,80 @@ export default function Home() {
                                     {messages.map((msg, i) => (
                                         <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
                                             <div className={`max-w-[85%] rounded-2xl p-4 shadow-sm ${msg.role === 'user' ? 'bg-primary-600 text-white rounded-tr-none' : 'bg-white border border-[var(--border)] rounded-tl-none'}`}>
+                                                {/* Confidence Bar (回答の上に配置) */}
+                                                {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
+                                                    <div className="mb-2 pb-2 border-b border-[var(--border)]">
+                                                        {msg.confidence ? (
+                                                            <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                                                                <span>出典: {msg.sources.length}文書</span>
+                                                                <span>/</span>
+                                                                <span>検証済み: {msg.confidence.verified_count}/{msg.confidence.total_count}件</span>
+                                                                <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden max-w-[120px]">
+                                                                    <div
+                                                                        className={`h-full rounded-full transition-all duration-500 ${
+                                                                            msg.confidence.overall === 'high' ? 'bg-emerald-500' :
+                                                                            msg.confidence.overall === 'medium' ? 'bg-amber-400' :
+                                                                            'bg-amber-500'
+                                                                        }`}
+                                                                        style={{ width: `${(msg.confidence.verified_count / Math.max(msg.confidence.total_count, 1)) * 100}%` }}
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                                                                <span>出典: {msg.sources.length}文書</span>
+                                                                <span className="animate-pulse">/ 検証中...</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
                                                 <div className="markdown-content text-sm leading-relaxed overflow-x-auto">
                                                     <ReactMarkdown
                                                         components={{
                                                             p: ({ children }) => {
                                                                 const currentSources = msg.sources || [];
+                                                                const citationHandler = (url: string, page: number) => {
+                                                                    setPdfUrl(url);
+                                                                    setPdfInitialPage(page);
+                                                                    setRightPanel('pdf');
+                                                                };
                                                                 const transformed = React.Children.map(children, (child) => {
                                                                     if (typeof child === 'string') {
-                                                                        return transformCitations(
-                                                                            child,
-                                                                            currentSources,
-                                                                            (url, page) => {
-                                                                                  setPdfUrl(url);
-                                                                                  setPdfInitialPage(page);
-                                                                                  setRightPanel('pdf');
-                                                                              }
-                                                                        );
+                                                                        return transformCitations(child, currentSources, citationHandler);
                                                                     }
                                                                     return child;
                                                                 });
                                                                 return <p>{transformed}</p>;
+                                                            },
+                                                            li: ({ children }) => {
+                                                                const currentSources = msg.sources || [];
+                                                                const citationHandler = (url: string, page: number) => {
+                                                                    setPdfUrl(url);
+                                                                    setPdfInitialPage(page);
+                                                                    setRightPanel('pdf');
+                                                                };
+                                                                const transformed = React.Children.map(children, (child) => {
+                                                                    if (typeof child === 'string') {
+                                                                        return transformCitations(child, currentSources, citationHandler);
+                                                                    }
+                                                                    return child;
+                                                                });
+                                                                return <li>{transformed}</li>;
+                                                            },
+                                                            td: ({ children }) => {
+                                                                const currentSources = msg.sources || [];
+                                                                const citationHandler = (url: string, page: number) => {
+                                                                    setPdfUrl(url);
+                                                                    setPdfInitialPage(page);
+                                                                    setRightPanel('pdf');
+                                                                };
+                                                                const transformed = React.Children.map(children, (child) => {
+                                                                    if (typeof child === 'string') {
+                                                                        return transformCitations(child, currentSources, citationHandler);
+                                                                    }
+                                                                    return child;
+                                                                });
+                                                                return <td>{transformed}</td>;
                                                             },
                                                         }}
                                                     >{msg.content}</ReactMarkdown>

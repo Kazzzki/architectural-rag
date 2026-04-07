@@ -4,8 +4,8 @@
 # Set explicit PATH for homebrew and basic system binaries
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-# Work dir - Absolute path to the repository
-SCRIPT_DIR="/Users/kaz/Library/Mobile Documents/com~apple~CloudDocs/antigravity/architectural_rag"
+# Work dir - Absolute path to the repository (migrated from iCloud to local)
+SCRIPT_DIR="/Users/kaz/antigravity_rag"
 cd "$SCRIPT_DIR"
 
 # Explicit path to the venv python

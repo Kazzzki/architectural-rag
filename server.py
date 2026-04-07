@@ -109,7 +109,24 @@ if APP_PASSWORD:
     logger.info("🔒 Basic認証が有効です (APP_PASSWORD設定済)")
 else:
     logger.warning("⚠️  APP_PASSWORDが未設定——全APIエンドポイントが認証なしで公開状態です。")
+import asyncio
 from contextlib import asynccontextmanager
+
+
+async def _recurrence_loop():
+    """1時間ごとに繰り返しタスクを生成するバックグラウンドループ"""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            from database import get_session
+            from routers.tasks import process_recurrences
+            session = get_session()
+            count = process_recurrences(session)
+            if count:
+                logger.info(f"Recurrence: {count} tasks created")
+            session.close()
+        except Exception as e:
+            logger.warning(f"Recurrence loop error: {e}")
 
 
 @asynccontextmanager
@@ -160,8 +177,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Issue memo reindex failed (non-fatal): {e}")
 
+    # 繰り返しタスク生成バックグラウンドループ
+    recurrence_task = asyncio.create_task(_recurrence_loop())
+
     yield
-    # シャットダウン時の処理（将来必要に応じて追加）
+
+    # シャットダウン時の処理
+    recurrence_task.cancel()
 
 
 app = FastAPI(

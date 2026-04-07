@@ -23,9 +23,9 @@
     --edge-selected: #3b82f6;
 
     /* --- Accents --- */
-    --accent: #6d28d9;
-    --accent-light: #8b5cf6;
-    --accent-bg: rgba(109, 40, 217, 0.08);
+    --accent: #2563eb;
+    --accent-light: #3b82f6;
+    --accent-bg: rgba(37, 99, 235, 0.06);
 }
 
 * {
@@ -37,7 +37,7 @@
 html,
 body {
     height: 100%;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
 body {
