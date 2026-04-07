@@ -322,39 +322,14 @@ function MeetingDetailModal({
               </div>
             )}
 
-            {/* ライブメモ + 変換ボタン */}
-            {liveNotes.length > 0 && (
-              <div className="bg-gray-50 rounded-xl p-4">
-                <h3 className="text-sm font-semibold text-gray-700 mb-2">ライブメモ ({liveNotes.length}件)</h3>
-                <div className="space-y-1">
-                  {liveNotes.map((note: any) => {
-                    const icons: Record<string, typeof MessageSquare> = { memo: MessageSquare, decision: CheckCircle2, action: Target, risk: AlertTriangle };
-                    const colors: Record<string, string> = { memo: 'text-gray-500', decision: 'text-green-600', action: 'text-blue-600', risk: 'text-amber-600' };
-                    const Icon = icons[note.note_type] || MessageSquare;
-                    const ts = note.timestamp_sec != null ? `${String(Math.floor(note.timestamp_sec / 60)).padStart(2, '0')}:${String(note.timestamp_sec % 60).padStart(2, '0')}` : '';
-                    return (
-                      <div key={note.id} className="group flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-white">
-                        <span className="text-xs font-mono text-blue-500 w-10 text-right shrink-0">{ts}</span>
-                        <Icon className={`w-3.5 h-3.5 shrink-0 ${colors[note.note_type] || 'text-gray-500'}`} />
-                        <span className="flex-1 text-sm text-gray-700">{note.content}</span>
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                          {convertedNotes[note.id] ? (
-                            <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">
-                              {convertedNotes[note.id].startsWith('issue:') ? `課題#${convertedNotes[note.id].split(':')[1]}` : `タスク#${convertedNotes[note.id].split(':')[1]}`}
-                            </span>
-                          ) : (
-                            <>
-                              <button onClick={() => handleConvertToIssue(note)} title="課題に登録" className="p-1 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded"><CircleDot className="w-3 h-3" /></button>
-                              <button onClick={() => handleConvertToTask(note)} title="タスクに登録" className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><ListTodo className="w-3 h-3" /></button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            {/* ライブメモ（入力欄 + 課題/タスク転送ボタン付き） */}
+            <div className="rounded-xl border border-gray-200" style={{ minHeight: '180px' }}>
+              <MeetingLiveNotes
+                sessionId={sessionId}
+                elapsedSec={0}
+                projectName={detail?.project_name}
+              />
+            </div>
 
             {detail.chunks.length > 0 ? (
               <div>
@@ -1266,6 +1241,17 @@ export default function MeetingsPage() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* ライブメモ（録音中に取ったメモ + 追加入力） */}
+              {sessionId && (
+                <div className="bg-white rounded-2xl border border-gray-200" style={{ minHeight: '200px' }}>
+                  <MeetingLiveNotes
+                    sessionId={sessionId}
+                    elapsedSec={elapsed}
+                    projectName={metaProject}
+                  />
                 </div>
               )}
 
